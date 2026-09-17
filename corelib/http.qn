@@ -187,6 +187,44 @@ frameBody = (raw :: Text, bodiless :: Bool, transferEncoding :: Text, contentLen
   bodiless ? Ok("") : NotOk("")
 >
 
+~ Where the blank line separating a head from what follows begins, or `raw.length` when
+~ none has arrived yet. All four spellings of a blank line are measured and the earliest
+~ wins, so a body (or, server-side, a request awaiting more bytes) carrying a blank line in
+~ the other convention cannot move the split. `split(x)[0].length` is "where x first
+~ appears, or the whole length when it never does" — text with no separator splits into one
+~ piece. Shared by the client's `Response.blankLine()` and the server's own request-head
+~ reader (`receiveHead`), so both measure the split the same way.
+blankLineIndex = (raw :: Text) -> Num => <
+  atCrlfCrlf = raw.split("\r\n\r\n")[0].length
+  atLfLf = raw.split("\n\n")[0].length
+  atCrlfLf = raw.split("\r\n\n")[0].length
+  atLfCrlf = raw.split("\n\r\n")[0].length
+  pureConvention = atCrlfCrlf < atLfLf ? atCrlfCrlf : atLfLf
+  mixedConvention = atCrlfLf < atLfCrlf ? atCrlfLf : atLfCrlf
+  pureConvention < mixedConvention ? pureConvention : mixedConvention
+>
+
+~ Standard reason phrase for the status codes a server writes most; `"Unknown"` for any
+~ other code — `Response.status(code)` never guesses one.
+reasonPhrase = (code :: Num) -> Text => <
+  code == 200 ? "OK"
+    : code == 201 ? "Created"
+    : code == 204 ? "No Content"
+    : code == 400 ? "Bad Request"
+    : code == 404 ? "Not Found"
+    : code == 405 ? "Method Not Allowed"
+    : code == 500 ? "Internal Server Error"
+    : "Unknown"
+>
+
+~ The wire text every `Response` constructor below builds: a status line, exactly the
+~ headers it was given (no `content-type` added), then `content-length` counted in BYTES,
+~ `connection: close`, a blank line, and `body`.
+statusReply = (code :: Num, body :: Text, headers :: Headers) -> Text => <
+  "HTTP/1.1 `code` `reasonPhrase(code)`\r\n" + headers.wire()
+    + "content-length: `body.size`\r\nconnection: close\r\n\r\n" + body
+>
+
 ~ A reply: the raw response text, read through the methods below.
 >> Response = {
   raw :: Text,
@@ -199,21 +237,21 @@ frameBody = (raw :: Text, bodiless :: Bool, transferEncoding :: Text, contentLen
       : NotOk("malformed HTTP response")
   >
 
-  ~ Where the blank line separating head from body begins, or `raw.length` when the reply has
-  ~ none. All four spellings of a blank line are measured and the earliest wins, so a body
-  ~ carrying a blank line in the other convention cannot move the split. `split(x)[0].length`
-  ~ is "where x first appears, or the whole length when it never does" — a reply with no
-  ~ separator splits into one piece. Each spelling is exactly two graphemes, so the body starts
-  ~ two past this index; searching `raw` directly keeps every offset in one index space.
-  blankLine = () -> Num => <
-    atCrlfCrlf = it.raw.split("\r\n\r\n")[0].length
-    atLfLf = it.raw.split("\n\n")[0].length
-    atCrlfLf = it.raw.split("\r\n\n")[0].length
-    atLfCrlf = it.raw.split("\n\r\n")[0].length
-    pureConvention = atCrlfCrlf < atLfLf ? atCrlfCrlf : atLfLf
-    mixedConvention = atCrlfLf < atLfCrlf ? atCrlfLf : atLfCrlf
-    pureConvention < mixedConvention ? pureConvention : mixedConvention
-  >
+  blankLine = () -> Num => < blankLineIndex(it.raw) >
+
+  ~ A 200 reply carrying `body`.
+  ok = (body :: Text) -> Response => < Response { raw = statusReply(200, body, Headers.empty()) } >,
+  ok = (body :: Text, headers :: Headers) -> Response => < Response { raw = statusReply(200, body, headers) } >,
+
+  ~ A 201 reply carrying `body`.
+  created = (body :: Text) -> Response => < Response { raw = statusReply(201, body, Headers.empty()) } >,
+
+  ~ An empty-body reply carrying `code`'s standard reason phrase.
+  status = (code :: Num) -> Response => < Response { raw = statusReply(code, "", Headers.empty()) } >,
+  status = (code :: Num, headers :: Headers) -> Response => < Response { raw = statusReply(code, "", headers) } >,
+
+  ~ The text this reply sends on the wire.
+  wire = () -> Text => < it.raw >
 
   ~ Everything before the blank line — the status line and the header lines — with CRLF endings
   ~ rewritten to LF, so the methods below split on `\n` whichever convention the server used. A
@@ -299,12 +337,49 @@ frameBody = (raw :: Text, bodiless :: Bool, transferEncoding :: Text, contentLen
   >
 }
 
+~ The `Method` a request line's own token names, its carried `Body` always empty (a
+~ server never reads one — see `Request.parse`): `Ok(method)` for a token this module
+~ recognizes, `NotOk(reason)` for any other token.
+methodFromToken = (token :: Text) -> Result => <
+  noBody = Body { content = "", contentType = "" }
+  token == "GET" ? Ok(Get)
+    : token == "POST" ? Ok(Post(noBody))
+    : token == "PUT" ? Ok(Put(noBody))
+    : token == "QUERY" ? Ok(Query(noBody))
+    : token == "DELETE" ? Ok(Delete)
+    : token == "HEAD" ? Ok(Head)
+    : token == "OPTIONS" ? Ok(Options)
+    : token == "PATCH" ? Ok(Patch(noBody))
+    : NotOk("unrecognized method `token`")
+>
+
 ~ A request: the method, the target URL (`http://host[:port]/path`, scheme optional), and
 ~ its options (headers today).
 >> Request = {
   method :: Method,
   url :: Text,
   options :: RequestOptions,
+
+  ~ The server side of `wire()`: parse a raw request head — everything up to, but not
+  ~ including, the blank line — into a `Request`. `Ok(Request)` when the request line
+  ~ carries a method this module recognizes and a target; `NotOk(reason)` otherwise — the
+  ~ caller's own signal (`serveConnection`) to answer 400 and close.
+  parse = (head :: Text) -> Result => <
+    normalized = head.replaceAll("\r\n", "\n")
+    fields = normalized.split("\n")[0].split(" ")
+    afterRequestLine = normalized.indexOf("\n") ?
+      | Ok(mark) => normalized.slice(mark + 1, normalized.length)
+      | NotOk(_) => ""
+    fields.size < 2
+      ? NotOk("malformed request line")
+      : (methodFromToken(fields[0]) ?
+          | Ok(method) => Ok(Request {
+              method = method,
+              url = fields[1],
+              options = RequestOptions { headers = Headers.parse(afterRequestLine.split("\n")) }
+            })
+          | NotOk(reason) => NotOk(reason))
+  >,
 
   get = (url :: Text) -> Request => < Request { method = Get, url = url, options = RequestOptions.default() } >,
   get = (url :: Text, options :: RequestOptions) -> Request => < Request { method = Get, url = url, options = options } >,
@@ -417,6 +492,50 @@ frameBody = (raw :: Text, bodiless :: Bool, transferEncoding :: Text, contentLen
       | NotOk(problem)   => NotOk(problem)
   >
 }
+
+~ Read from `connection` until a request head has fully arrived (the earliest blank line —
+~ `blankLineIndex`) and return it, everything up to but not including that blank line.
+~ Recursion stands in for the loop this language has none of: `soFar` accumulates every
+~ read. A peer that closes before completing its head (`connection.@read()` answering `""`
+~ while `soFar` still carries no blank line) hands back whatever fragment did arrive —
+~ `""` when nothing arrived at all — and `serveConnection`, never this function, decides
+~ whether that is enough of a request to answer.
+receiveHead = (connection :: net.Connection, soFar :: Text) -> Text => <
+  splitAt = blankLineIndex(soFar)
+  splitAt < soFar.length
+    ? soFar.slice(0, splitAt)
+    : (connection.@read() ?
+        | chunk => chunk == "" ? soFar : receiveHead(connection, soFar + chunk))
+>
+
+~ `core.http`'s connection handler: the Quilon half of the `http.@serve` lowering, called
+~ once per accepted connection by the fixed-shape thunk codegen builds over `handler`. Reads
+~ the request head, parses it, calls `handler`, and writes the reply — a malformed request
+~ line answers 400 instead. Nothing here closes the connection: the runtime does that once
+~ this function returns, the same as any other `net.@tcpServe` handler.
+serveConnection = (connection :: net.Connection, handler :: (Request) -> Response) -> $ => <
+  head = receiveHead(connection, "")
+  head == ""
+    ? $
+    : (Request.parse(head) ?
+        | Ok(request) => connection.@write(handler(request).wire())
+        | NotOk(_)    => connection.@write(Response.status(400).wire()))
+>
+
+~ `http.@serve(address, handler) -> net.Server`: compiler-lowered, like `net.@tcpServe` —
+~ a Quilon body here would launch the accept loop as part of THIS function's own block,
+~ which the block-scope join would wait on before this function could return the `Server`
+~ handle. Its lowering (`src/codegen/generator/calls.rs`'s `serve` arm) calls the very same
+~ runtime entry `net.@tcpServe` does, with `serveConnection` filled in as the connection
+~ handler — the whole reason `serveConnection` is written above in ordinary Quilon. The
+~ mention of `serveConnection` below is never actually run (this body is inert, like every
+~ other `@` primitive's) — it exists so the reachability pass, which does not know about
+~ codegen's own call to `serveConnection` by name, still keeps it emitted whenever a
+~ program calls `@serve`.
+>> @serve = (address :: Text, handler :: (Request) -> Response) -> net.Server => <
+  serveConnection(net.Connection { handle = 0 }, handler)
+  net.Server { handle = 0 }
+>
 
 ~ The suite for everything above: every parser and serialiser edge case, offline over canned
 ~ `Text`, so it runs anywhere. Only `quilon test corelib/http.qn` compiles these blocks — every
@@ -1001,5 +1120,93 @@ test.describe("a round trip", () => <
     echoed = parsed("HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\n\r\n" + sent)
     expect(echoed.body(), equals(sent))
     expect(echoed.status(), equals(200))
+  >)
+>)
+
+test.describe("Response's server-side constructors", () => <
+  test.it("ok writes the exact bytes: status line, content-length, connection, body", () =>
+    expect(Response.ok("x").wire(), equals(
+      "HTTP/1.1 200 OK\r\ncontent-length: 1\r\nconnection: close\r\n\r\nx")))
+
+  test.it("created writes 201 with the given body", () =>
+    expect(Response.created("stocked chickpeas").wire(), equals(
+      "HTTP/1.1 201 Created\r\ncontent-length: 17\r\nconnection: close\r\n\r\nstocked chickpeas")))
+
+  test.it("status writes an empty body and the standard reason phrase", () =>
+    expect(Response.status(405).wire(), equals(
+      "HTTP/1.1 405 Method Not Allowed\r\ncontent-length: 0\r\nconnection: close\r\n\r\n")))
+
+  test.it("status falls back to Unknown for a code the table does not carry", () =>
+    expect(Response.status(419).wire(), contains("419 Unknown\r\n")))
+
+  test.it("counts content-length in bytes, not graphemes", () => <
+    ~ "café" is four characters and five UTF-8 bytes.
+    reply = Response.ok("café")
+    expect(reply.wire(), contains("content-length: 5\r\n"))
+  >)
+
+  test.it("ok with headers sends exactly those headers, and no content-type", () => <
+    headers := Headers.empty()
+    headers.add("X-Served-By", "hummus")
+    reply = Response.ok("chickpeas", headers)
+    expect(reply.wire(), contains("x-served-by: hummus\r\n"))
+    expect(reply.wire(), not(contains("content-type")))
+  >)
+
+  test.it("status with headers sends exactly those headers", () => <
+    headers := Headers.empty()
+    headers.add("X-Reason", "no soup for you")
+    expect(Response.status(404, headers).wire(), contains("x-reason: no soup for you\r\n"))
+  >)
+
+  test.it("wire returns the raw text unchanged", () =>
+    expect(Response { raw = "HTTP/1.1 200 OK\r\n\r\n" }.wire(), equals("HTTP/1.1 200 OK\r\n\r\n")))
+>)
+
+~ Parse a request head the case knows is well-formed. `assert`, not `expect`: an
+~ unparseable fixture is a broken test rather than a failed case.
+parsedRequest = (head :: Text) -> Request => <
+  candidate = Request.parse(head)
+  assert(candidate, isOk())
+  candidate ?
+    | Ok(request) => request
+    | NotOk(_)    => Request { method = Get, url = "", options = RequestOptions.default() }
+>
+
+test.describe("Request.parse", () => <
+  test.it("parses a GET request line with no headers", () => <
+    request = parsedRequest("GET /pantry HTTP/1.1")
+    expect(request.method.token(), equals("GET"))
+    expect(request.url, equals("/pantry"))
+  >)
+
+  test.it("parses a POST's method with an empty body, never reading one", () => <
+    request = parsedRequest("POST /pantry HTTP/1.1\r\nContent-Length: 4")
+    request.method ?
+      | Post(body) => expect(body.content, equals(""))
+      | _          => test.failAt("expected a Post")
+  >)
+
+  test.it("parses the headers alongside the request line", () => <
+    request = parsedRequest("GET /pantry HTTP/1.1\r\nX-Trace: abc\r\nHost: shop")
+    expect(request.headers().get("x-trace"), isOk())
+    expect(request.headers().get("host"), isOk())
+  >)
+
+  test.it("rejects a request line with fewer than two fields", () =>
+    expect(Request.parse("GET"), isNotOk()))
+
+  test.it("rejects an unrecognized method token", () =>
+    expect(Request.parse("FETCH /pantry HTTP/1.1"), isNotOk()))
+
+  test.it("reads path() and params() off a bare target with no scheme or host", () => <
+    bare = Request { method = Get, url = "/pantry?x=1", options = RequestOptions.default() }
+    expect(bare.path(), equals("/pantry?x=1"))
+    expect(bare.params().get("x"), isOk())
+  >)
+
+  test.it("reads path() off a bare root target", () => <
+    root = Request { method = Get, url = "/", options = RequestOptions.default() }
+    expect(root.path(), equals("/"))
   >)
 >)

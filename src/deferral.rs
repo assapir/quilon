@@ -90,6 +90,15 @@ const TCP_SERVE_PRIMITIVE: &str = "tcpServe";
 /// The argument count `@tcpServe` takes (`port`, `handler`).
 const TCP_SERVE_ARITY: usize = 2;
 
+/// The bare name of the HTTP server primitive, reached as `http.@serve(address,
+/// handler)`. Its lowering calls the very same runtime entry `@tcpServe` does, so it
+/// launches an accept loop in the background exactly the same way — see
+/// [`launches_in_background`].
+const HTTP_SERVE_PRIMITIVE: &str = "serve";
+
+/// The argument count `@serve` takes (`address`, `handler`).
+const HTTP_SERVE_ARITY: usize = 2;
+
 /// What the analysis hands to codegen.
 #[derive(Debug, Default, Clone)]
 pub struct DeferInfo {
@@ -554,11 +563,18 @@ fn is_tcp_serve_call(function: &Expression, arguments: &[Expression]) -> bool {
         && arguments.len() == TCP_SERVE_ARITY
 }
 
+/// Whether `function`/`arguments` is a call to `http.@serve(address, handler)`.
+fn is_http_serve_call(function: &Expression, arguments: &[Expression]) -> bool {
+    matches!(function, Expression::Identifier { name, .. }
+        if at_primitive_name(name) == Some(HTTP_SERVE_PRIMITIVE))
+        && arguments.len() == HTTP_SERVE_ARITY
+}
+
 /// Whether `function`/`arguments` launches work that keeps running in the background after
 /// the call itself returns, so the enclosing `< >` block must join it before its own value
-/// flows out — every deferred-producing call (its producer fiber), plus `@tcpServe` (its
-/// accept loop): `@tcpServe`'s own return value, the `Server` handle, is ready at once and
-/// never deferred, but the accept loop it starts keeps running after the call returns, so it
+/// flows out — every deferred-producing call (its producer fiber), plus `@tcpServe`/`@serve`
+/// (their accept loop): neither call's own return value, the `Server` handle, is ever
+/// deferred, but the accept loop each starts keeps running after the call returns, so it
 /// registers with the block's launch scope the same way a value-returning launch's producer
 /// does (`crate::launch_scope::register`, called directly from the runtime intrinsic here
 /// rather than through the deferred-value taint this pass otherwise tracks).
@@ -567,7 +583,9 @@ fn launches_in_background(
     arguments: &[Expression],
     member_call: bool,
 ) -> bool {
-    produces_deferred(function, arguments, member_call) || is_tcp_serve_call(function, arguments)
+    produces_deferred(function, arguments, member_call)
+        || is_tcp_serve_call(function, arguments)
+        || is_http_serve_call(function, arguments)
 }
 
 #[cfg(test)]
@@ -746,6 +764,18 @@ mod tests {
         // enclosing block still opens and joins a launch scope for it.
         let src =
             "<< core.net\n^ = () -> Num => <\n  server = net.@tcpServe(\"127.0.0.1:0\", h)\n  0\n>";
+        let i = info(src);
+        assert_eq!(i.launch_scopes.len(), 1);
+        assert_eq!(i.force_sites.len(), 0);
+    }
+
+    #[test]
+    fn a_block_that_calls_http_serve_is_a_launch_scope_though_its_return_is_not_deferred() {
+        // `http.@serve` lowers to the same runtime entry `net.@tcpServe` does, so it must be
+        // recognized as a background launch the same way, though nothing here actually
+        // imports `core.http` (this pass reads no types, so the bare primitive name alone
+        // is what it keys on).
+        let src = "^ = () -> Num => <\n  server = @serve(\"127.0.0.1:0\", h)\n  0\n>";
         let i = info(src);
         assert_eq!(i.launch_scopes.len(), 1);
         assert_eq!(i.force_sites.len(), 0);
