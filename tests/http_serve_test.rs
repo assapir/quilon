@@ -24,7 +24,7 @@ fn free_port() -> u16 {
     port
 }
 
-/// The program under test: the `hummus` handler from the issue's own surface, serving on
+/// The program under test: the `hummus` handler from `core.http`'s own reference, serving on
 /// `address`, with `/quit` (matched on `request.path()`, not a real router — there is none)
 /// killing the server through the top-level atomic `server` a handler declared before
 /// `@serve` returns must reach this way (the same shape `tcp_serve_test.rs`'s `program`
@@ -86,14 +86,10 @@ fn connect_once_listening(host: &str, port: u16) -> TcpStream {
 
 /// Send `request` over a fresh connection and read the reply to EOF — valid because the
 /// server always answers with `connection: close` and closes right after, one response per
-/// connection (this version's own rule). `first` waits out the server's own startup instead
-/// of failing the moment it is not there yet.
-fn send_raw(host: &str, port: u16, request: &[u8], first: bool) -> String {
-    let mut stream = if first {
-        connect_once_listening(host, port)
-    } else {
-        connect_with_timeout(host, port).expect("connect to the running server")
-    };
+/// connection (this version's own rule). Retries the connect (bounded), which only ever
+/// takes more than one attempt for the first call, before the server has finished starting.
+fn send_raw(host: &str, port: u16, request: &[u8]) -> String {
+    let mut stream = connect_once_listening(host, port);
     stream.write_all(request).expect("write the request");
     let mut response = String::new();
     stream
@@ -127,7 +123,6 @@ fn drive_get_post_malformed_then_quit(host: &str, port: u16) {
         host,
         port,
         b"GET /pantry HTTP/1.1\r\nHost: shop\r\nConnection: close\r\n\r\n",
-        true,
     );
     assert!(get.starts_with("HTTP/1.1 200 OK\r\n"), "GET reply: {get}");
     assert!(get.contains("content-length: 17\r\n"), "GET reply: {get}");
@@ -137,7 +132,6 @@ fn drive_get_post_malformed_then_quit(host: &str, port: u16) {
         host,
         port,
         b"POST /pantry HTTP/1.1\r\nHost: shop\r\nContent-Length: 5\r\nConnection: close\r\n\r\nbeans",
-        false,
     );
     assert!(
         post.starts_with("HTTP/1.1 201 Created\r\n"),
@@ -147,7 +141,7 @@ fn drive_get_post_malformed_then_quit(host: &str, port: u16) {
     // The request body is never read: a POST arrives with an empty body.
     assert!(post.ends_with("stocked "), "POST reply: {post}");
 
-    let malformed = send_raw(host, port, b"GARBAGE\r\n\r\n", false);
+    let malformed = send_raw(host, port, b"GARBAGE\r\n\r\n");
     assert!(
         malformed.starts_with("HTTP/1.1 400 Bad Request\r\n"),
         "malformed reply: {malformed}"
