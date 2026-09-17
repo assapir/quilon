@@ -14,11 +14,15 @@
 //!   tree-shaker: every name an expression mentions, without resolving it — a mention of a
 //!   global's name is that global even where a local happens to share it, which only ever
 //!   widens what this check rejects, never narrows it);
-//! - a `:=` local of the block `net.@tcpServe` is called from, captured by an inline
-//!   lambda `handler`. A `:=` never shadows an existing binding of the same name (a
+//! - a `:=` local declared as a DIRECT statement of the block `net.@tcpServe` is called
+//!   from, captured by `handler` — an inline lambda, or a local (non-top-level) named
+//!   handler reached by name, since no-hoisting means its own declaration already sits
+//!   above the call. A `:=` never shadows an existing binding of the same name (a
 //!   reassignment resolves to whatever already has that name, however far outside the
-//!   reassigning scope it lives — see `docs/mutation.md`), so a name the lambda touches
-//!   that also names an outer local is that local, not a coincidence.
+//!   reassigning scope it lives — see `docs/mutation.md`), so a name `handler` touches
+//!   that also names one of these locals is that local, not a coincidence — and, unlike
+//!   the global case above, this half stays PRECISE rather than coarse: it does not reach
+//!   into a sibling function's or lambda's own body, whose locals belong to it alone.
 //!
 //! Runs once, after `check_program`'s own item-by-item pass, once every top-level
 //! binding's mutability and atomicity is settled.
