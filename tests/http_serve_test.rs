@@ -10,22 +10,11 @@
 
 mod common;
 
-use common::ensure_runtime_lib;
+use common::{connect_once_listening, connect_with_timeout, ensure_runtime_lib, free_port};
 use std::io::{Read, Write};
-use std::net::TcpStream;
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
-
-/// A port nothing is bound to right now — bind an ephemeral one and drop it immediately,
-/// same race every other test in this suite that hands a chosen port to a subprocess
-/// accepts (`tcp_serve_test.rs`'s `free_port`).
-fn free_port() -> u16 {
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind to find a free port");
-    let port = listener.local_addr().expect("local addr").port();
-    drop(listener);
-    port
-}
 
 /// The program under test: the `hummus` handler from `core.http`'s own reference, serving on
 /// `address`, with `/quit` (matched on `request.path()`, not a real router — there is none)
@@ -112,29 +101,6 @@ fn run_client_check(quilon: &str, address: &str) -> (Option<i32>, String) {
         output.status.code(),
         String::from_utf8_lossy(&output.stderr).into_owned(),
     )
-}
-
-/// Connect to `host:port` with a bounded read/write timeout on every op, mirroring
-/// `tcp_serve_test.rs`'s own helper: a bug that leaves a connection open with nothing
-/// arriving fails the test in a few seconds instead of hanging the run.
-fn connect_with_timeout(host: &str, port: u16) -> std::io::Result<TcpStream> {
-    let stream = TcpStream::connect((host, port))?;
-    stream.set_read_timeout(Some(Duration::from_secs(5)))?;
-    stream.set_write_timeout(Some(Duration::from_secs(5)))?;
-    Ok(stream)
-}
-
-/// Connect to `host:port`, retrying (bounded) until the server is up — the process under
-/// test needs a moment after starting before `@serve` has actually bound and is accepting.
-fn connect_once_listening(host: &str, port: u16) -> TcpStream {
-    let deadline = Instant::now() + Duration::from_secs(10);
-    loop {
-        match connect_with_timeout(host, port) {
-            Ok(stream) => return stream,
-            Err(_) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(20)),
-            Err(error) => panic!("never managed to connect to the test server: {error}"),
-        }
-    }
 }
 
 /// Block until the server at `host:port` is accepting connections — the one place any test

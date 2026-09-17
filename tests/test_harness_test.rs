@@ -581,6 +581,7 @@ fn importing_core_http_contributes_exactly_this_surface() {
         // importer, reached only through `@serve` (and, for `blankLineIndex`, `Response`'s
         // own `blankLine` too).
         "core.http.blankLineIndex",
+        "core.http.foundOrEnd",
         "core.http.linesAfterFirst",
         "core.http.reasonPhrase",
         "core.http.statusReply",
@@ -1541,7 +1542,7 @@ fn the_corelib_http_suite_passes_when_the_module_is_the_file_named() {
         );
     }
     assert!(
-        out.stdout.contains("120 passed, 0 failed"),
+        out.stdout.contains("121 passed, 0 failed"),
         "unexpected summary:\n{}",
         out.stdout
     );

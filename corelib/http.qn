@@ -187,18 +187,26 @@ frameBody = (raw :: Text, bodiless :: Bool, transferEncoding :: Text, contentLen
   bodiless ? Ok("") : NotOk("")
 >
 
+~ The index of `needle`'s first occurrence in `raw`, or `raw.length` when it never occurs —
+~ the same "found, or the whole length" reading `split(needle)[0].length` gives, without
+~ allocating the split array.
+foundOrEnd = (raw :: Text, needle :: Text) -> Num => <
+  raw.indexOf(needle) ?
+    | Ok(at)   => at
+    | NotOk(_) => raw.length
+>
+
 ~ Where the blank line separating a head from what follows begins, or `raw.length` when
 ~ none has arrived yet. All four spellings of a blank line are measured and the earliest
-~ wins, so a body (or, server-side, a request awaiting more bytes) carrying a blank line in
-~ the other convention cannot move the split. `split(x)[0].length` is "where x first
-~ appears, or the whole length when it never does" — text with no separator splits into one
-~ piece. Shared by the client's `Response.blankLine()` and the server's own request-head
-~ reader (`receiveHead`), so both measure the split the same way.
+~ wins, so a blank line in the other convention sitting anywhere in `raw` — inside the body,
+~ or even inside what would otherwise read as a header line — cannot move the split later
+~ than its own earliest occurrence. Shared by the client's `Response.blankLine()` and the
+~ server's own request-head reader (`receiveHead`), so both measure the split the same way.
 blankLineIndex = (raw :: Text) -> Num => <
-  atCrlfCrlf = raw.split("\r\n\r\n")[0].length
-  atLfLf = raw.split("\n\n")[0].length
-  atCrlfLf = raw.split("\r\n\n")[0].length
-  atLfCrlf = raw.split("\n\r\n")[0].length
+  atCrlfCrlf = foundOrEnd(raw, "\r\n\r\n")
+  atLfLf = foundOrEnd(raw, "\n\n")
+  atCrlfLf = foundOrEnd(raw, "\r\n\n")
+  atLfCrlf = foundOrEnd(raw, "\n\r\n")
   pureConvention = atCrlfCrlf < atLfLf ? atCrlfCrlf : atLfLf
   mixedConvention = atCrlfLf < atLfCrlf ? atCrlfLf : atLfCrlf
   pureConvention < mixedConvention ? pureConvention : mixedConvention
@@ -500,23 +508,27 @@ methodFromToken = (token :: Text) -> Result => <
 ~ head of zero length included, when the blank line is the very first thing the peer sends,
 ~ still a request for `serveConnection` to answer (with a 400, since `Request.parse("")` is
 ~ malformed) rather than silence. `NotOk(fragment)` when the peer closes first
-~ (`connection.@read()` answering `""` while no blank line has arrived yet), carrying
-~ whatever bytes did arrive — `serveConnection` answers nothing in that case, there being no
-~ complete request to answer. Recursion stands in for the loop this language has none of:
-~ `soFar` accumulates every read.
+~ (`connection.@read()` answering `""`), carrying whatever bytes did arrive —
+~ `serveConnection` answers nothing in that case, there being no complete request to answer.
+~ Recursion stands in for the loop this language has none of: `soFar` is never already
+~ complete when this is called (this function itself only ever recurses on an incomplete
+~ one), so every call reads exactly one chunk before checking.
 ~
-~ ponytail: `blankLineIndex` rescans the whole of `soFar` on every recursion, so an
+~ ponytail: `blankLineIndex` rescans the whole of `accumulated` on every recursion, so an
 ~ adversarial peer trickling a head in over many small reads costs this function quadratic
 ~ time in the head's size. A real HTTP head is a few hundred bytes at most, so this is not
 ~ worth an incremental scan (searching only the new suffix, carrying over enough of the old
 ~ tail to catch a separator split across the boundary) until a header-flooding client shows
 ~ up as a real cost.
 receiveHead = (connection :: net.Connection, soFar :: Text) -> Result => <
-  splitAt = blankLineIndex(soFar)
-  splitAt < soFar.length
-    ? Ok(soFar.slice(0, splitAt))
-    : (connection.@read() ?
-        | chunk => chunk == "" ? NotOk(soFar) : receiveHead(connection, soFar + chunk))
+  chunk = connection.@read()
+  accumulated = soFar + chunk
+  splitAt = blankLineIndex(accumulated)
+  chunk == ""
+    ? NotOk(soFar)
+    : (splitAt < accumulated.length
+        ? Ok(accumulated.slice(0, splitAt))
+        : receiveHead(connection, accumulated))
 >
 
 ~ `core.http`'s connection handler: the Quilon half of the `http.@serve` lowering, called
@@ -803,6 +815,17 @@ test.describe("line endings", () => <
     mixed = parsed("HTTP/1.1 200 OK\r\nX-A: b\r\n\r\nbody with \n\n inside")
     expect(mixed.headers().names().size, equals(1))
     expect(mixed.body(), equals("body with \n\n inside"))
+  >)
+
+  test.it("finds the earliest blank line even when one hides inside a header's own value", () => <
+    ~ A bare LF LF inside X-Weird's own value, well before the real CRLF blank line that
+    ~ would otherwise end the head — the earliest of the four spellings wins regardless of
+    ~ where it sits, so the split lands there instead, and everything after it (the header
+    ~ that would have followed included) reads as body.
+    earlySplit = parsed("HTTP/1.1 200 OK\r\nX-Weird: a\n\nb\r\nX-Other: c\r\n\r\nBODY")
+    expect(earlySplit.headers().names().size, equals(1))
+    expect(earlySplit.headers().get("x-other"), isNotOk())
+    expect(earlySplit.body(), contains("X-Other"))
   >)
 
   test.it("agrees with the CRLF reply field for field", () => <

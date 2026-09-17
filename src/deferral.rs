@@ -82,22 +82,19 @@ const TCP_REQUEST_ARITY: usize = 2;
 /// `@readStdin`/`@tcpRequest` are.
 const CONNECTION_READ_PRIMITIVE: &str = "read";
 
-/// The bare name of the raw TCP server primitive, reached as `net.@tcpServe(port,
+/// The bare name of the raw TCP server primitive, reached as `net.@tcpServe(address,
 /// handler)`. Its own return value (the `Server` handle) is never deferred, but its accept
 /// loop launches in the background all the same — see [`launches_in_background`].
 const TCP_SERVE_PRIMITIVE: &str = "tcpServe";
 
-/// The argument count `@tcpServe` takes (`port`, `handler`).
-const TCP_SERVE_ARITY: usize = 2;
-
-/// The bare name of the HTTP server primitive, reached as `http.@serve(address,
-/// handler)`. Its lowering calls the very same runtime entry `@tcpServe` does, so it
-/// launches an accept loop in the background exactly the same way — see
-/// [`launches_in_background`].
+/// The bare name of the HTTP server primitive, reached as `http.@serve(address, handler)`.
+/// Its lowering calls the very same runtime entry `@tcpServe` does, so it launches an
+/// accept loop in the background exactly the same way — see [`launches_in_background`].
 const HTTP_SERVE_PRIMITIVE: &str = "serve";
 
-/// The argument count `@serve` takes (`address`, `handler`).
-const HTTP_SERVE_ARITY: usize = 2;
+/// The argument count both `@tcpServe` and `@serve` take (`address`, `handler`) —
+/// [`is_serve_call`]'s one arity, shared because the two happen to agree.
+const SERVE_ARITY: usize = 2;
 
 /// What the analysis hands to codegen.
 #[derive(Debug, Default, Clone)]
@@ -556,18 +553,14 @@ fn produces_deferred(function: &Expression, arguments: &[Expression], member_cal
         || is_connection_read_call(function, arguments, member_call)
 }
 
-/// Whether `function`/`arguments` is a call to `net.@tcpServe(port, handler)`.
-fn is_tcp_serve_call(function: &Expression, arguments: &[Expression]) -> bool {
+/// Whether `function`/`arguments` is a call to the named `@`-marked server primitive
+/// (`primitive_name`, one of [`TCP_SERVE_PRIMITIVE`]/[`HTTP_SERVE_PRIMITIVE`]) at its own
+/// [`SERVE_ARITY`] — the one shape both `net.@tcpServe(address, handler)` and
+/// `http.@serve(address, handler)` share, so one function answers for either.
+fn is_serve_call(function: &Expression, arguments: &[Expression], primitive_name: &str) -> bool {
     matches!(function, Expression::Identifier { name, .. }
-        if at_primitive_name(name) == Some(TCP_SERVE_PRIMITIVE))
-        && arguments.len() == TCP_SERVE_ARITY
-}
-
-/// Whether `function`/`arguments` is a call to `http.@serve(address, handler)`.
-fn is_http_serve_call(function: &Expression, arguments: &[Expression]) -> bool {
-    matches!(function, Expression::Identifier { name, .. }
-        if at_primitive_name(name) == Some(HTTP_SERVE_PRIMITIVE))
-        && arguments.len() == HTTP_SERVE_ARITY
+        if at_primitive_name(name) == Some(primitive_name))
+        && arguments.len() == SERVE_ARITY
 }
 
 /// Whether `function`/`arguments` launches work that keeps running in the background after
@@ -584,8 +577,8 @@ fn launches_in_background(
     member_call: bool,
 ) -> bool {
     produces_deferred(function, arguments, member_call)
-        || is_tcp_serve_call(function, arguments)
-        || is_http_serve_call(function, arguments)
+        || is_serve_call(function, arguments, TCP_SERVE_PRIMITIVE)
+        || is_serve_call(function, arguments, HTTP_SERVE_PRIMITIVE)
 }
 
 #[cfg(test)]
