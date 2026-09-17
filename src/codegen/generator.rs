@@ -1031,6 +1031,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         let return_val = match result.as_any_value_enum() {
             inkwell::values::AnyValueEnum::FloatValue(f) => self.saturating_i32(f, "result_int")?,
             _ => {
+                // Return 0 if not a numeric result
                 i32_type.const_zero()
             }
         };
