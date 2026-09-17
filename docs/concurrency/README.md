@@ -54,6 +54,13 @@ before returning, and a launch is never cancelled: every launch settles. Once ev
 has settled, the faults among them propagate out of the block: every fault is reported, in
 launch order, each naming its own launch site. (See `examples/block_scope_join.qn`.)
 
+**What keeps a program running.** A Quilon process ends when `^` returns, and `^` cannot
+return while a launch its block made is still pending. A server started with
+`net.@tcpServe` is such a launch until `Server.kill` settles it, so a server program runs
+until it kills its server or the process is stopped from outside. The same rule holds for
+every launch, a read never forced included: there is no way to leave a launch behind, so
+ending early is always explicit.
+
 **Stackful fibers.** Each fiber has its own stack, and any function parks at a force point
 as it is.
 
