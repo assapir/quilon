@@ -105,7 +105,7 @@ fn read_to_close(stream: &mut TcpStream) -> io::Result<Vec<u8>> {
 /// (`resolve`/`connect`/`write`/`read`), the target `address`, and the underlying error.
 fn request_error(address: &str, stage: &str, error: &io::Error) -> QlResult {
     QlResult::not_ok(&format!(
-        "@tcpRequest to {address} failed at {stage}: {error}"
+        "core.net.@tcpRequest to {address} failed at {stage}: {error}"
     ))
 }
 

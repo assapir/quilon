@@ -600,48 +600,40 @@ impl<'ctx> CodeGenerator<'ctx> {
     ) -> Result<BasicValueEnum<'ctx>, String> {
         match primitive {
             "sleep" => {
-                if arguments.len() != 1 {
-                    return Err(format!(
-                        "@sleep expects exactly 1 argument, got {}",
-                        arguments.len()
-                    ));
-                }
+                const NAME: &str = "core.time.@sleep";
+                const CALL_FAILED: &str = "Failed to call core.time.@sleep";
+                Self::expect_arity(NAME, arguments, false, 1)?;
                 let BasicValueEnum::FloatValue(seconds) =
                     self.generate_expression(&arguments[0])?
                 else {
-                    return Err("@sleep expects a Num (seconds)".to_string());
+                    return Err(format!("{NAME} expects a Num (seconds)"));
                 };
                 let sleep = self.get_intrinsic("__sleep")?;
                 self.builder
                     .build_call(sleep, &[seconds.into()], "")
-                    .map_err(ctx("Failed to call @sleep"))?;
+                    .map_err(ctx(CALL_FAILED))?;
                 // `@sleep` yields `$` (Unit).
                 Ok(self.unit_value().into())
             }
             "readStdin" => {
-                if !arguments.is_empty() {
-                    return Err(format!(
-                        "@readStdin expects no arguments, got {}",
-                        arguments.len()
-                    ));
-                }
+                const NAME: &str = "core.io.@readStdin";
+                const CALL_FAILED: &str = "Failed to call core.io.@readStdin";
+                Self::expect_arity(NAME, arguments, false, 0)?;
                 let launch_site = self.site_value(site)?;
                 let read = self.get_intrinsic("__read_launch")?;
                 let call = self
                     .builder
                     .build_call(read, &[launch_site.into()], "read")
-                    .map_err(ctx("Failed to call @readStdin"))?;
+                    .map_err(ctx(CALL_FAILED))?;
                 // The result is a DEFERRED `Text` (`{ promise, -1 }`); the force-set decides
                 // where it is forced. Nothing here dereferences it.
                 Self::call_result_to_basic(call)
             }
             "tcpRequest" => {
-                if arguments.len() != 2 {
-                    return Err(format!(
-                        "@tcpRequest expects exactly 2 arguments (address, requestBytes), got {}",
-                        arguments.len()
-                    ));
-                }
+                const NAME: &str = "core.net.@tcpRequest";
+                const CALL_FAILED: &str = "Failed to call core.net.@tcpRequest";
+                const LOAD_FAILED: &str = "Failed to load core.net.@tcpRequest result";
+                Self::expect_arity(NAME, arguments, false, 2)?;
                 let (addr_ptr, addr_len) = self.extract_text(&arguments[0])?;
                 let (req_ptr, req_len) = self.extract_text(&arguments[1])?;
                 // The launch writes a DEFERRED `Result` (`Ok(responseBytes)` / `NotOk(message)`,
@@ -662,28 +654,26 @@ impl<'ctx> CodeGenerator<'ctx> {
                         ],
                         "",
                     )
-                    .map_err(ctx("Failed to call @tcpRequest"))?;
+                    .map_err(ctx(CALL_FAILED))?;
                 self.builder
                     .build_load(result_ty, out, "tcp_request")
-                    .map_err(ctx("Failed to load @tcpRequest result"))
+                    .map_err(ctx(LOAD_FAILED))
             }
             "streamFile" => {
-                if arguments.len() != 3 {
-                    return Err(format!(
-                        "@streamFile expects exactly 3 arguments (path, chunkSize, onChunk), got {}",
-                        arguments.len()
-                    ));
-                }
+                const NAME: &str = "core.io.@streamFile";
+                const CALL_FAILED: &str = "Failed to call core.io.@streamFile";
+                const LOAD_FAILED: &str = "Failed to load core.io.@streamFile result";
+                Self::expect_arity(NAME, arguments, false, 3)?;
                 let (path_ptr, path_len) = self.extract_text(&arguments[0])?;
                 let BasicValueEnum::FloatValue(chunk_size) =
                     self.generate_expression(&arguments[1])?
                 else {
-                    return Err("@streamFile expects a Num chunkSize".to_string());
+                    return Err(format!("{NAME} expects a Num chunkSize"));
                 };
                 let BasicValueEnum::StructValue(closure) =
                     self.generate_expression(&arguments[2])?
                 else {
-                    return Err("@streamFile expects a closure onChunk".to_string());
+                    return Err(format!("{NAME} expects a closure onChunk"));
                 };
 
                 let bundle = self.bundle_closure(closure, "stream_file_bundle")?;
@@ -707,10 +697,10 @@ impl<'ctx> CodeGenerator<'ctx> {
                         ],
                         "",
                     )
-                    .map_err(ctx("Failed to call @streamFile"))?;
+                    .map_err(ctx(CALL_FAILED))?;
                 self.builder
                     .build_load(result_ty, out, "stream_file")
-                    .map_err(ctx("Failed to load @streamFile result"))
+                    .map_err(ctx(LOAD_FAILED))
             }
             "tcpServe" => {
                 const NAME: &str = "core.net.@tcpServe";
