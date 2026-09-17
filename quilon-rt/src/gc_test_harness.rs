@@ -9,10 +9,21 @@
 //! try to signal threads that have since exited and abort ("Signals delivery fails
 //! constantly"). Funneling all fiber work onto one long-lived registered thread keeps
 //! Boehm's thread set stable (main + worker).
+//!
+//! Consequence of sharing that one worker thread across four modules' tests: they also
+//! share its thread-locals — `scheduler::SCHEDULER`/`REACTOR`,
+//! `net::server::SERVERS`/`CONNECTIONS`/`NEXT_HANDLE`/`HANDLER_FIBER_SERVER`, and
+//! `deferred::STDIN_BUSY`/`STDIN_LEFTOVER`. Every test today cleans up after itself, so
+//! this passes, but it is a real coupling: a test that leaves `SERVERS` populated or
+//! `STDIN_BUSY == true` can now poison a later test in a DIFFERENT module, where it
+//! used to only ever run on its own module's dedicated worker. A new GC-touching test
+//! must leave these thread-locals as it found them.
 
 use crate::gc;
 use crate::test_support::GC_LOCK;
+use std::any::Any;
 use std::os::raw::{c_int, c_void};
+use std::panic::{self, AssertUnwindSafe};
 use std::ptr;
 use std::sync::OnceLock;
 use std::sync::mpsc;
@@ -46,7 +57,14 @@ fn gc_worker() -> &'static mpsc::Sender<Job> {
                 GC_register_my_thread(&stack_base);
             }
             for job in receiver {
-                job();
+                // `job` (built in `on_gc_thread`) already catches its own test body's
+                // panic and reports it back over its own done-channel before returning
+                // normally, so this outer catch is a second line of defense — nothing in
+                // `job`'s own bookkeeping is expected to panic. But this worker now runs
+                // every GC-touching test in the crate, not just one module's, so if it
+                // ever did, one test's panic must still not take the worker thread down
+                // (and every remaining GC test with it) — it stays one failing test.
+                let _ = panic::catch_unwind(AssertUnwindSafe(job));
             }
         });
         sender
@@ -54,15 +72,21 @@ fn gc_worker() -> &'static mpsc::Sender<Job> {
 }
 
 /// Run `f` on the persistent GC worker, serialized against every other GC-touching
-/// test via `GC_LOCK`, and block until it completes.
+/// test via `GC_LOCK`, and block until it completes. If `f` panics, that panic is
+/// caught on the worker thread (so the worker survives for the next queued test) and
+/// re-raised here on the calling thread via `resume_unwind`, so the test that called
+/// `on_gc_thread` still fails, and fails with its own panic message — not a follow-on
+/// `SendError` from some unrelated later test sharing the same worker.
 pub(crate) fn on_gc_thread<F: FnOnce() + Send + 'static>(f: F) {
     let _guard = GC_LOCK.lock().unwrap_or_else(|p| p.into_inner());
-    let (done_sender, done_receiver) = mpsc::channel();
+    let (done_sender, done_receiver) = mpsc::channel::<Option<Box<dyn Any + Send>>>();
     gc_worker()
         .send(Box::new(move || {
-            f();
-            let _ = done_sender.send(());
+            let outcome = panic::catch_unwind(AssertUnwindSafe(f));
+            let _ = done_sender.send(outcome.err());
         }))
         .unwrap();
-    done_receiver.recv().unwrap();
+    if let Some(payload) = done_receiver.recv().unwrap() {
+        panic::resume_unwind(payload);
+    }
 }

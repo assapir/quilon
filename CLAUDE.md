@@ -91,7 +91,7 @@ Classic multi-pass pipeline; `src/driver.rs::front_end` wires the passes for the
 3. **AST** — `src/ast/nodes.rs` — `Program { imports, items }`.
 4. **Type checker** — `src/typechecker/checker.rs` plus its per-area child modules (assertions, errors, env, overloads, sums, declarations, exprs, calls, patterns). Inference, exhaustiveness, arity.
 5. **Code generator** — `src/codegen/generator.rs` plus its per-area child modules (arrays, assertions, calls, closures, declarations, di, exprs, interpolation, intrinsics, mangle, matching, oracle, records, sums, tco, text) (`inkwell`, **LLVM 22**) → LLVM IR.
-6. **Runtime intrinsics** — `src/runtime/` (`__write_bytes`, grapheme counting via `unicode-segmentation`, Boehm GC glue), packaged as `libquilon_rt` — which bundles the collector's object too, so the archive alone is a complete runtime. Not stubs.
+6. **Runtime intrinsics** — `quilon-rt` (`__write_bytes`, grapheme counting via `unicode-segmentation`, Boehm GC glue), packaged as `libquilon_rt` — which bundles the collector's object too, so the archive alone is a complete runtime. Not stubs.
 7. **Native / JIT** — `quilon build` (`src/build.rs`) emits an object in-process and links `libquilon_rt`; `quilon run` uses an in-process JIT (`src/jit.rs`).
 
 ## Things to know when changing the language
