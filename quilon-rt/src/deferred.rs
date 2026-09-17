@@ -364,7 +364,7 @@ fn fail_read(site: *const QlSite, error: &io::Error) -> ! {
     fail_at(
         site,
         codes::READ_FAILED,
-        &format!("@readStdin failed: {error}"),
+        &format!("core.io.@readStdin failed: {error}"),
         RUNTIME_EXIT_CODE,
     )
 }
