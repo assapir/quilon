@@ -69,7 +69,6 @@ impl<'a> Parser<'a> {
                 // one is still a nullary constructor.)
                 let (name, span, qualified) = self.parse_name_or_qualified();
 
-                // Check if it's a constructor: Name(patterns) or Name pattern
                 if self.check(&TokenKind::ParenOpen) {
                     self.advance();
                     let arguments =

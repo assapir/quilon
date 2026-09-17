@@ -778,8 +778,8 @@ impl<'ctx> CodeGenerator<'ctx> {
              disagree on what is emitted"
         );
 
-        // Check if entry point function (^) exists and generate C main wrapper.
-        // Pass `^`'s DECLARED Quilon parameter types so the wrapper can dispatch on the
+        // When an entry point function (^) exists, generate its C main wrapper, passing
+        // `^`'s DECLARED Quilon parameter types so the wrapper can dispatch on the
         // real types (`[]Text` / `[|Text => Text|]`) — the lowered LLVM types are
         // ambiguous (`Text`, records, sum types, and arrays all become `{ ptr, i64 }`
         // structs), so dispatching on the LLVM shape would mis-route them.
@@ -823,7 +823,6 @@ impl<'ctx> CodeGenerator<'ctx> {
             return Err(format!("Module verification failed: {}", e));
         }
 
-        // Return the LLVM IR as a string
         Ok(self.module.print_to_string().to_string())
     }
 
@@ -941,7 +940,6 @@ impl<'ctx> CodeGenerator<'ctx> {
             .build_call(init_function, &[], "")
             .map_err(ctx("Failed to call __ql_init"))?;
 
-        // Get the ^ (entry point) function
         let user_entry = self
             .module
             .get_function("^")
@@ -1033,7 +1031,6 @@ impl<'ctx> CodeGenerator<'ctx> {
         let return_val = match result.as_any_value_enum() {
             inkwell::values::AnyValueEnum::FloatValue(f) => self.saturating_i32(f, "result_int")?,
             _ => {
-                // Return 0 if not a numeric result
                 i32_type.const_zero()
             }
         };

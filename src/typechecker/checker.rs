@@ -713,7 +713,6 @@ impl TypeChecker {
             checking_corelib_declaration: false,
         };
 
-        // Add built-in sum types to the environment
         checker.add_builtins();
         // Register the built-in operator/`print` overloads (the standard operators
         // are visible overloads, not compiler magic).

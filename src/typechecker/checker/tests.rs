@@ -260,10 +260,7 @@ fn test_constructor_arity() {
 
 #[test]
 fn test_builtin_sum_types() {
-    // Verify Result type is available
     let checker = TypeChecker::new();
-
-    // Check Result is defined
     assert!(checker.env.get_type("Result").is_some());
 }
 

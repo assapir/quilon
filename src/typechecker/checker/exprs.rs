@@ -578,7 +578,6 @@ impl TypeChecker {
                                 self.check_type_compatibility(&expected_type, &actual_type, span)?;
                             }
 
-                            // Check all fields are provided
                             for (field_name, _) in type_fields.iter() {
                                 if !provided_fields.contains(field_name) {
                                     return Err(TypeError::MissingConstructorField {
@@ -589,7 +588,6 @@ impl TypeChecker {
                                 }
                             }
 
-                            // Return the Named type
                             Ok(Type::Named {
                                 name,
                                 fields: type_fields,
