@@ -1263,7 +1263,7 @@ Allocate within the machine's memory, and compute sizes that stay whole numbers.
 `@readStdin` met an IO error on stdin — one other than end of file.
 
 ```text
-error[QN505]: @readStdin failed: Input/output error (os error 5)
+error[QN505]: core.io.@readStdin failed: Input/output error (os error 5)
 ```
 
 Run the program with a readable stdin.

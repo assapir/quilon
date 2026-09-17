@@ -127,6 +127,13 @@ All notable changes to Quilon are documented here.
 
 ### Changed
 
+- **A diagnostic naming `@sleep`, `@readStdin`, `@tcpRequest`, or `@streamFile` now names
+  it fully qualified** — `core.time.@sleep`, `core.io.@readStdin`, `core.net.@tcpRequest`,
+  `core.io.@streamFile` — the same way `core.net.@tcpServe`'s own diagnostics always have,
+  since a program never writes the primitive bare. Covers the argument-count and
+  argument-type errors and the "Failed to call"/"Failed to load" contexts in the code
+  generator, and the runtime's own `@readStdin`/`@streamFile` failure messages. Closes
+  #452.
 - **BREAKING: an `@` leaf IO primitive is reached through its module's binding, like every
   other export.** `io.@readStdin()`, `io.@streamFile(path, chunkSize, onChunk)`,
   `time.@sleep(seconds)`, and `net.@tcpRequest(address, requestBytes)` replace the bare

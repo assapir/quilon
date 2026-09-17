@@ -209,7 +209,7 @@ fn stream_file(
 ) -> QlResult {
     if chunk_size.fract() != 0.0 || chunk_size <= 0.0 {
         return QlResult::not_ok(&format!(
-            "@streamFile: chunkSize must be a positive whole number, got {}",
+            "core.io.@streamFile: chunkSize must be a positive whole number, got {}",
             crate::mem::format_num(chunk_size)
         ));
     }
@@ -220,7 +220,7 @@ fn stream_file(
     let mut buffer: Vec<u8> = Vec::new();
     if buffer.try_reserve_exact(chunk_size).is_err() {
         return QlResult::not_ok(&format!(
-            "@streamFile: cannot allocate a {chunk_size}-byte chunk buffer"
+            "core.io.@streamFile: cannot allocate a {chunk_size}-byte chunk buffer"
         ));
     }
     buffer.resize(chunk_size, 0);
@@ -235,7 +235,9 @@ fn stream_file(
     {
         Ok(file) => file,
         Err(error) => {
-            return QlResult::not_ok(&format!("@streamFile failed to open {path}: {error}"));
+            return QlResult::not_ok(&format!(
+                "core.io.@streamFile failed to open {path}: {error}"
+            ));
         }
     };
     let fd = file.as_raw_fd();
@@ -247,7 +249,9 @@ fn stream_file(
         let count = match read_once(fd, &mut buffer) {
             Ok(count) => count,
             Err(error) => {
-                return QlResult::not_ok(&format!("@streamFile failed to read {path}: {error}"));
+                return QlResult::not_ok(&format!(
+                    "core.io.@streamFile failed to read {path}: {error}"
+                ));
             }
         };
         let at_eof = count == 0;
@@ -283,7 +287,7 @@ fn split_chunk(buffer: &[u8], at_eof: bool) -> Result<usize, String> {
             // prefix ahead of it is unambiguous either way.
             std::str::from_utf8(&buffer[..error.valid_up_to()]).expect("checked above")
         }
-        Err(_) => return Err("@streamFile read bytes that are not valid UTF-8".to_string()),
+        Err(_) => return Err("core.io.@streamFile read bytes that are not valid UTF-8".to_string()),
     };
     if at_eof {
         return Ok(valid.len());
