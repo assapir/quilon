@@ -618,7 +618,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             }
         }
 
-        // Pre-pass: an operator overload now lives inside a type (as a member). Register
+        // Pre-pass: an operator overload lives inside a type (as a member). Register
         // each type's operator members as members of the operator's overload set, with the
         // receiver `it` as the left operand — so `a <op> b` mangles to and dispatches
         // through the same per-signature symbol the member is emitted under.

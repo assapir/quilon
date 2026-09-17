@@ -1,8 +1,6 @@
 //! Quilon's source file extension.
 //!
-//! Sources are `.qn`. The language previously used `.ql`, which is CodeQL's — GitHub
-//! attributed Quilon programs to CodeQL because of it — and that spelling is simply not
-//! Quilon any more: a file the compiler is handed has to be named for what it is.
+//! Sources are `.qn`: a file the compiler is handed has to be named for what it is.
 
 /// Quilon's source extension.
 pub const EXTENSION: &str = ".qn";

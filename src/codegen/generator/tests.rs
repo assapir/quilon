@@ -216,8 +216,8 @@ fn test_method_calls_sibling_method() {
 }
 
 /// Every symbol the runtime exports must have a prototype here, and every prototype must
-/// name a symbol the runtime exports. The two halves used to be kept in step by hand,
-/// and a miss did not fail the build — it produced a call to a null address at run time.
+/// name a symbol the runtime exports. A mismatch does not fail the build on its own — it
+/// produces a call to a null address at run time, which is what this test guards against.
 /// (`memcpy` is libc's, so it is the one prototype with no runtime counterpart.)
 #[test]
 fn every_runtime_intrinsic_can_be_declared() {
