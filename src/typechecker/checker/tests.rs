@@ -1053,3 +1053,24 @@ fn test_fiber_handler_capturing_an_atomic_local_of_the_enclosing_block_is_accept
                >";
     assert!(check_linked(src).is_ok());
 }
+
+#[test]
+fn test_fiber_handler_local_of_its_own_is_accepted_despite_a_same_named_local_elsewhere() {
+    // `helper`'s own `count` is a totally different binding from the handler's own
+    // `count`, declared in an unrelated sibling function of `^` — sharing a name with a
+    // local the handler itself declares must not make it look captured.
+    let src = "<< core.net\n\
+               ^ = () -> Num => <\n  \
+                 net.@tcpServe(\"127.0.0.1:59413\", connection => <\n    \
+                   count := 0\n    \
+                   count := count + 1\n    \
+                   $\n  \
+                 >)\n  \
+                 helper = () -> Num => <\n    \
+                   count := 5\n    \
+                   count\n  \
+                 >\n  \
+                 0\n\
+               >";
+    assert!(check_linked(src).is_ok());
+}

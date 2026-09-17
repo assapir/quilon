@@ -33,31 +33,14 @@ use std::collections::{HashMap, HashSet};
 /// more entry here.
 const FIBER_HANDLER_PRIMITIVES: &[(&str, &str)] = &[("tcpServe", "net.@tcpServe")];
 
-/// One place a name is read or (re)declared/written. A `:=` declaration's own name counts
-/// as touched wherever it sits — the tree-shaker's mention walk has no reason to see it
-/// (assigning to a local mentions nothing callable), but sharing state is exactly a
-/// question of what is written, not only what is called. `Write`'s `bool` is the AST
-/// node's own `atomic` flag (`@name := …`'s marker) — true only on the DECLARING
-/// occurrence, never a later reassignment of the same binding (see
-/// `docs/concurrency/README.md#sharing-state-across-fibers`'s "`@` marks the declaration
-/// only"), so a caller that cares collects it by NAME across every touch, not off one node.
-enum Touch<'a> {
-    Read(&'a str, &'a Span),
-    Write(&'a str, &'a Span, bool),
-}
-
-impl<'a> Touch<'a> {
-    fn name(&self) -> &'a str {
-        match self {
-            Touch::Read(name, _) | Touch::Write(name, _, _) => name,
-        }
-    }
-
-    fn span(&self) -> &'a Span {
-        match self {
-            Touch::Read(_, span) | Touch::Write(_, span, _) => span,
-        }
-    }
+/// One place a name is read or (re)declared/written — the callers below (the global-
+/// reachability walk and its result) never need to tell which, only where. A `:=`
+/// declaration's own name counts as touched wherever it sits: the tree-shaker's mention
+/// walk this is shaped after has no reason to see it (assigning to a local mentions
+/// nothing callable), but sharing state is exactly a question of what is written too.
+struct Touch<'a> {
+    name: &'a str,
+    span: &'a Span,
 }
 
 impl TypeChecker {
@@ -265,25 +248,23 @@ impl TypeChecker {
         }
 
         if let Some(body) = handler_body {
-            // Every `:=` name declared anywhere in `enclosing_body` OTHER than inside
-            // `body` itself (`skip` excludes it, so the handler's own locals never show
-            // up here) — a name among these that `body` also touches did not spring up
-            // twice by coincidence: a `:=` declaration always reassigns whatever already
-            // has that name, however far outside it lives, rather than shadowing it
-            // (`docs/mutation.md`), so it is the SAME binding. `atomic` is read off the
-            // AST directly (`declaration.atomic`, the DECLARING occurrence's own marker)
-            // rather than `self.env`, which by now holds only what is still top-level —
-            // every local scope closed as its own body finished checking.
-            let mut outer_locals = Vec::new();
-            walk(enclosing_body, Some(body), &mut outer_locals);
+            // Every `:=` name declared as a DIRECT statement of `enclosing_body` — never
+            // reaching into some OTHER sibling function's or lambda's own body, whose
+            // locals are private to it, not this block's, however coincidentally a name
+            // there matches one the handler declares for itself. A name among these that
+            // `body` also touches did not spring up twice by coincidence: a `:=`
+            // declaration always reassigns whatever already has that name, however far
+            // outside it lives, rather than shadowing it (`docs/mutation.md`), so it is
+            // the SAME binding. `atomic` is read off the AST directly (`declaration.
+            // atomic`, the DECLARING occurrence's own marker) rather than `self.env`,
+            // which by now holds only what is still top-level — every local scope closed
+            // as its own body finished checking.
             let mut local_names: HashSet<&str> = HashSet::new();
             let mut atomic_names: HashSet<&str> = HashSet::new();
-            for touch in &outer_locals {
-                if let Touch::Write(name, _, atomic) = touch {
-                    local_names.insert(name);
-                    if *atomic {
-                        atomic_names.insert(name);
-                    }
+            for (name, atomic) in direct_mutable_locals(enclosing_body) {
+                local_names.insert(name);
+                if atomic {
+                    atomic_names.insert(name);
                 }
             }
             let captured_names: HashSet<&str> = local_names
@@ -292,14 +273,11 @@ impl TypeChecker {
                 .collect();
 
             let mut handler_touches = Vec::new();
-            walk(body, None, &mut handler_touches);
+            walk(body, &mut handler_touches);
             for touch in &handler_touches {
-                if captured_names.contains(touch.name()) {
+                if captured_names.contains(touch.name) {
                     return Err(shared_across_fibers(
-                        touch.name(),
-                        touch.span(),
-                        call_span,
-                        primitive,
+                        touch.name, touch.span, call_span, primitive,
                     ));
                 }
             }
@@ -322,18 +300,18 @@ impl TypeChecker {
         let mut pending: Vec<&Expression> = roots.to_vec();
         while let Some(body) = pending.pop() {
             let mut touches = Vec::new();
-            walk(body, None, &mut touches);
+            walk(body, &mut touches);
             for touch in &touches {
-                let name = touch.name();
+                let name = touch.name;
                 if self.env.is_top_level(name)
                     && self.env.is_mutable(name)
                     && !self.env.is_atomic(name)
                 {
-                    return Some((name, touch.span()));
+                    return Some((name, touch.span));
                 }
             }
             for touch in &touches {
-                let name = touch.name();
+                let name = touch.name;
                 if visited.insert(name)
                     && let Some(bodies) = defined.get(name)
                 {
@@ -414,20 +392,34 @@ fn find_local_handler_body<'a>(scope: &'a Expression, name: &str) -> Option<&'a 
     })
 }
 
+/// Every `:=` name declared as a DIRECT statement of `scope`, paired with whether that
+/// declaring occurrence was atomic — never reaching into a nested function's or lambda's
+/// own body, whose locals belong to it alone. Not reused for the global-reachability walk
+/// below (`walk`, `first_shared_global`), which wants the opposite: everything the handler
+/// itself touches, including through code it declares and calls internally.
+fn direct_mutable_locals(scope: &Expression) -> Vec<(&str, bool)> {
+    let Expression::Block { statements, .. } = scope else {
+        return Vec::new();
+    };
+    statements
+        .iter()
+        .filter_map(|statement| match statement {
+            Statement::Item(Item::VariableDeclaration(declaration)) if declaration.mutable => {
+                Some((declaration.name.as_str(), declaration.atomic))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
 /// Every name `expression` reads or (re)declares, with where — the shape of
-/// `ast::reachability`'s mention walk, plus a `:=` declaration's own write target, and
-/// `skip`: an expression to treat as a leaf (used to search a lambda's ENCLOSING scope for
-/// captured locals without also collecting the lambda's own).
-fn walk<'a>(expression: &'a Expression, skip: Option<&Expression>, out: &mut Vec<Touch<'a>>) {
-    if let Some(skip) = skip
-        && std::ptr::eq(expression, skip)
-    {
-        return;
-    }
+/// `ast::reachability`'s mention walk, plus a `:=` declaration's own write target (its
+/// name is otherwise nothing the tree-shaker's own walk has a reason to see).
+fn walk<'a>(expression: &'a Expression, out: &mut Vec<Touch<'a>>) {
     match expression {
         // `it` is a method's receiver, never a shared binding of its own.
         Expression::Identifier { name, .. } if name == crate::ast::RECEIVER => {}
-        Expression::Identifier { name, span } => out.push(Touch::Read(name, span)),
+        Expression::Identifier { name, span } => out.push(Touch { name, span }),
         Expression::Number { .. }
         | Expression::String { .. }
         | Expression::Bool { .. }
@@ -435,43 +427,43 @@ fn walk<'a>(expression: &'a Expression, skip: Option<&Expression>, out: &mut Vec
         Expression::Interpolation { parts, .. } => {
             for part in parts {
                 if let crate::ast::InterpolationPart::Hole(hole) = part {
-                    walk(hole, skip, out);
+                    walk(hole, out);
                 }
             }
         }
         Expression::BinaryOperator { left, right, .. } => {
-            walk(left, skip, out);
-            walk(right, skip, out);
+            walk(left, out);
+            walk(right, out);
         }
         Expression::UnaryOperator { expression, .. }
         | Expression::FieldAccess { expression, .. }
         | Expression::Spread { expression, .. }
         | Expression::Lambda {
             body: expression, ..
-        } => walk(expression, skip, out),
+        } => walk(expression, out),
         Expression::Range { start, end, .. } => {
-            walk(start, skip, out);
-            walk(end, skip, out);
+            walk(start, out);
+            walk(end, out);
         }
         Expression::FieldAssign { target, value, .. }
         | Expression::IndexAssign { target, value, .. } => {
-            walk(target, skip, out);
-            walk(value, skip, out);
+            walk(target, out);
+            walk(value, out);
         }
         Expression::Index {
             expression, index, ..
         } => {
-            walk(expression, skip, out);
-            walk(index, skip, out);
+            walk(expression, out);
+            walk(index, out);
         }
         Expression::Call {
             function,
             arguments,
             ..
         } => {
-            walk(function, skip, out);
+            walk(function, out);
             for argument in arguments {
-                walk(argument, skip, out);
+                walk(argument, out);
             }
         }
         Expression::If {
@@ -480,54 +472,53 @@ fn walk<'a>(expression: &'a Expression, skip: Option<&Expression>, out: &mut Vec
             else_,
             ..
         } => {
-            walk(condition, skip, out);
-            walk(then, skip, out);
-            walk(else_, skip, out);
+            walk(condition, out);
+            walk(then, out);
+            walk(else_, out);
         }
         Expression::Match {
             expression, arms, ..
         } => {
-            walk(expression, skip, out);
+            walk(expression, out);
             for arm in arms {
-                walk(&arm.body, skip, out);
+                walk(&arm.body, out);
             }
         }
         Expression::Array { elements, .. } | Expression::SetLiteral { elements, .. } => {
             for element in elements {
-                walk(element, skip, out);
+                walk(element, out);
             }
         }
         Expression::MapLiteral { entries, .. } => {
             for (key, value) in entries {
-                walk(key, skip, out);
-                walk(value, skip, out);
+                walk(key, out);
+                walk(value, out);
             }
         }
         Expression::Record { fields, .. } | Expression::Constructor { fields, .. } => {
             for (_, value) in fields {
-                walk(value, skip, out);
+                walk(value, out);
             }
         }
         Expression::Block { statements, .. } => {
             for statement in statements {
                 match statement {
-                    Statement::Expression(e) => walk(e, skip, out),
+                    Statement::Expression(e) => walk(e, out),
                     Statement::Item(Item::VariableDeclaration(declaration)) => {
-                        walk(&declaration.value, skip, out);
+                        walk(&declaration.value, out);
                         if declaration.mutable {
-                            out.push(Touch::Write(
-                                &declaration.name,
-                                &declaration.span,
-                                declaration.atomic,
-                            ));
+                            out.push(Touch {
+                                name: &declaration.name,
+                                span: &declaration.span,
+                            });
                         }
                     }
                     Statement::Item(Item::FunctionDeclaration(declaration)) => {
-                        walk(&declaration.body, skip, out)
+                        walk(&declaration.body, out)
                     }
                     Statement::Item(Item::TypeDeclaration(declaration)) => {
                         for method in declaration.type_definition.methods() {
-                            walk(&method.body, skip, out);
+                            walk(&method.body, out);
                         }
                     }
                 }
