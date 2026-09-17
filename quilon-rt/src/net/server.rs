@@ -417,7 +417,7 @@ pub extern "C" fn __server_kill(server_id: f64, seconds: f64) {
 mod tests {
     use super::*;
     use crate::deferred::__force_text;
-    use crate::net::tests::on_gc_thread;
+    use crate::gc_test_harness::on_gc_thread;
     use crate::scheduler::{run, sleep, spawn};
     use std::io::{Read, Write};
     use std::os::raw::c_void;

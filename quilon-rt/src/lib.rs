@@ -46,6 +46,8 @@ pub mod blocking;
 pub mod collections;
 pub mod deferred;
 pub mod gc;
+#[cfg(test)]
+pub(crate) mod gc_test_harness;
 pub mod http;
 pub mod io;
 pub mod launch_scope;

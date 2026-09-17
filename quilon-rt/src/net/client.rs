@@ -112,7 +112,7 @@ fn request_error(address: &str, stage: &str, error: &io::Error) -> QlResult {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::net::tests::on_gc_thread;
+    use crate::gc_test_harness::on_gc_thread;
     use crate::scheduler::{run, spawn};
     use std::io::{Read, Write};
     use std::net::TcpListener;
