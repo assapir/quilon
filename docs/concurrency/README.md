@@ -12,12 +12,12 @@ sidebar:
 > single-threaded fiber scheduler, the effect-only `time.@sleep` pause (`core.time`), the
 > deferred-value `io.@readStdin` (`core.io`), the networked `net.@tcpRequest` (`core.net`),
 > the strict, callback-driven `io.@streamFile` (`core.io`), the raw TCP server layer
-> `net.@tcpServe`/`Connection`/`Server` (`core.net`), and the atomic-binding syntax
-> `@name := …`. Planned for 1.0: a value-returning network primitive such as `@get`, with
-> which two independent reads finish in max-time, and the multicore (M:N) runtime — a
-> work-stealing scheduler running one worker per CPU as reported to the process, the same
-> under `quilon run` and a built binary, with the Boehm GC working across threads and the
-> fiber-sharing check and atomic types enforced.
+> `net.@tcpServe`/`Connection`/`Server` (`core.net`), the atomic-binding syntax
+> `@name := …`, and the fiber-sharing check over `net.@tcpServe`'s handler. Planned for
+> 1.0: a value-returning network primitive such as `@get`, with which two independent
+> reads finish in max-time, and the multicore (M:N) runtime — a work-stealing scheduler
+> running one worker per CPU as reported to the process, the same under `quilon run` and a
+> built binary, with the Boehm GC working across threads and atomic types enforced.
 
 Quilon's concurrency is **colorless**: a program is written as ordinary, blocking-*looking*
 code, and the runtime overlaps independent IO. A function that does IO is written and typed
@@ -98,8 +98,14 @@ already follows. An atomic binding's reassignment executes as a whole: the right
 not wait on a deferred value, so the statement never parks part-way, and the compiler
 rejects one that would (force it into a plain `=` binding first, then reassign). Mutation
 *inside* a bound record still follows the record's own rules; cross-field invariants belong
-to an atomic type `T = @{ … }`. The fiber-sharing check that lets more than one fiber
-reach a marked binding ships with the multicore runtime. (See `examples/atomic_binding.qn`.)
+to an atomic type `T = @{ … }`. (See `examples/atomic_binding.qn`.)
+
+The checker enforces the sharing rule against `net.@tcpServe`'s `handler` argument — the
+first Quilon code that runs on more than one fiber: a non-atomic `:=` binding it reaches,
+directly or through a call, is rejected at the `net.@tcpServe(...)` call under
+[QN350](../tooling/errors.md#qn350---value-shared-across-fibers). (See
+`examples/shared_counter.qn`, whose handler counts connections into an atomic
+`@visits := 0`.)
 
 ## Implemented primitives
 

@@ -255,6 +255,29 @@ fn a_lambda_body_may_still_be_a_bare_expression() {
     );
 }
 
+/// A non-atomic global a `net.@tcpServe` handler touches fails to compile under QN350, and
+/// names the fix.
+#[test]
+fn a_global_shared_with_a_fiber_handler_is_rejected() {
+    let src = "<< core.net\n\
+               hits := 0\n\
+               ^ = () -> Num => <\n  \
+                 net.@tcpServe(\"127.0.0.1:59450\", connection => < hits := hits + 1 >)\n  \
+                 0\n\
+               >\n";
+    let (ok, stderr) = check("fiber_sharing", src);
+
+    assert!(!ok, "expected non-zero exit, stderr was: {stderr}");
+    assert!(
+        stderr.contains("error[QN350]:"),
+        "no QN350 header: {stderr}"
+    );
+    assert!(
+        stderr.contains("declare it `@hits := …`"),
+        "no fix in the help: {stderr}"
+    );
+}
+
 /// `quilon explain` prints the reference section for a code, and says so for a code the
 /// registry lacks.
 #[test]

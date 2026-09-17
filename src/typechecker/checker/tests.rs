@@ -884,3 +884,120 @@ fn test_an_unrelated_at_prefixed_name_still_reports_undefined() {
     let err = check_ok("^ = () -> Num => < @bogus() >").unwrap_err();
     assert!(matches!(err, TypeError::UndefinedVariable { .. }));
 }
+
+/// Lex, parse, and link `src` (real corelib modules, since `net.@tcpServe` only exists
+/// through `<< core.net`), then check it — what a fiber-sharing test needs, unlike
+/// `check_ok`'s bare (unlinked) source.
+fn check_linked(src: &str) -> Result<(), TypeError> {
+    let tokens = Lexer::tokenize(src).unwrap();
+    let program = parse(&tokens).unwrap();
+    let (program, _sources) = crate::modules::link(program, std::path::Path::new("."), None)
+        .expect("import linking failed");
+    TypeChecker::new().check_program(&program).map(|_| ())
+}
+
+/// The binding name a fiber-sharing rejection names — panics on any other outcome, so a
+/// test asserting the WRONG binding (or no rejection at all) fails loudly rather than
+/// silently passing.
+fn shared_across_fibers_name(src: &str) -> String {
+    match check_linked(src) {
+        Err(TypeError::SharedAcrossFibers { name, .. }) => name,
+        other => panic!("expected a SharedAcrossFibers rejection, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_fiber_handler_reading_a_plain_global_is_rejected() {
+    let src = "<< core.net\n\
+               hits := 0\n\
+               ^ = () -> Num => <\n  \
+                 net.@tcpServe(\"127.0.0.1:59401\", connection => < hits == 0 ? $ : $ >)\n  \
+                 0\n\
+               >";
+    assert_eq!(shared_across_fibers_name(src), "hits");
+}
+
+#[test]
+fn test_fiber_handler_writing_a_plain_global_is_rejected() {
+    let src = "<< core.net\n\
+               hits := 0\n\
+               ^ = () -> Num => <\n  \
+                 net.@tcpServe(\"127.0.0.1:59402\", connection => < hits := hits + 1 >)\n  \
+                 0\n\
+               >";
+    assert_eq!(shared_across_fibers_name(src), "hits");
+}
+
+#[test]
+fn test_fiber_handler_touching_a_global_two_calls_deep_is_rejected() {
+    let src = "<< core.net\n\
+               hits := 0\n\
+               bump = () -> $ => < hits := hits + 1 >\n\
+               callBump = () -> $ => < bump() >\n\
+               ^ = () -> Num => <\n  \
+                 net.@tcpServe(\"127.0.0.1:59403\", connection => < callBump() >)\n  \
+                 0\n\
+               >";
+    assert_eq!(shared_across_fibers_name(src), "hits");
+}
+
+#[test]
+fn test_fiber_handler_capturing_a_local_of_the_enclosing_block_is_rejected() {
+    let src = "<< core.net\n\
+               ^ = () -> Num => <\n  \
+                 hits := 0\n  \
+                 net.@tcpServe(\"127.0.0.1:59404\", connection => < hits := hits + 1 >)\n  \
+                 0\n\
+               >";
+    assert_eq!(shared_across_fibers_name(src), "hits");
+}
+
+#[test]
+fn test_fiber_handler_reaching_an_atomic_global_is_accepted() {
+    let src = "<< core.net\n\
+               @hits := 0\n\
+               ^ = () -> Num => <\n  \
+                 net.@tcpServe(\"127.0.0.1:59405\", connection => < hits := hits + 1 >)\n  \
+                 0\n\
+               >";
+    assert!(check_linked(src).is_ok());
+}
+
+#[test]
+fn test_fiber_handler_reading_an_immutable_global_record_is_accepted_despite_its_setter() {
+    // `=` freezes the value even though `Tally` declares a `:=` setter — the deep-
+    // immutability invariant this check reuses.
+    let src = "<< core.net\n\
+               Tally = { count :: Num, bump := () => < it.count := it.count + 1 > }\n\
+               board = Tally { count = 0 }\n\
+               ^ = () -> Num => <\n  \
+                 net.@tcpServe(\"127.0.0.1:59406\", connection => < board.count == 0 ? $ : $ >)\n  \
+                 0\n\
+               >";
+    assert!(check_linked(src).is_ok());
+}
+
+#[test]
+fn test_fiber_handler_declaring_its_own_local_is_accepted() {
+    let src = "<< core.net\n\
+               ^ = () -> Num => <\n  \
+                 net.@tcpServe(\"127.0.0.1:59407\", connection => <\n    \
+                   visits := 0\n    \
+                   visits := visits + 1\n    \
+                   $\n  \
+                 >)\n  \
+                 0\n\
+               >";
+    assert!(check_linked(src).is_ok());
+}
+
+#[test]
+fn test_a_program_with_no_server_is_unaffected_by_the_fiber_sharing_check() {
+    let src = "hits := 0\n\
+               bump = () -> $ => < hits := hits + 1 >\n\
+               ^ = () -> Num => <\n  \
+                 bump()\n  \
+                 hits\n\
+               >";
+    assert!(check_linked(src).is_ok());
+}

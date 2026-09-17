@@ -1,0 +1,28 @@
+~ A turnstile: every connection through `net.@tcpServe` bumps a shared counter, safe to
+~ touch from any of the server's per-connection fibers because it is bound `@visits := 0`
+~ — an atomic binding — rather than a plain `:=`, which the fiber-sharing check rejects at
+~ compile time for code the handler reaches. `^` walks through the turnstile twice with
+~ `net.@tcpRequest`, asserts both visits landed, then closes it.
+<< core.net
+<< core.test
+
+@visits := 0
+
+click = (connection :: net.Connection) -> $ => <
+  ring = connection.@read()
+  visits := visits + 1
+  connection.@write(ring)
+  connection.close()
+>
+
+^ = () -> $ => <
+  turnstile = net.@tcpServe("127.0.0.1:9058", connection => click(connection))
+  net.@tcpRequest("127.0.0.1:9058", "ring") ?
+    | Ok(_) => $
+    | NotOk(error) => test.failAt(error)
+  net.@tcpRequest("127.0.0.1:9058", "ring") ?
+    | Ok(_) => $
+    | NotOk(error) => test.failAt(error)
+  assert(visits, equals(2))
+  turnstile.kill(1)
+>
