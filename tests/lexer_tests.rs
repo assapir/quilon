@@ -286,7 +286,7 @@ fn test_spans_carry_the_file_they_came_from() {
     assert_ne!(root[0].span, module[0].span);
 }
 
-/// Trojan Source guard (CVE-2021-42574 class, see `quilon::lexer::bidi`): a balanced
+/// Trojan Source guard (CVE-2021-42574 class, see `quilon_rt::bidi`): a balanced
 /// isolate inside a string literal lexes normally, and the literal text is preserved
 /// exactly (no reordering, no stripped or injected characters).
 #[test]
