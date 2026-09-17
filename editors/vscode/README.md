@@ -133,9 +133,10 @@ Unit tests (`pnpm test`) cover the extension's pure logic, all kept free of any
   `syntaxes/quilon.tmLanguage.json` and asserts each multi-character operator
   (`=>`, `->`, `:=`, `<-`, `::`, `==`, `!=`, `<=`, `>=`, `&&`, `||`)
   tokenizes to a **single** scope, plus regression guards for `<` / `>`, `=`,
-  `$`, comments, strings, and numbers. `src/grammar.ts` is a tiny dependency-free
-  re-implementation of TextMate's ordered first-match-wins rule (the behaviour
-  the operator ordering relies on), so no native engine is needed.
+  `$`, comments, strings, and numbers. Tokenized with the real `vscode-textmate`
+  engine (backed by `vscode-oniguruma` for its regex engine), the same one VS
+  Code runs — both devDependencies, so no native module needs building to run
+  the extension itself.
 
 To verify the **language server** end-to-end manually:
 

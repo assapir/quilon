@@ -168,7 +168,9 @@ impl<'ctx> CodeGenerator<'ctx> {
                 then,
                 else_,
                 ..
-            } => self.generate_if(condition, then, else_),
+            } => Ok(self
+                .if_position(condition, then, else_, BodyPosition::Value)?
+                .expect("value position always yields a value")),
 
             Expression::Block { statements, span } => self.generate_block(statements, span),
 
@@ -246,7 +248,9 @@ impl<'ctx> CodeGenerator<'ctx> {
                 expression: scrutinee,
                 arms,
                 ..
-            } => self.generate_match(expression, scrutinee, arms),
+            } => Ok(self
+                .match_position(expression, scrutinee, arms, BodyPosition::Value)?
+                .expect("value position always yields a value")),
 
             Expression::Range { start, end, span } => self.generate_range(start, end, span),
         }
@@ -625,7 +629,7 @@ impl<'ctx> CodeGenerator<'ctx> {
     /// only branch into the right operand when the left does not already decide the
     /// result (`false` decides `&&`; `true` decides `||`). The merged value is a phi of
     /// the deciding constant and the right operand's boolean. Shape mirrors
-    /// `generate_if`.
+    /// `if_position`.
     pub(super) fn generate_short_circuit(
         &mut self,
         operator: BinaryOperator,
@@ -751,24 +755,13 @@ impl<'ctx> CodeGenerator<'ctx> {
         }
     }
 
-    /// Value-position `if`/ternary: both arms always yield a value (see
-    /// [`if_position`](CodeGenerator::if_position)'s tail variant for the self-tail-call case).
-    pub(super) fn generate_if(
-        &mut self,
-        cond: &Expression,
-        then_expression: &Expression,
-        else_expression: &Expression,
-    ) -> Result<BasicValueEnum<'ctx>, String> {
-        Ok(self
-            .if_position(cond, then_expression, else_expression, BodyPosition::Value)?
-            .expect("value position always yields a value"))
-    }
-
     /// Lower an `if`/ternary, emitting each arm's body at `position`. In [`BodyPosition::Value`]
-    /// both arms always produce a value and the merge block's `phi` covers both; in
-    /// [`BodyPosition::Tail`] an arm may instead tail-recurse and branch straight to the
-    /// loop header, so the `phi` covers only the arms that did yield a value — if neither
-    /// did, the merge block is `unreachable` and this returns `None` (see
+    /// (the ordinary case — `generate_expression`'s `Expression::If` arm calls this with
+    /// `Value`, then `.expect`s the `Some` it always gets back) both arms always produce a
+    /// value and the merge block's `phi` covers both; in [`BodyPosition::Tail`]
+    /// (`generate_tail_expression`'s `Expression::If` arm) an arm may instead tail-recurse and
+    /// branch straight to the loop header, so the `phi` covers only the arms that did yield a
+    /// value — if neither did, the merge block is `unreachable` and this returns `None` (see
     /// `generate_tail_expression`'s `None` invariant).
     pub(super) fn if_position(
         &mut self,

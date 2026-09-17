@@ -6,13 +6,14 @@
 
 use super::*;
 
-/// Where an if/match arm's body is emitted: [`generate_if`](CodeGenerator::generate_if) and
-/// [`generate_match`](CodeGenerator::generate_match) always want a value back, while
-/// [`generate_tail_if`](CodeGenerator::generate_tail_if) and
-/// [`generate_tail_match`](CodeGenerator::generate_tail_match) want a self-tail-call left
-/// free to end the arm's block with a back-edge instead. `CodeGenerator::emit_body` is the
-/// one place that difference lives; `if_position`/`match_position` (in `exprs`/`matching`)
-/// are otherwise identical for either position.
+/// Where an if/match arm's body is emitted:
+/// [`generate_expression`](CodeGenerator::generate_expression) calls
+/// [`if_position`](CodeGenerator::if_position)/[`match_position`](CodeGenerator::match_position)
+/// with `Value` (always wants a value back), while
+/// [`generate_tail_expression`](CodeGenerator::generate_tail_expression) calls them with `Tail`
+/// (a self-tail-call may end the arm's block with a back-edge instead).
+/// `CodeGenerator::emit_body` is the one place that difference lives; `if_position`/
+/// `match_position` are otherwise identical for either position.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum BodyPosition {
     /// A self-tail-call back-edge may end the body's block with no value — see
@@ -235,13 +236,13 @@ impl<'ctx> CodeGenerator<'ctx> {
                 then,
                 else_,
                 ..
-            } => self.generate_tail_if(condition, then, else_),
+            } => self.if_position(condition, then, else_, BodyPosition::Tail),
 
             Expression::Match {
                 expression: scrutinee,
                 arms,
                 ..
-            } => self.generate_tail_match(expression, scrutinee, arms),
+            } => self.match_position(expression, scrutinee, arms, BodyPosition::Tail),
 
             // Anything else in tail position is an ordinary value.
             other => Ok(Some(self.generate_expression(other)?)),
@@ -310,38 +311,5 @@ impl<'ctx> CodeGenerator<'ctx> {
             .build_unconditional_branch(header)
             .map_err(ctx("Failed to branch to loop header"))?;
         Ok(None)
-    }
-
-    /// Tail-position `if`/ternary: [`if_position`](CodeGenerator::if_position) with each arm
-    /// emitted in tail position, so an arm that tail-recurses branches to the loop header
-    /// (yielding no value) instead of joining the merge block. We `phi` only over the
-    /// value-producing arms — if both arms tail self-call, there is no merge value and we
-    /// return `None`.
-    pub(super) fn generate_tail_if(
-        &mut self,
-        condition: &Expression,
-        then_expression: &Expression,
-        else_expression: &Expression,
-    ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
-        self.if_position(
-            condition,
-            then_expression,
-            else_expression,
-            BodyPosition::Tail,
-        )
-    }
-
-    /// Tail-position `?`/`|` match: [`match_position`](CodeGenerator::match_position) with
-    /// each arm body emitted in tail position. An arm that tail-recurses branches to the loop
-    /// header and stores nothing; an arm that yields a value stores it into the shared result
-    /// slot and falls through to the continuation. If EVERY arm tail-recurses, the
-    /// continuation is unreachable and we return `None` (no result to load).
-    pub(super) fn generate_tail_match(
-        &mut self,
-        match_expression: &Expression,
-        scrutinee: &Expression,
-        arms: &[MatchArm],
-    ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
-        self.match_position(match_expression, scrutinee, arms, BodyPosition::Tail)
     }
 }

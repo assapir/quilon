@@ -13,7 +13,7 @@ A classic multi-pass pipeline (each stage a module under `src/`); `src/driver.rs
 3. **AST** — `src/ast/nodes.rs`.
 4. **Type checker** — `src/typechecker/checker.rs` plus its per-area child modules.
 5. **Code generator** — `src/codegen/generator.rs` plus its per-area child modules (`inkwell`, LLVM 22) → LLVM IR.
-6. **Runtime intrinsics** — `src/runtime/` (`__write_bytes`, grapheme counting, GC glue), packaged as `libquilon_rt`.
+6. **Runtime intrinsics** — `quilon-rt` (`__write_bytes`, grapheme counting, GC glue), packaged as `libquilon_rt`.
 7. **LLVM** — `quilon build` emits an object in-process and links `libquilon_rt` into a native binary; `quilon run` uses an in-process JIT.
 
 See `CLAUDE.md` for contributor guidance.
