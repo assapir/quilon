@@ -24,10 +24,8 @@
 //! binding's mutability and atomicity is settled.
 
 use super::*;
-use crate::ast::walk::try_for_each_subexpression;
 use crate::ast::{Statement, at_primitive_name};
 use std::collections::{HashMap, HashSet};
-use std::ops::ControlFlow;
 
 /// Every primitive whose LAST argument is a handler run on its own fiber per call — the
 /// bare `@` name paired with how a program spells calling it, for the diagnostic. Adding
@@ -69,14 +67,14 @@ impl TypeChecker {
         for item in &program.items {
             match item {
                 Item::FunctionDeclaration(declaration) => {
-                    self.check_fiber_launches_in(&declaration.body, &defined)?;
+                    self.check_fiber_launches_in(&declaration.body, &declaration.body, &defined)?;
                 }
                 Item::VariableDeclaration(declaration) => {
-                    self.check_fiber_launches_in(&declaration.value, &defined)?;
+                    self.check_fiber_launches_in(&declaration.value, &declaration.value, &defined)?;
                 }
                 Item::TypeDeclaration(declaration) => {
                     for method in declaration.type_definition.methods() {
-                        self.check_fiber_launches_in(&method.body, &defined)?;
+                        self.check_fiber_launches_in(&method.body, &method.body, &defined)?;
                     }
                 }
             }
@@ -84,33 +82,147 @@ impl TypeChecker {
         Ok(())
     }
 
-    /// Find every fiber-launching call inside `body` and check each one. `body` is also
-    /// the scope a captured local is searched in — it is always a whole top-level item's
-    /// own body/value, the "enclosing block" the sharing rule's local case names.
+    /// Find every fiber-launching call inside `expression` and check each one against
+    /// `enclosing_scope` — the "enclosing block" the sharing rule's local case names, and
+    /// where a handler passed by name is searched for. Unlike the generic
+    /// `ast::walk::try_for_each_subexpression`, this walk UPDATES `enclosing_scope` on the
+    /// way down: entering a nested named function's or a lambda's own body makes THAT body
+    /// the enclosing scope for anything inside it, so a call sitting inside a locally
+    /// declared helper resolves a same-named local against that helper's own body, never
+    /// against a same-named local some other, unrelated nested closure happens to declare.
     fn check_fiber_launches_in(
         &self,
-        body: &Expression,
+        expression: &Expression,
+        enclosing_scope: &Expression,
         defined: &HashMap<&str, Vec<&Expression>>,
     ) -> Result<(), TypeError> {
-        let mut result = Ok(());
-        let _: ControlFlow<()> = try_for_each_subexpression(body, &mut |expression| {
-            if let Expression::Call {
+        if let Expression::Call {
+            function,
+            arguments,
+            span,
+            ..
+        } = expression
+            && let Expression::Identifier { name, .. } = function.as_ref()
+            && let Some(primitive) = fiber_handler_primitive(name)
+        {
+            self.check_fiber_launch(primitive, arguments, span, enclosing_scope, defined)?;
+        }
+        match expression {
+            Expression::Number { .. }
+            | Expression::String { .. }
+            | Expression::Bool { .. }
+            | Expression::Unit { .. }
+            | Expression::Identifier { .. } => {}
+            Expression::Interpolation { parts, .. } => {
+                for part in parts {
+                    if let crate::ast::InterpolationPart::Hole(hole) = part {
+                        self.check_fiber_launches_in(hole, enclosing_scope, defined)?;
+                    }
+                }
+            }
+            Expression::Call {
                 function,
                 arguments,
-                span,
                 ..
-            } = expression
-                && let Expression::Identifier { name, .. } = function.as_ref()
-                && let Some(primitive) = fiber_handler_primitive(name)
-                && let Err(error) =
-                    self.check_fiber_launch(primitive, arguments, span, body, defined)
-            {
-                result = Err(error);
-                return ControlFlow::Break(());
+            } => {
+                self.check_fiber_launches_in(function, enclosing_scope, defined)?;
+                for argument in arguments {
+                    self.check_fiber_launches_in(argument, enclosing_scope, defined)?;
+                }
             }
-            ControlFlow::Continue(())
-        });
-        result
+            Expression::BinaryOperator { left, right, .. } => {
+                self.check_fiber_launches_in(left, enclosing_scope, defined)?;
+                self.check_fiber_launches_in(right, enclosing_scope, defined)?;
+            }
+            Expression::UnaryOperator { expression, .. }
+            | Expression::FieldAccess { expression, .. }
+            | Expression::Spread { expression, .. } => {
+                self.check_fiber_launches_in(expression, enclosing_scope, defined)?;
+            }
+            // A lambda's own body is a fresh enclosing scope for anything nested in it.
+            Expression::Lambda { body, .. } => {
+                self.check_fiber_launches_in(body, body, defined)?;
+            }
+            Expression::Range { start, end, .. } => {
+                self.check_fiber_launches_in(start, enclosing_scope, defined)?;
+                self.check_fiber_launches_in(end, enclosing_scope, defined)?;
+            }
+            Expression::FieldAssign { target, value, .. }
+            | Expression::IndexAssign { target, value, .. } => {
+                self.check_fiber_launches_in(target, enclosing_scope, defined)?;
+                self.check_fiber_launches_in(value, enclosing_scope, defined)?;
+            }
+            Expression::Index {
+                expression, index, ..
+            } => {
+                self.check_fiber_launches_in(expression, enclosing_scope, defined)?;
+                self.check_fiber_launches_in(index, enclosing_scope, defined)?;
+            }
+            Expression::If {
+                condition,
+                then,
+                else_,
+                ..
+            } => {
+                self.check_fiber_launches_in(condition, enclosing_scope, defined)?;
+                self.check_fiber_launches_in(then, enclosing_scope, defined)?;
+                self.check_fiber_launches_in(else_, enclosing_scope, defined)?;
+            }
+            Expression::Match {
+                expression, arms, ..
+            } => {
+                self.check_fiber_launches_in(expression, enclosing_scope, defined)?;
+                for arm in arms {
+                    self.check_fiber_launches_in(&arm.body, enclosing_scope, defined)?;
+                }
+            }
+            Expression::Array { elements, .. } | Expression::SetLiteral { elements, .. } => {
+                for element in elements {
+                    self.check_fiber_launches_in(element, enclosing_scope, defined)?;
+                }
+            }
+            Expression::MapLiteral { entries, .. } => {
+                for (key, value) in entries {
+                    self.check_fiber_launches_in(key, enclosing_scope, defined)?;
+                    self.check_fiber_launches_in(value, enclosing_scope, defined)?;
+                }
+            }
+            Expression::Record { fields, .. } | Expression::Constructor { fields, .. } => {
+                for (_, value) in fields {
+                    self.check_fiber_launches_in(value, enclosing_scope, defined)?;
+                }
+            }
+            Expression::Block { statements, .. } => {
+                for statement in statements {
+                    match statement {
+                        Statement::Expression(e) => {
+                            self.check_fiber_launches_in(e, enclosing_scope, defined)?
+                        }
+                        Statement::Item(Item::VariableDeclaration(declaration)) => self
+                            .check_fiber_launches_in(
+                                &declaration.value,
+                                enclosing_scope,
+                                defined,
+                            )?,
+                        // A nested named function's own body is a fresh enclosing scope,
+                        // exactly like a lambda's — a local IT declares is not visible to
+                        // a call that sits outside its body, and vice versa.
+                        Statement::Item(Item::FunctionDeclaration(declaration)) => self
+                            .check_fiber_launches_in(
+                                &declaration.body,
+                                &declaration.body,
+                                defined,
+                            )?,
+                        Statement::Item(Item::TypeDeclaration(declaration)) => {
+                            for method in declaration.type_definition.methods() {
+                                self.check_fiber_launches_in(&method.body, &method.body, defined)?;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Check one `net.@tcpServe(..., handler)` call: `handler`, and everything it calls
@@ -275,46 +387,31 @@ fn index_top_level_functions(program: &Program) -> HashMap<&str, Vec<&Expression
     defined
 }
 
-/// The body of a local (non-top-level) named handler `name` resolves to somewhere in
-/// `scope` — either a nested function declaration (`h = (c :: net.Connection) => < … >`,
-/// which parses as its own `FunctionDeclaration` inside the block, exactly like a
-/// top-level one) or a local variable bound to a lambda VALUE (`h = c => …`, which
-/// parses as a plain binding when the parser sees no reason to treat it as a
-/// declaration). No-hoisting means such a declaration already sits above its use, so
-/// searching the whole enclosing item's body finds it if anything does; over-broad (it
-/// does not stop at the call site, or refuse a same-named declaration inside an
-/// unrelated nested closure) in the same accepted direction as the rest of this module's
-/// coarse matching.
+/// The body of a local (non-top-level) named handler `name` resolves to, declared as a
+/// DIRECT statement of `scope` — the precise lexical scope `check_fiber_launches_in`
+/// tracks down to, so this never has to guess which of several same-named declarations in
+/// unrelated nested closures is the real one. Either a nested function declaration
+/// (`h = (c :: net.Connection) => < … >`, which parses as its own `FunctionDeclaration`
+/// inside the block, exactly like a top-level one) or a local variable bound to a lambda
+/// VALUE (`h = c => …`, which parses as a plain binding when the parser sees no reason to
+/// treat it as a declaration). No-hoisting means such a declaration already sits above its
+/// use, so its own position within `scope`'s statements does not matter here.
 fn find_local_handler_body<'a>(scope: &'a Expression, name: &str) -> Option<&'a Expression> {
-    let mut found = None;
-    let _: ControlFlow<()> = try_for_each_subexpression(scope, &mut |expression| {
-        if let Expression::Block { statements, .. } = expression {
-            for statement in statements {
-                let body = match statement {
-                    Statement::Item(Item::FunctionDeclaration(declaration))
-                        if declaration.name == name =>
-                    {
-                        Some(&declaration.body)
-                    }
-                    Statement::Item(Item::VariableDeclaration(declaration))
-                        if declaration.name == name =>
-                    {
-                        match &declaration.value {
-                            Expression::Lambda { body, .. } => Some(body.as_ref()),
-                            _ => None,
-                        }
-                    }
-                    _ => None,
-                };
-                if let Some(body) = body {
-                    found = Some(body);
-                    return ControlFlow::Break(());
-                }
+    let Expression::Block { statements, .. } = scope else {
+        return None;
+    };
+    statements.iter().find_map(|statement| match statement {
+        Statement::Item(Item::FunctionDeclaration(declaration)) if declaration.name == name => {
+            Some(&declaration.body)
+        }
+        Statement::Item(Item::VariableDeclaration(declaration)) if declaration.name == name => {
+            match &declaration.value {
+                Expression::Lambda { body, .. } => Some(body.as_ref()),
+                _ => None,
             }
         }
-        ControlFlow::Continue(())
-    });
-    found
+        _ => None,
+    })
 }
 
 /// Every name `expression` reads or (re)declares, with where — the shape of

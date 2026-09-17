@@ -1017,6 +1017,31 @@ fn test_fiber_handler_named_by_a_local_variable_is_still_checked() {
 }
 
 #[test]
+fn test_fiber_handler_lookup_ignores_a_same_named_local_in_an_unrelated_closure() {
+    // `setup`'s own `h` sits earlier in `^`'s body than `wrapper`'s, but it is not
+    // `wrapper`'s `h` — the lookup must resolve the name against the call's OWN
+    // enclosing function, `wrapper`, not whichever same-named declaration comes first
+    // in a flat search of `^`'s whole body.
+    let src = "<< core.net\n\
+               count := 0\n\
+               ^ = () -> Num => <\n  \
+                 setup = () -> Bool => <\n    \
+                   h = (c :: net.Connection) => < 0 >\n    \
+                   true\n  \
+                 >\n  \
+                 wrapper = () -> Num => <\n    \
+                   h = (c :: net.Connection) => < count := count + 1 >\n    \
+                   net.@tcpServe(\"127.0.0.1:59411\", h)\n    \
+                   0\n  \
+                 >\n  \
+                 setup()\n  \
+                 wrapper()\n  \
+                 0\n\
+               >";
+    assert_eq!(shared_across_fibers_name(src), "count");
+}
+
+#[test]
 fn test_fiber_handler_capturing_an_atomic_local_of_the_enclosing_block_is_accepted() {
     // The mirror of `test_fiber_handler_reaching_an_atomic_global_is_accepted`, one
     // scope down: a BLOCK-local atomic binding is exactly as safe as a top-level one.
