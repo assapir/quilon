@@ -1,62 +1,35 @@
 //! Deferral analysis — the compiler's view of Quilon's `@` leaf-IO-primitive tier, and the
 //! deferred-value taint that makes force-on-use real.
 //!
-//! The pass produces one thing: the **taint**. That is which expressions may evaluate to a
-//! *deferred* value (a promise, from a value-returning `@` primitive like `@readStdin`), plus
-//! the **force-set** (`force_sites`) — the exact spans where the code generator must force
-//! such a value, because a strict primitive is about to read its bytes or it would escape.
+//! Produces the **taint**: which expressions may evaluate to a *deferred* value (a promise,
+//! from a value-returning `@` primitive like `@readStdin`), plus the **force-set**
+//! (`force_sites`) — the exact spans where the code generator must force one, because a
+//! strict primitive is about to read its bytes or it would escape.
 //!
-//! It reads no types and adds none. So the type checker is untouched, and a deferred `Text`
-//! keeps the ordinary type `Text` — the load-bearing guardrail of the model.
+//! It reads no types and adds none: a deferred `Text` keeps the ordinary type `Text` — the
+//! load-bearing guardrail of the model.
 //!
-//! Taint is a forward dataflow. A value is deferred iff it flows from `@readStdin` through only
-//! *lazy carriers* — a `=` binding, and the arms/result of `?`/ternary/blocks — without
-//! crossing a *strict* slot. At every strict slot (arithmetic/comparison/logical operands,
-//! `?`/ternary/match scrutinee, `print`/`eprint`/`write` and native/`@` args, indexing, field
-//! and array/record construction, interpolation holes, and a function/method/lambda body
-//! result) a deferred child is forced. Forcing at the body result and at call arguments keeps
-//! a promise inside the one function body it was born in (this step launches independent IO
-//! and overlaps it; cross-function promise pipelining — a function *returning* a deferred
-//! value — is a later step). Only tainted spans get forces, so pure code pays nothing.
+//! Taint is a forward dataflow: a value is deferred iff it flows from `@readStdin` through
+//! only *lazy carriers* (a `=` binding, and the arms/result of `?`/ternary/blocks) without
+//! crossing a *strict* slot (arithmetic/comparison/logical operands, a match scrutinee,
+//! `print`/native/`@` args, indexing, field/array/record construction, interpolation holes,
+//! and a function/method/lambda body result). Only tainted spans get forces, so pure code
+//! pays nothing. A promise stays inside the function body it was born in — cross-function
+//! promise pipelining is a later step.
 //!
-//! The one exception to "inside the one function body it was born in" is a top-level `:=`
-//! binding: any function may store a deferred value into it, and any other function may
-//! read it back, so the taint also tracks a program-wide `deferred_globals` set — the
-//! top-level bindings some store has left deferred, whether that store is the declaration's
-//! own initial value or a later reassignment, wherever it sits. A read of a global in that
-//! set is a read of a deferred value like any other, forced at the first strict slot that
-//! needs it; a store into it does not force, so a function may return before its own stored
-//! read completes. A store's deferredness may itself depend on another global already in the
-//! set (`copy := testimony`), so `analyze` runs the walk in rounds, each starting from the
-//! previous round's set and only adding to it, until a round adds nothing — bounded by the
-//! program's number of top-level `:=` bindings, so it always terminates.
+//! A top-level `:=` binding is the one exception: any function may store a deferred value
+//! into it and any other may read it back, so `analyze` also tracks a program-wide
+//! `deferred_globals` set, computed in rounds (bounded by the program's number of
+//! top-level bindings, so it always terminates) since one global's deferredness may depend
+//! on another's already in the set.
 //!
-//! The same walk also enforces one rule about `@name := …` atomic bindings (see
-//! `docs/concurrency/README.md#sharing-state-across-fibers`): a reassignment's right side
-//! may not force a deferred value, because forcing parks the fiber mid-statement, and the
-//! statement resumes holding a value read before the park — stale if another fiber wrote
-//! the binding while this one was parked. The force-set this pass already computes is
-//! exactly the set of force points, so the check is "did evaluating the right side add to
-//! `force_sites`", read off the same walk rather than a second one.
-//!
-//! Telling a reassignment of an atomic binding apart from an ordinary one, though, is NOT
-//! this pass's job: only the type checker resolves a `:=` to the specific binding it
-//! targets (`TypeChecker::check_variable_declaration`'s "reassign if the name is already
-//! bound" branch) — this pass's own `Scope` is a much coarser, per-analysis-call
-//! convenience that starts fresh at every named function's body and knows nothing about
-//! which enclosing name is which binding. So `analyze` takes the checker's own answer
-//! ready-made: the span of every `:=` statement the checker resolved as reassigning an
-//! atomic binding (`TypeChecker::take_atomic_reassignments`). The rule becomes "is this
-//! `VariableDeclaration`'s span in that set, and did evaluating its value add to
-//! `force_sites`" — no name resolution of any kind on this side.
-//!
-//! Telling a reassignment of a TOP-LEVEL binding apart from a fresh local `:=` of the same
-//! name is the identical problem, for the identical reason, so it gets the identical
-//! answer: `analyze` also takes `TypeChecker::take_top_level_reassignments`, the span of
-//! every `:=` statement the checker resolved as reassigning a binding declared at the top
-//! level (atomic or not) — a superset of `atomic_reassignments` where both apply. A
-//! reassignment whose span is in that set feeds `deferred_globals` when its value is
-//! deferred, instead of only the enclosing function's local scope.
+//! The same walk enforces that an `@name := …` atomic-binding reassignment's right side may
+//! not force a deferred value (see
+//! `docs/concurrency/README.md#sharing-state-across-fibers` — forcing parks the fiber
+//! mid-statement, risking a stale read from before the park). Which `:=` spans are atomic
+//! or top-level reassignments is the type checker's answer
+//! (`TypeChecker::take_atomic_reassignments`/`take_top_level_reassignments`), taken
+//! ready-made: this pass's own per-call `Scope` does no name resolution of its own.
 
 use crate::ast::{
     Expression, InterpolationPart, Item, MethodDeclaration, Program, Statement,
@@ -82,13 +55,19 @@ const TCP_REQUEST_ARITY: usize = 2;
 /// `@readStdin`/`@tcpRequest` are.
 const CONNECTION_READ_PRIMITIVE: &str = "read";
 
-/// The bare name of the raw TCP server primitive, reached as `net.@tcpServe(port,
+/// The bare name of the raw TCP server primitive, reached as `net.@tcpServe(address,
 /// handler)`. Its own return value (the `Server` handle) is never deferred, but its accept
 /// loop launches in the background all the same — see [`launches_in_background`].
 const TCP_SERVE_PRIMITIVE: &str = "tcpServe";
 
-/// The argument count `@tcpServe` takes (`port`, `handler`).
-const TCP_SERVE_ARITY: usize = 2;
+/// The bare name of the HTTP server primitive, reached as `http.@serve(address, handler)`.
+/// Its lowering calls the very same runtime entry `@tcpServe` does, so it launches an
+/// accept loop in the background exactly the same way — see [`launches_in_background`].
+const HTTP_SERVE_PRIMITIVE: &str = "serve";
+
+/// The argument count both `@tcpServe` and `@serve` take (`address`, `handler`) —
+/// [`is_serve_call`]'s one arity, shared because the two happen to agree.
+const SERVE_ARITY: usize = 2;
 
 /// What the analysis hands to codegen.
 #[derive(Debug, Default, Clone)]
@@ -547,18 +526,21 @@ fn produces_deferred(function: &Expression, arguments: &[Expression], member_cal
         || is_connection_read_call(function, arguments, member_call)
 }
 
-/// Whether `function`/`arguments` is a call to `net.@tcpServe(port, handler)`.
-fn is_tcp_serve_call(function: &Expression, arguments: &[Expression]) -> bool {
+/// Whether `function`/`arguments` is a call to the named `@`-marked server primitive
+/// (`primitive_name`, one of [`TCP_SERVE_PRIMITIVE`]/[`HTTP_SERVE_PRIMITIVE`]) at its own
+/// [`SERVE_ARITY`] — the one shape both `net.@tcpServe(address, handler)` and
+/// `http.@serve(address, handler)` share, so one function answers for either.
+fn is_serve_call(function: &Expression, arguments: &[Expression], primitive_name: &str) -> bool {
     matches!(function, Expression::Identifier { name, .. }
-        if at_primitive_name(name) == Some(TCP_SERVE_PRIMITIVE))
-        && arguments.len() == TCP_SERVE_ARITY
+        if at_primitive_name(name) == Some(primitive_name))
+        && arguments.len() == SERVE_ARITY
 }
 
 /// Whether `function`/`arguments` launches work that keeps running in the background after
 /// the call itself returns, so the enclosing `< >` block must join it before its own value
-/// flows out — every deferred-producing call (its producer fiber), plus `@tcpServe` (its
-/// accept loop): `@tcpServe`'s own return value, the `Server` handle, is ready at once and
-/// never deferred, but the accept loop it starts keeps running after the call returns, so it
+/// flows out — every deferred-producing call (its producer fiber), plus `@tcpServe`/`@serve`
+/// (their accept loop): neither call's own return value, the `Server` handle, is ever
+/// deferred, but the accept loop each starts keeps running after the call returns, so it
 /// registers with the block's launch scope the same way a value-returning launch's producer
 /// does (`crate::launch_scope::register`, called directly from the runtime intrinsic here
 /// rather than through the deferred-value taint this pass otherwise tracks).
@@ -567,7 +549,9 @@ fn launches_in_background(
     arguments: &[Expression],
     member_call: bool,
 ) -> bool {
-    produces_deferred(function, arguments, member_call) || is_tcp_serve_call(function, arguments)
+    produces_deferred(function, arguments, member_call)
+        || is_serve_call(function, arguments, TCP_SERVE_PRIMITIVE)
+        || is_serve_call(function, arguments, HTTP_SERVE_PRIMITIVE)
 }
 
 #[cfg(test)]
@@ -746,6 +730,18 @@ mod tests {
         // enclosing block still opens and joins a launch scope for it.
         let src =
             "<< core.net\n^ = () -> Num => <\n  server = net.@tcpServe(\"127.0.0.1:0\", h)\n  0\n>";
+        let i = info(src);
+        assert_eq!(i.launch_scopes.len(), 1);
+        assert_eq!(i.force_sites.len(), 0);
+    }
+
+    #[test]
+    fn a_block_that_calls_http_serve_is_a_launch_scope_though_its_return_is_not_deferred() {
+        // `http.@serve` lowers to the same runtime entry `net.@tcpServe` does, so it must be
+        // recognized as a background launch the same way, though nothing here actually
+        // imports `core.http` (this pass reads no types, so the bare primitive name alone
+        // is what it keys on).
+        let src = "^ = () -> Num => <\n  server = @serve(\"127.0.0.1:0\", h)\n  0\n>";
         let i = info(src);
         assert_eq!(i.launch_scopes.len(), 1);
         assert_eq!(i.force_sites.len(), 0);

@@ -141,8 +141,8 @@ fn test_result_with_generic_arguments_is_a_parse_error() {
 #[test]
 fn test_parse_block_level_annotated_binding() {
     // A `name :: Type = expression` binding INSIDE a `< >` block must parse and carry its
-    // annotation, exactly like the top-level `x :: Num = 42` form above. (Regression:
-    // the block parser used to only recognize `=`/`:=` bindings, choking on `::`.)
+    // annotation, exactly like the top-level `x :: Num = 42` form above. (Regression: the
+    // block parser must recognize `::` bindings, not just `=`/`:=`.)
     use crate::ast::{Expression, Statement};
     let tokens = Lexer::tokenize("^ = () -> Num => <\n  n :: Num = 5\n  n\n>").unwrap();
     let program = parse(&tokens).expect("block-level annotated binding should parse");
@@ -486,9 +486,8 @@ fn test_parse_infix_range() {
 
 #[test]
 fn test_for_is_now_a_plain_identifier() {
-    // The `for` loop was removed: `for` is no longer a keyword, so it lexes as
-    // an ordinary identifier and a `for n <- ...` header no longer forms a loop.
-    // Here `for` is just a bound name.
+    // `for` is an ordinary identifier, not a keyword, so it lexes as a plain name and a
+    // `for n <- ...` header does not form a loop. Here `for` is just a bound name.
     let tokens = Lexer::tokenize("for = 42").unwrap();
     let program = parse(&tokens).expect("`for` should parse as a plain binding");
     if let Item::VariableDeclaration(v) = &program.items[0] {
@@ -650,9 +649,9 @@ fn test_parse_type_declaration_method_with_parameters() {
 
 #[test]
 fn test_parse_type_declaration_method_with_parameters_as_first_member() {
-    // The disambiguating lookahead only looked at the FIRST member; a method whose
-    // parameter list is parenthesized (`(p :: Text) -> Text => ...`) put `(` right after
-    // `=`, which used to fall through to the record-literal reading.
+    // The disambiguating lookahead must not stop at the FIRST member; a method whose
+    // parameter list is parenthesized (`(p :: Text) -> Text => ...`) puts `(` right after
+    // `=`, which must not fall through to the record-literal reading.
     let tokens = Lexer::tokenize(
         "Greeter = {
   label = (p :: Text) -> Text => < p >

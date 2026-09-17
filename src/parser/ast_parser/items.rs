@@ -169,7 +169,6 @@ impl<'a> Parser<'a> {
             )));
         }
 
-        // Check for type annotation
         let type_annotation = if self.check(&TokenKind::TypeAnnotation) {
             self.advance();
             Some(self.parse_type()?)
@@ -208,9 +207,8 @@ impl<'a> Parser<'a> {
             }));
         }
 
-        // Check if it's a type declaration (Name = { ... })
-        // Type declarations can't be mutable and don't have type annotations
-        // AND they must have field declarations (name :: Type) or methods (name = => ...)
+        // A type declaration (`Name = { ... }`) can't be mutable and has no type annotation,
+        // and must have field declarations (name :: Type) or methods (name = => ...).
         if type_annotation.is_none() && self.check(&TokenKind::BraceOpen) {
             // What opens the brace says which one this is: named by an ordinary identifier
             // or the render operator `` ` ``, a first member can be a field (`{ name :: Type

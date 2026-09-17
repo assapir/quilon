@@ -266,7 +266,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         &mut self,
         declaration: &VariableDeclaration,
     ) -> Result<(), String> {
-        // Check if this is a record literal to track field names. Prefer the oracle's
+        // For a record literal, track its field names. Prefer the oracle's
         // inferred type (authoritative field names/order, and it expands `<-` spreads);
         // a functional-update whose result is a NAMED type also tracks that name so
         // method calls on the binding resolve. Fall back to the literal's own field names
@@ -579,7 +579,6 @@ impl<'ctx> CodeGenerator<'ctx> {
             self.boundary_type(&inferred)?
         };
 
-        // Create function type - use a helper to convert BasicTypeEnum to BasicMetadataTypeEnum
         let fn_type = return_type.fn_type(
             &parameter_types
                 .iter()
@@ -629,11 +628,9 @@ impl<'ctx> CodeGenerator<'ctx> {
         self.current_function = Some(function);
         let saved_scope = self.begin_di_function(function, &declaration.name, &declaration.span);
 
-        // Create entry block
         let entry = self.context.append_basic_block(function, "entry");
         self.builder.position_at_end(entry);
 
-        // Store parameters in variables map
         self.take_frame(); // fresh frame: the previously emitted function's entries are dead
         // Which `:=` locals must be heap-boxed because a nested closure captures them.
         self.boxed_vars = self.compute_boxed_vars(&declaration.body);

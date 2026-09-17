@@ -618,7 +618,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             }
         }
 
-        // Pre-pass: an operator overload now lives inside a type (as a member). Register
+        // Pre-pass: an operator overload lives inside a type (as a member). Register
         // each type's operator members as members of the operator's overload set, with the
         // receiver `it` as the left operand — so `a <op> b` mangles to and dispatches
         // through the same per-signature symbol the member is emitted under.
@@ -778,8 +778,8 @@ impl<'ctx> CodeGenerator<'ctx> {
              disagree on what is emitted"
         );
 
-        // Check if entry point function (^) exists and generate C main wrapper.
-        // Pass `^`'s DECLARED Quilon parameter types so the wrapper can dispatch on the
+        // When an entry point function (^) exists, generate its C main wrapper, passing
+        // `^`'s DECLARED Quilon parameter types so the wrapper can dispatch on the
         // real types (`[]Text` / `[|Text => Text|]`) — the lowered LLVM types are
         // ambiguous (`Text`, records, sum types, and arrays all become `{ ptr, i64 }`
         // structs), so dispatching on the LLVM shape would mis-route them.
@@ -823,7 +823,6 @@ impl<'ctx> CodeGenerator<'ctx> {
             return Err(format!("Module verification failed: {}", e));
         }
 
-        // Return the LLVM IR as a string
         Ok(self.module.print_to_string().to_string())
     }
 
@@ -941,7 +940,6 @@ impl<'ctx> CodeGenerator<'ctx> {
             .build_call(init_function, &[], "")
             .map_err(ctx("Failed to call __ql_init"))?;
 
-        // Get the ^ (entry point) function
         let user_entry = self
             .module
             .get_function("^")

@@ -741,6 +741,49 @@ impl<'ctx> CodeGenerator<'ctx> {
                 let handle = Self::call_result_to_basic(call)?;
                 self.build_handle_record(handle)
             }
+            // `http.@serve(address, handler)`: the HTTP server layer. Lowers to the exact
+            // same runtime entry `tcpServe` does, with `core.http.serveConnection` (ordinary
+            // Quilon, over `handler`) as the connection handler instead of `handler` itself —
+            // see `emit_http_serve_handler_thunk`.
+            "serve" => {
+                const NAME: &str = "core.http.@serve";
+                const CALL_FAILED: &str = "Failed to call core.http.@serve";
+                Self::expect_arity(NAME, arguments, false, 2)?;
+                let address_value = self.generate_expression(&arguments[0])?;
+                let BasicValueEnum::StructValue(_) = address_value else {
+                    return Err(format!("{NAME} expects a Text address"));
+                };
+                let (address_ptr, address_len) = self.text_fields(address_value)?;
+                let BasicValueEnum::StructValue(closure) =
+                    self.generate_expression(&arguments[1])?
+                else {
+                    return Err(format!("{NAME} expects a closure handler"));
+                };
+
+                let bundle = self.bundle_closure(closure, "http_serve_bundle")?;
+
+                let thunk = self.emit_http_serve_handler_thunk()?;
+                let thunk_ptr = thunk.as_global_value().as_pointer_value();
+                let launch_site = self.site_value(site)?;
+
+                let serve = self.get_intrinsic("__tcp_serve_launch")?;
+                let call = self
+                    .builder
+                    .build_call(
+                        serve,
+                        &[
+                            address_ptr.into(),
+                            address_len.into(),
+                            thunk_ptr.into(),
+                            bundle.into(),
+                            launch_site.into(),
+                        ],
+                        "http_serve",
+                    )
+                    .map_err(ctx(CALL_FAILED))?;
+                let handle = Self::call_result_to_basic(call)?;
+                self.build_handle_record(handle)
+            }
             // `Connection.@read()`: the receiver (`arguments[0]`) is a `Connection` value;
             // its `handle` field is the id the runtime table keys the connection by.
             "read" => {
@@ -988,6 +1031,66 @@ impl<'ctx> CodeGenerator<'ctx> {
         self.builder
             .build_return(Some(&result))
             .map_err(ctx("Failed to return from the handler thunk"))?;
+
+        self.resume_enclosing_function(suspended);
+        Ok(function)
+    }
+
+    /// A top-level trampoline `i8 (double connectionId, ptr bundle) -> i8`, the `http.@serve`
+    /// counterpart of [`Self::emit_tcp_serve_handler_thunk`]: it builds the `Connection` the
+    /// same way, but instead of calling the bundle's own function pointer directly, it
+    /// reconstructs the bundled `(Request) -> Response` closure and hands it to
+    /// `core.http.serveConnection` — the "connection handler filled in" the `@serve`
+    /// lowering gives `net.@tcpServe`'s own runtime entry point. `serveConnection` is
+    /// ordinary Quilon (parses the request, calls `handler`, writes the reply), so nothing
+    /// about the HTTP protocol lives in codegen.
+    fn emit_http_serve_handler_thunk(&mut self) -> Result<FunctionValue<'ctx>, String> {
+        const NAME: &str = "__http_serve_handler_thunk";
+        if let Some(existing) = self.module.get_function(NAME) {
+            return Ok(existing);
+        }
+
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let f64_ty = self.context.f64_type();
+        let i8_ty = self.context.i8_type();
+
+        let fn_type = i8_ty.fn_type(&[f64_ty.into(), ptr_ty.into()], false);
+        let function = self.module.add_function(NAME, fn_type, None);
+        function.set_linkage(inkwell::module::Linkage::Internal);
+
+        let suspended = self.suspend_enclosing_function();
+        self.current_function = Some(function);
+        let entry = self.context.append_basic_block(function, "entry");
+        self.builder.position_at_end(entry);
+
+        let connection_id = function.get_nth_param(0).unwrap().into_float_value();
+        let bundle = function.get_nth_param(1).unwrap().into_pointer_value();
+
+        let connection = self.build_handle_record(connection_id.into())?;
+        let (real_fn, real_env) = self.unpack_closure_bundle(bundle, "http_serve_bundle")?;
+
+        let closure_ty = self.closure_struct_type();
+        let handler_closure = self
+            .builder
+            .build_insert_value(closure_ty.get_undef(), real_fn, 0, "handler_fn")
+            .map_err(ctx("Failed to build the handler closure"))?;
+        let handler_closure = self
+            .builder
+            .build_insert_value(handler_closure, real_env, 1, "handler_env")
+            .map_err(ctx("Failed to build the handler closure"))?
+            .into_struct_value();
+
+        let serve_connection = self
+            .module
+            .get_function("core.http.serveConnection")
+            .ok_or_else(|| "core.http.serveConnection not found".to_string())?;
+        let result = self.emit_call(serve_connection, &[connection, handler_closure.into()])?;
+        let BasicValueEnum::IntValue(result) = result else {
+            return Err("core.http.serveConnection must return $".to_string());
+        };
+        self.builder
+            .build_return(Some(&result))
+            .map_err(ctx("Failed to return from the http serve handler thunk"))?;
 
         self.resume_enclosing_function(suspended);
         Ok(function)

@@ -260,10 +260,7 @@ fn test_constructor_arity() {
 
 #[test]
 fn test_builtin_sum_types() {
-    // Verify Result type is available
     let checker = TypeChecker::new();
-
-    // Check Result is defined
     assert!(checker.env.get_type("Result").is_some());
 }
 
@@ -575,10 +572,9 @@ fn test_ok_dispatch_over_builtin_payloads() {
 
 #[test]
 fn test_for_loop_removed_is_rejected() {
-    // The `for` loop was retired: iteration is via array methods / recursion.
-    // A program using the old `for n <- collection => body` surface no longer
-    // forms a loop — `for` is now an ordinary identifier — so it must fail to
-    // compile (a parse or type error), never silently accept as before.
+    // Iteration is via array methods / recursion; `for` is an ordinary identifier, not a
+    // keyword, so a `for n <- collection => body` surface does not form a loop and must
+    // fail to compile (a parse or type error), never silently accept.
     let tokens = Lexer::tokenize("test = => < for n <- [1, 2, 3] => n >").unwrap();
     let compiles = match parse(&tokens) {
         Ok(program) => TypeChecker::new().check_program(&program).is_ok(),
@@ -737,8 +733,6 @@ fn test_overload_member_recursion_needs_the_annotation_then_works() {
 #[test]
 fn test_call_to_an_overload_member_defined_below_is_rejected() {
     // Members join their set where they are written, so this call sees no `g` at all.
-    // It used to resolve against the pre-registered signature and then fail in
-    // codegen with no matching symbol.
     let err = check_ok(
         "h = () -> Text => < g(1) >\ng = (n :: Num) -> Text => < \"a\" >\ng = (t :: Text) -> Text => < \"b\" >\n^ = () -> Num => < 0 >",
     )

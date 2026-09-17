@@ -1,16 +1,17 @@
 ---
-title: "core.http — HTTP client"
+title: "core.http — HTTP client and server"
 sidebar:
   label: "core.http"
   order: 6
 ---
-# `core.http` — HTTP client
+# `core.http` — HTTP client and server
 
 Import with `<< core.http`. See the [corelib index](README.md).
 
-An HTTP client written in Quilon over [`core.net`](net.md)'s `net.@tcpRequest`. The scheme is
-**plain HTTP** — URLs are `http://host[:port]/path` (scheme optional, default port 80). Each
-request opens one connection and sends `Connection: close`, over HTTP/1.1.
+An HTTP client and server written in Quilon over [`core.net`](net.md)'s `net.@tcpRequest`
+and `net.@tcpServe`. The scheme is **plain HTTP** — URLs are `http://host[:port]/path`
+(scheme optional, default port 80). Each request opens one connection and sends
+`Connection: close`, over HTTP/1.1, on both sides.
 
 ```quilon
 << core.http
@@ -19,13 +20,13 @@ request opens one connection and sends `Connection: close`, over HTTP/1.1.
   page = http.Request.get("http://example.com/").send() ?
     | Ok(response) => response
     | NotOk(_)     => http.Response { raw = "" }
-  assert(page.status(), equals(200))
+  assert(page.status().code(), equals(200))
   assert(page.body(), contains("Example Domain"))
   assert(page.headers().get("Content-Type"), isOk())
 >
 ```
 
-The module exports **seven type names**: `Body`, `Method`, `Headers`, `Params`,
+The module exports **eight type names**: `Body`, `Method`, `Status`, `Headers`, `Params`,
 `RequestOptions`, `Request`, `Response`. A request is built through `Request`'s static
 constructors and sent, a reply read through `Response`.
 
@@ -39,6 +40,7 @@ asks for it.
 |------|-------|
 | `Body` | `{ content :: Text, contentType :: Text }` — the text to send and the media type to advertise. |
 | `Method` | `Get / Post(Body) / Put(Body) / Query(Body) / Delete / Head / Options / Patch(Body)` — the body-bearing methods carry a `Body`. `Query` is RFC 10008's safe, idempotent method with a body; `Patch` carries a body the same way `Post` and `Put` do. |
+| `Status` | One variant per standard HTTP status code, plus `Other(Num)` — see [`Status`](#status) below. |
 | `Headers` | A multi-value, case-insensitive name/value store, one name added through `add`, read through `get`/`all`/`has`/`names`. |
 | `Params` | A multi-value, case-sensitive name/value store, the same surface as `Headers` without the case-folding. |
 | `RequestOptions` | `{ headers :: Headers }` — settings a request carries beyond its method and URL. |
@@ -52,6 +54,22 @@ asks for it.
 | `token() -> Text` | The token this method writes in a request line: `GET`, `POST`, `PUT`, `QUERY`, `DELETE`, `HEAD`, `OPTIONS`, `PATCH`. |
 | `payload() -> Body` | The `Body` a body-bearing method carries; an empty one for the rest. |
 | `carriesBody() -> Bool` | Whether this method defines a meaning for an enclosed body — true for `Post` / `Put` / `Query` / `Patch`. |
+
+## `Status`
+
+One variant per code the IANA HTTP status code registry lists as standard (every 1xx–5xx
+code the registry assigns), named from its reason phrase in CamelCase — `NotFound` for
+`404`, `MethodNotAllowed` for `405` — except the 200 variant, spelled `OK` exactly so it
+never reads like `Result`'s `Ok`. `Other(Num)` carries any code outside that table.
+
+| Method | Result |
+|--------|--------|
+| `code() -> Num` | The numeral this status carries on the wire: `OK` → `200`, `Other(n)` → `n`. |
+| `text() -> Text` | Its reason phrase on the wire: `OK` → `"OK"`, `NotFound` → `"Not Found"`, `Other(_)` → `"Unknown"`. |
+| `Status.parse(code :: Num) -> Status` | The variant a numeric code names — `404` → `NotFound` — or `Other(code)` for a code the table does not carry. Never fails: every `Num` names some `Status`. |
+
+`code()` and `text()` are each their own match over `it`, the same shape `Method.token()`
+uses; `Status.parse(200).code()` and `OK.code()` agree, and so do `.text()`.
 
 ## `Headers` and `Params`
 
@@ -140,7 +158,7 @@ Wrapped and checked in one step: `http.Response { raw = text }.validate()`.
 | Method | Result |
 |--------|--------|
 | `validate() -> Result` | `Ok(Response)` when `raw` opens with `HTTP` followed by a terminated first line, `NotOk(Text)` otherwise. |
-| `status() -> Num` | The status code (`HTTP/1.0 200 OK` → `200`); `0` when the status line's code is anything other than digits throughout. |
+| `status() -> Status` | The reply's status, parsed off the status line through `Status.parse`; `Other(0)` when the status line's code is anything other than digits throughout. |
 | `statusLine() -> Text` | The reply's first line, trimmed. |
 | `headers() -> Headers` | The reply's headers, parsed from the lines between the status line and the blank line. |
 | `body() -> Text` | The reply's body, framed per its headers (below); `""` when the reply has no blank line, carries no body by its status, or its framing is malformed. |
@@ -179,3 +197,68 @@ is the file being tested:
 ```bash
 quilon test corelib/http.qn
 ```
+
+## The HTTP server
+
+`http.@serve(address :: Text, handler :: (Request) -> Response) -> net.Server` is a
+compiler-lowered primitive, like `net.@tcpServe`: its lowering calls that very same runtime
+entry, with `core.http`'s own connection handler filled in. Each accepted connection reads
+its request head, calls `handler` once, writes the reply carrying `connection: close`, and
+is closed — one response per connection. A handler fault (a failing `assert`, an invalid
+index, …) is fatal, exactly as everywhere else in the language, and takes the server with
+it. `kill` is `net.Server`'s own method (see
+[`core.net`'s server layer](net.md#the-raw-tcp-server-layer)): `server.kill(seconds)` or
+`server.kill()` for its 5-second default.
+
+```quilon
+<< core.http
+
+hummus = (request :: http.Request) -> http.Response => <
+  request.method ?
+    | http.Get        => http.Response.reply(http.OK, "chickpeas: plenty")
+    | http.Post(body) => http.Response.reply(http.Created, "stocked " + body.content)
+    | _               => http.Response.reply(http.MethodNotAllowed)
+>
+
+^ = () -> Num => <
+  shop = http.@serve("127.0.0.1:8080", request => hummus(request))
+  ~ …
+  shop.kill(5)
+  0
+>
+```
+
+`Request` gains the server side of `wire()`:
+
+| Method | Result |
+|--------|--------|
+| `Request.parse(head :: Text) -> Result` | Parse a raw request head — everything up to, but not including, the blank line — into `Ok(Request)`: the request line's token to `Method` (a body-bearing method's `Body` is always `{ content = "", contentType = "" }`), its target to `url`, and the remaining lines through `Headers.parse`. `NotOk(reason)` when the request line carries fewer than two space-separated fields or names a method this module does not recognize — `serveConnection`'s own signal to answer 400 and close. |
+
+`Request.path()` and `Request.params()` read a bare target the same way they read a full URL:
+a target with no scheme or host (`/pantry?x=1`) has an authority of zero length, so the path
+starts at its very first character.
+
+`Response` gains one constructor, `reply`, over six overloads, plus `wire()`:
+
+| Method | Result |
+|--------|--------|
+| `Response.reply(status :: Status) -> Response` | An empty-body reply carrying `status`. |
+| `Response.reply(status :: Status, body :: Text) -> Response` | A reply carrying `status` and `body`. |
+| `Response.reply(status :: Status, body :: Text, headers :: Headers) -> Response` | A reply carrying `status` and `body`, sending exactly `headers` alongside the generated ones. |
+| `Response.reply(code :: Num) -> Response` | `reply(Status.parse(code))`. |
+| `Response.reply(code :: Num, body :: Text) -> Response` | `reply(Status.parse(code), body)`. |
+| `Response.reply(code :: Num, body :: Text, headers :: Headers) -> Response` | `reply(Status.parse(code), body, headers)`. |
+| `wire() -> Text` | The reply's raw text (`it.raw`) — what `serveConnection` writes to the connection. |
+
+Every constructor above sends **only** the headers it was given, plus two generated ones:
+`content-length`, counted in bytes (`Text.size`), and `connection: close`. A `content-type`
+comes from the three-argument overload — a program sets its own, the way it sets any other
+header. `Response.reply(OK, "x")` sends exactly
+`HTTP/1.1 200 OK\r\ncontent-length: 1\r\nconnection: close\r\n\r\nx`.
+
+A program wanting a record literal built entirely by hand writes `http.Response { raw =
+"..." }` directly, the same escape hatch the client side already offers.
+
+Reading a request head off the wire is ordinary Quilon: locating the blank line is the same
+grapheme-based search `Response.blankLine()` runs (all four spellings are ASCII), shared by
+both as `blankLineIndex`. See `examples/http_server.qn` for a runnable stand.

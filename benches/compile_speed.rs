@@ -334,10 +334,11 @@ fn corelib_program() -> String {
 /// Assertions far down a long file: every one is a call whose trailing `Site` the compiler
 /// fills in, which means resolving a byte offset to a line, column, and source line.
 ///
-/// The padding above them is the point. Resolving a position used to walk the file from
-/// offset 0, so the cost grew with each call's DISTANCE into the file — the same 2000
-/// assertions placed after a long prologue cost an order of magnitude more than at the top.
-/// A corpus that put its calls near line 1 would have measured almost none of it.
+/// The padding above them is the point: it makes each call's cost depend on its DISTANCE
+/// into the file, so the same 2000 assertions placed after a long prologue would cost an
+/// order of magnitude more than at the top if position resolution ever regressed to a
+/// linear walk from offset 0. A corpus that put its calls near line 1 would measure almost
+/// none of that.
 fn call_site_program(count: usize) -> String {
     let mut out = String::from("<< core.test\n\n");
     for line in 0..count {

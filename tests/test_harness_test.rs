@@ -565,23 +565,35 @@ fn importing_core_http_contributes_exactly_this_surface() {
         "core.net.Server",
         "core.http.Body",
         "core.http.Method",
+        "core.http.Status",
         "core.http.Response",
         "core.http.Request",
         "core.http.Headers",
         "core.http.Params",
         "core.http.RequestOptions",
+        "core.http.@serve",
         // The private base record `Headers`/`Params` compose over: carried with the
         // module, exported to no importer.
         "core.http.Values",
         // The native body-framing primitive: carried with the module (an exported item
         // calls it), exported to no importer.
         "core.http.frameBody",
+        // The server layer's own private helpers: carried with the module, exported to no
+        // importer, reached only through `@serve` (and, for `blankLineIndex`, `Response`'s
+        // own `blankLine` too).
+        "core.http.blankLineIndex",
+        "core.http.foundOrEnd",
+        "core.http.linesAfterFirst",
+        "core.http.statusReply",
+        "core.http.receiveHead",
+        "core.http.serveConnection",
         // The client's own PRIVATE test fixtures: carried with the module (an exported
         // item may lean on them), exported to no importer.
         "core.http.crlfReply",
         "core.http.lineFeedReply",
         "core.http.headerOr",
         "core.http.parsed",
+        "core.http.parsedRequest",
         // core.text, merged implicitly because the client calls composable Text methods
         // (`.trim`/`.contains`) — the implementations those calls lower to, qualified so
         // they claim no name an importer could write. (`repeat` is pulled in transitively
@@ -1519,6 +1531,9 @@ fn the_corelib_http_suite_passes_when_the_module_is_the_file_named() {
         "reading a URL apart",
         "serialising a request",
         "a round trip",
+        "Status",
+        "Response's server-side constructors",
+        "Request.parse",
     ] {
         assert!(
             out.stdout.contains(group),
@@ -1527,7 +1542,7 @@ fn the_corelib_http_suite_passes_when_the_module_is_the_file_named() {
         );
     }
     assert!(
-        out.stdout.contains("105 passed, 0 failed"),
+        out.stdout.contains("128 passed, 0 failed"),
         "unexpected summary:\n{}",
         out.stdout
     );
