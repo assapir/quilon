@@ -12,7 +12,7 @@ impl<'ctx> CodeGenerator<'ctx> {
     /// module, so each gets a `DIFile` + line table and a span maps to whichever file it
     /// belongs to — an imported/corelib function's debug info points at that module's source.
     /// Only the native `--debug` build path calls this; without it the generator emits no
-    /// debug info at all. Must be called before [`generate`].
+    /// debug info at all. Must be called before [`Self::generate`].
     pub fn enable_debug(
         &mut self,
         file_path: &std::path::Path,

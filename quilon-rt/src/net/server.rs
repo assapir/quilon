@@ -13,7 +13,7 @@
 //! pointer — is kept on `ServerState` rather than exposed to Quilon, since `@tcpServe`'s
 //! OWN return value, the `Server` handle, is a ready `Num` built by codegen, never
 //! deferred). `Server.kill` settles that same cell before returning, so the enclosing
-//! block's own join finds it already done. Built on [`super::TcpListener`] and
+//! block's own join finds it already done. Built on `super::TcpListener` and
 //! [`super::TcpStream`], the plumbing shared with [`super::client`].
 
 use super::{TcpListener, TcpStream, bytes_to_string, copy_bytes, resolve};
@@ -77,14 +77,14 @@ fn next_handle() -> u64 {
     })
 }
 
-/// `net.@tcpServe(address, handler)`: resolve `address` exactly as [`resolve`] resolves
+/// `net.@tcpServe(address, handler)`: resolve `address` exactly as `resolve` resolves
 /// `@tcpRequest`'s own (a numeric IPv4/IPv6 address, an IPv6 literal in brackets, or a
 /// hostname resolved on the runtime's blocking-call pool — parking the calling fiber, not
 /// the accept loop, until it answers), bind and listen on it, and return the `Server`
 /// handle's id at once — codegen builds the `Server { handle = … }` record around it, the
 /// same way it builds the `Connection` handed to `handler`. The accept loop launches on a
 /// background fiber, registered with whatever `< >` block's launch scope is open right now
-/// (through [`launch`], exactly as a value-returning primitive's producer registers) so
+/// (through `launch`, exactly as a value-returning primitive's producer registers) so
 /// that block's own join keeps it alive without ever forcing a value from this call — this
 /// call's own return is already ready. A bind failure — `address` does not parse or
 /// resolve, the port is missing or out of range, the port is already in use, or

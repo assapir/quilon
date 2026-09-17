@@ -9,7 +9,7 @@
 //! `NotOk(errorMessage)` on any network failure. No failure terminates the process; the
 //! outcome flows back to `.qn` code to match on. It is internal — the HTTP client sits
 //! on it; users do not import raw sockets. Built on [`super::TcpStream`] and
-//! [`super::resolve`], the plumbing shared with [`super::server`].
+//! `super::resolve`, the plumbing shared with [`super::server`].
 
 use super::{TcpStream, bytes_to_string, copy_bytes, resolve};
 use crate::deferred::{QlResult, launch_deferred_result};
@@ -34,7 +34,7 @@ const MAX_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
 /// spawned, so the producer fiber owns its inputs and never reads a `Text` that a later
 /// collection might reclaim. The deferred `Result` is written into `out` rather than returned:
 /// a `Result` is 24 bytes, which the C ABI returns via a hidden pointer, so an out-pointer keeps
-/// the FFI boundary free of an aggregate return (see [`__force_result`]).
+/// the FFI boundary free of an aggregate return (see [`crate::deferred::__force_result`]).
 ///
 /// # Safety contract (upheld by the compiler)
 /// `out` points to writable storage for one [`QlResult`]; `address_data`/`request_data` are null,

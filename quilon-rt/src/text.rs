@@ -362,7 +362,7 @@ fn replace_text(hay: &str, from: &str, to: &str, count: f64) -> Result<String, (
 }
 
 /// Backs `Text.replace(from, to, count)`, matched on raw bytes for the same reason
-/// [`__text_replace_all`] is. A literal violation of [`replace_text`]'s contract is
+/// [`__text_replace_all`] is. A literal violation of `replace_text`'s contract is
 /// instead a compile-time error (`check_replace_literals`), so only a COMPUTED one
 /// reaches this check.
 ///

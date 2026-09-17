@@ -166,7 +166,7 @@ impl SourceMap {
 /// One document's byte-offset ⇄ protocol-position translation: zero-based lines and
 /// **UTF-16 code unit** columns, which is what the Language Server Protocol requires of a
 /// position. Distinct from [`Location`], whose one-based, character-counted columns are for
-/// humans. Built once per document (it reuses the [`LineIndex`] machinery), and placed here
+/// humans. Built once per document (it reuses the `LineIndex` machinery), and placed here
 /// so span-to-position consumers — the language server today, debug tooling tomorrow —
 /// share one translation.
 pub struct DocumentPositions<'a> {

@@ -39,6 +39,9 @@ jobs:
       - name: Clippy
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
+      - name: Docs (rustdoc)
+        run: cargo doc --workspace --no-deps
+
       - name: Install Vale
         run: |
           set -euxo pipefail

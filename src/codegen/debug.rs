@@ -283,7 +283,7 @@ impl<'ctx> DebugInfo<'ctx> {
         self.type_cache.borrow().get(key).copied()
     }
 
-    /// Record `ty` under `key` for later reuse by [`cached_type`].
+    /// Record `ty` under `key` for later reuse by [`Self::cached_type`].
     pub fn cache_type(&self, key: &str, ty: DIType<'ctx>) {
         self.type_cache.borrow_mut().insert(key.to_string(), ty);
     }
@@ -334,12 +334,12 @@ impl<'ctx> DebugInfo<'ctx> {
     /// the formatter side, so it must be exactly what a debugger reads back as the value's
     /// type name.
     ///
-    /// A zero-member NAMED struct, exactly [`record_type`]'s own shape with no fields —
-    /// deliberately NOT a named [`basic_type`]: lldb's DWARF importer canonicalizes a base
+    /// A zero-member NAMED struct, exactly [`Self::record_type`]'s own shape with no fields —
+    /// deliberately NOT a named `basic_type`: lldb's DWARF importer canonicalizes a base
     /// type's displayed name from its `(encoding, size)` pair (confirmed against a real lldb
     /// session — an 8-bit `DW_ATE_unsigned` placeholder there showed as `"unsigned char"`
     /// regardless of the `DW_AT_name` given it), while it shows a `DW_TAG_structure_type`'s
-    /// own name faithfully — the same reason [`record_type`] names the struct a record
+    /// own name faithfully — the same reason [`Self::record_type`] names the struct a record
     /// pointer points to rather than the pointer wrapper itself.
     pub fn collection_type(&self, name: &str) -> DIType<'ctx> {
         self.record_type(name, &[])
