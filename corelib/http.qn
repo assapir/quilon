@@ -204,6 +204,15 @@ blankLineIndex = (raw :: Text) -> Num => <
   pureConvention < mixedConvention ? pureConvention : mixedConvention
 >
 
+~ Everything in `text` after its first line, or `""` when `text` carries no second line at
+~ all. Shared by `Response.headers()` and `Request.parse` — a status line and a request
+~ line are both followed by header lines split the same way.
+linesAfterFirst = (text :: Text) -> Text => <
+  text.indexOf("\n") ?
+    | Ok(mark) => text.slice(mark + 1, text.length)
+    | NotOk(_) => ""
+>
+
 ~ Standard reason phrase for the status codes a server writes most; `"Unknown"` for any
 ~ other code — `Response.status(code)` never guesses one.
 reasonPhrase = (code :: Num) -> Text => <
@@ -265,11 +274,7 @@ statusReply = (code :: Num, body :: Text, headers :: Headers) -> Text => <
   ~ line carrying no colon is not a header and is left out, so a garbled reply yields the
   ~ headers it does have.
   headers = () -> Headers => <
-    section = it.head()
-    afterStatusLine = section.indexOf("\n") ?
-      | Ok(mark) => section.slice(mark + 1, section.length)
-      | NotOk(_) => ""
-    lines = afterStatusLine.split("\n").map(line => line.trim()).filter(line => line.contains(":"))
+    lines = linesAfterFirst(it.head()).split("\n").map(line => line.trim()).filter(line => line.contains(":"))
     Headers.parse(lines)
   >
 
@@ -367,16 +372,13 @@ methodFromToken = (token :: Text) -> Result => <
   parse = (head :: Text) -> Result => <
     normalized = head.replaceAll("\r\n", "\n")
     fields = normalized.split("\n")[0].split(" ")
-    afterRequestLine = normalized.indexOf("\n") ?
-      | Ok(mark) => normalized.slice(mark + 1, normalized.length)
-      | NotOk(_) => ""
     fields.size < 2
       ? NotOk("malformed request line")
       : (methodFromToken(fields[0]) ?
           | Ok(method) => Ok(Request {
               method = method,
               url = fields[1],
-              options = RequestOptions { headers = Headers.parse(afterRequestLine.split("\n")) }
+              options = RequestOptions { headers = Headers.parse(linesAfterFirst(normalized).split("\n")) }
             })
           | NotOk(reason) => NotOk(reason))
   >,
@@ -494,30 +496,39 @@ methodFromToken = (token :: Text) -> Result => <
 }
 
 ~ Read from `connection` until a request head has fully arrived (the earliest blank line —
-~ `blankLineIndex`) and return it, everything up to but not including that blank line.
-~ Recursion stands in for the loop this language has none of: `soFar` accumulates every
-~ read. A peer that closes before completing its head (`connection.@read()` answering `""`
-~ while `soFar` still carries no blank line) hands back whatever fragment did arrive —
-~ `""` when nothing arrived at all — and `serveConnection`, never this function, decides
-~ whether that is enough of a request to answer.
-receiveHead = (connection :: net.Connection, soFar :: Text) -> Text => <
+~ `blankLineIndex`): `Ok(head)`, everything up to but not including that blank line — a
+~ head of zero length included, when the blank line is the very first thing the peer sends,
+~ still a request for `serveConnection` to answer (with a 400, since `Request.parse("")` is
+~ malformed) rather than silence. `NotOk(fragment)` when the peer closes first
+~ (`connection.@read()` answering `""` while no blank line has arrived yet), carrying
+~ whatever bytes did arrive — `serveConnection` answers nothing in that case, there being no
+~ complete request to answer. Recursion stands in for the loop this language has none of:
+~ `soFar` accumulates every read.
+~
+~ ponytail: `blankLineIndex` rescans the whole of `soFar` on every recursion, so an
+~ adversarial peer trickling a head in over many small reads costs this function quadratic
+~ time in the head's size. A real HTTP head is a few hundred bytes at most, so this is not
+~ worth an incremental scan (searching only the new suffix, carrying over enough of the old
+~ tail to catch a separator split across the boundary) until a header-flooding client shows
+~ up as a real cost.
+receiveHead = (connection :: net.Connection, soFar :: Text) -> Result => <
   splitAt = blankLineIndex(soFar)
   splitAt < soFar.length
-    ? soFar.slice(0, splitAt)
+    ? Ok(soFar.slice(0, splitAt))
     : (connection.@read() ?
-        | chunk => chunk == "" ? soFar : receiveHead(connection, soFar + chunk))
+        | chunk => chunk == "" ? NotOk(soFar) : receiveHead(connection, soFar + chunk))
 >
 
 ~ `core.http`'s connection handler: the Quilon half of the `http.@serve` lowering, called
 ~ once per accepted connection by the fixed-shape thunk codegen builds over `handler`. Reads
 ~ the request head, parses it, calls `handler`, and writes the reply — a malformed request
-~ line answers 400 instead. Nothing here closes the connection: the runtime does that once
-~ this function returns, the same as any other `net.@tcpServe` handler.
+~ line answers 400 instead. A peer that closes before a head ever completes gets no reply,
+~ there being no request to answer. Nothing here closes the connection: the runtime does
+~ that once this function returns, the same as any other `net.@tcpServe` handler.
 serveConnection = (connection :: net.Connection, handler :: (Request) -> Response) -> $ => <
-  head = receiveHead(connection, "")
-  head == ""
-    ? $
-    : (Request.parse(head) ?
+  receiveHead(connection, "") ?
+    | NotOk(_)    => $
+    | Ok(head)    => (Request.parse(head) ?
         | Ok(request) => connection.@write(handler(request).wire())
         | NotOk(_)    => connection.@write(Response.status(400).wire()))
 >

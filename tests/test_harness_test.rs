@@ -581,6 +581,7 @@ fn importing_core_http_contributes_exactly_this_surface() {
         // importer, reached only through `@serve` (and, for `blankLineIndex`, `Response`'s
         // own `blankLine` too).
         "core.http.blankLineIndex",
+        "core.http.linesAfterFirst",
         "core.http.reasonPhrase",
         "core.http.statusReply",
         "core.http.methodFromToken",

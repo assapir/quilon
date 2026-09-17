@@ -86,10 +86,15 @@ fn connect_once_listening(host: &str, port: u16) -> TcpStream {
 
 /// Send `request` over a fresh connection and read the reply to EOF — valid because the
 /// server always answers with `connection: close` and closes right after, one response per
-/// connection (this version's own rule). Retries the connect (bounded), which only ever
-/// takes more than one attempt for the first call, before the server has finished starting.
-fn send_raw(host: &str, port: u16, request: &[u8]) -> String {
-    let mut stream = connect_once_listening(host, port);
+/// connection (this version's own rule). `first` waits out the server's own startup;
+/// every later call connects once and fails fast if the server is gone, rather than
+/// burning the same retry budget on a genuine crash between requests.
+fn send_raw(host: &str, port: u16, request: &[u8], first: bool) -> String {
+    let mut stream = if first {
+        connect_once_listening(host, port)
+    } else {
+        connect_with_timeout(host, port).expect("connect to the running server")
+    };
     stream.write_all(request).expect("write the request");
     let mut response = String::new();
     stream
@@ -123,6 +128,7 @@ fn drive_get_post_malformed_then_quit(host: &str, port: u16) {
         host,
         port,
         b"GET /pantry HTTP/1.1\r\nHost: shop\r\nConnection: close\r\n\r\n",
+        true,
     );
     assert!(get.starts_with("HTTP/1.1 200 OK\r\n"), "GET reply: {get}");
     assert!(get.contains("content-length: 17\r\n"), "GET reply: {get}");
@@ -132,6 +138,7 @@ fn drive_get_post_malformed_then_quit(host: &str, port: u16) {
         host,
         port,
         b"POST /pantry HTTP/1.1\r\nHost: shop\r\nContent-Length: 5\r\nConnection: close\r\n\r\nbeans",
+        false,
     );
     assert!(
         post.starts_with("HTTP/1.1 201 Created\r\n"),
@@ -141,7 +148,7 @@ fn drive_get_post_malformed_then_quit(host: &str, port: u16) {
     // The request body is never read: a POST arrives with an empty body.
     assert!(post.ends_with("stocked "), "POST reply: {post}");
 
-    let malformed = send_raw(host, port, b"GARBAGE\r\n\r\n");
+    let malformed = send_raw(host, port, b"GARBAGE\r\n\r\n", false);
     assert!(
         malformed.starts_with("HTTP/1.1 400 Bad Request\r\n"),
         "malformed reply: {malformed}"
@@ -149,6 +156,14 @@ fn drive_get_post_malformed_then_quit(host: &str, port: u16) {
     assert!(
         malformed.contains("content-length: 0\r\n"),
         "malformed reply: {malformed}"
+    );
+
+    // A request that is nothing but the blank line is a COMPLETE (if empty) head, not a
+    // peer that closed early — it must still get a 400, not silence.
+    let blank_only = send_raw(host, port, b"\r\n\r\n", false);
+    assert!(
+        blank_only.starts_with("HTTP/1.1 400 Bad Request\r\n"),
+        "blank-only reply: {blank_only}"
     );
 
     // `kill` force-closes every still-open connection once its grace period ends,
