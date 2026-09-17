@@ -20,13 +20,13 @@ and `net.@tcpServe`. The scheme is **plain HTTP** — URLs are `http://host[:por
   page = http.Request.get("http://example.com/").send() ?
     | Ok(response) => response
     | NotOk(_)     => http.Response { raw = "" }
-  assert(page.status(), equals(200))
+  assert(page.status().code(), equals(200))
   assert(page.body(), contains("Example Domain"))
   assert(page.headers().get("Content-Type"), isOk())
 >
 ```
 
-The module exports **seven type names**: `Body`, `Method`, `Headers`, `Params`,
+The module exports **eight type names**: `Body`, `Method`, `Status`, `Headers`, `Params`,
 `RequestOptions`, `Request`, `Response`. A request is built through `Request`'s static
 constructors and sent, a reply read through `Response`.
 
@@ -40,6 +40,7 @@ asks for it.
 |------|-------|
 | `Body` | `{ content :: Text, contentType :: Text }` — the text to send and the media type to advertise. |
 | `Method` | `Get / Post(Body) / Put(Body) / Query(Body) / Delete / Head / Options / Patch(Body)` — the body-bearing methods carry a `Body`. `Query` is RFC 10008's safe, idempotent method with a body; `Patch` carries a body the same way `Post` and `Put` do. |
+| `Status` | One variant per standard HTTP status code, plus `Other(Num)` — see [`Status`](#status) below. |
 | `Headers` | A multi-value, case-insensitive name/value store, one name added through `add`, read through `get`/`all`/`has`/`names`. |
 | `Params` | A multi-value, case-sensitive name/value store, the same surface as `Headers` without the case-folding. |
 | `RequestOptions` | `{ headers :: Headers }` — settings a request carries beyond its method and URL. |
@@ -53,6 +54,23 @@ asks for it.
 | `token() -> Text` | The token this method writes in a request line: `GET`, `POST`, `PUT`, `QUERY`, `DELETE`, `HEAD`, `OPTIONS`, `PATCH`. |
 | `payload() -> Body` | The `Body` a body-bearing method carries; an empty one for the rest. |
 | `carriesBody() -> Bool` | Whether this method defines a meaning for an enclosed body — true for `Post` / `Put` / `Query` / `Patch`. |
+
+## `Status`
+
+One variant per code the IANA HTTP status code registry lists as standard (every 1xx–5xx
+code the registry assigns), named from its reason phrase in CamelCase — `NotFound` for
+`404`, `MethodNotAllowed` for `405` — except the 200 variant, spelled `OK` exactly so it
+never reads like `Result`'s `Ok`. `Other(Num)` carries any code outside that table.
+
+| Method | Result |
+|--------|--------|
+| `code() -> Num` | The numeral this status carries on the wire: `OK` → `200`, `Other(n)` → `n`. |
+| `text() -> Text` | The reason phrase this status carries on the wire: `OK` → `"OK"`, `NotFound` → `"Not Found"`, `Other(_)` → `"Unknown"`. |
+| `Status.parse(code :: Num) -> Status` | The variant a numeric code names — `404` → `NotFound` — or `Other(code)` for a code the table does not carry. Never fails: every `Num` names some `Status`. |
+
+`Status.parse(200).code()` and `OK.code()` agree, and so do `.text()`: `code()`/`text()`
+and `parse()` are two directions over the same table, not two independent ones kept in
+sync by hand.
 
 ## `Headers` and `Params`
 
@@ -141,7 +159,7 @@ Wrapped and checked in one step: `http.Response { raw = text }.validate()`.
 | Method | Result |
 |--------|--------|
 | `validate() -> Result` | `Ok(Response)` when `raw` opens with `HTTP` followed by a terminated first line, `NotOk(Text)` otherwise. |
-| `status() -> Num` | The status code (`HTTP/1.0 200 OK` → `200`); `0` when the status line's code is anything other than digits throughout. |
+| `status() -> Status` | The reply's status, parsed off the status line through `Status.parse`; `Other(0)` when the status line's code is anything other than digits throughout. |
 | `statusLine() -> Text` | The reply's first line, trimmed. |
 | `headers() -> Headers` | The reply's headers, parsed from the lines between the status line and the blank line. |
 | `body() -> Text` | The reply's body, framed per its headers (below); `""` when the reply has no blank line, carries no body by its status, or its framing is malformed. |
@@ -200,7 +218,7 @@ hummus = (request :: http.Request) -> http.Response => <
   request.method ?
     | http.Get        => http.Response.ok("chickpeas: plenty")
     | http.Post(body) => http.Response.created("stocked " + body.content)
-    | _               => http.Response.status(405)
+    | _               => http.Response.status(http.MethodNotAllowed)
 >
 
 ^ = () -> Num => <
@@ -228,8 +246,10 @@ starts at its very first character.
 | `Response.ok(body :: Text) -> Response` | A 200 reply carrying `body`. |
 | `Response.ok(body :: Text, headers :: Headers) -> Response` | A 200 reply carrying `body`, sending exactly `headers` alongside the generated ones. |
 | `Response.created(body :: Text) -> Response` | A 201 reply carrying `body`. |
-| `Response.status(code :: Num) -> Response` | An empty-body reply carrying `code`'s standard reason phrase (a small table — `200`, `201`, `204`, `400`, `404`, `405`, `500` — `"Unknown"` for any other code). |
-| `Response.status(code :: Num, headers :: Headers) -> Response` | `status(code)`, sending exactly `headers` alongside the generated ones. |
+| `Response.status(status :: Status) -> Response` | An empty-body reply carrying `status`'s own reason phrase. |
+| `Response.status(status :: Status, headers :: Headers) -> Response` | `status(status)`, sending exactly `headers` alongside the generated ones. |
+| `Response.status(code :: Num) -> Response` | `status(Status.parse(code))` — an empty-body reply for a caller that only has a bare code. |
+| `Response.status(code :: Num, headers :: Headers) -> Response` | `status(Status.parse(code), headers)`. |
 | `wire() -> Text` | The reply's raw text (`it.raw`) — what `serveConnection` writes to the connection. |
 
 Every constructor above sends **only** the headers it was given, plus two generated ones:

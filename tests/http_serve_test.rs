@@ -38,7 +38,7 @@ answer = (request :: http.Request) -> http.Response => <
   request.method ?
     | http.Get        => http.Response.ok("chickpeas: plenty")
     | http.Post(body) => http.Response.created("stocked " + body.content)
-    | _               => http.Response.status(405)
+    | _               => http.Response.status(http.MethodNotAllowed)
 >
 
 hummus = (request :: http.Request) -> http.Response => <
@@ -65,7 +65,7 @@ fn client_check_program(address: &str) -> String {
 << core.test
 
 checkReply = (reply :: http.Response, expectedStatus :: Num, expectedBody :: Text) -> $ => <
-  assert(reply.status(), equals(expectedStatus))
+  assert(reply.status().code(), equals(expectedStatus))
   assert(reply.body(), equals(expectedBody))
 >
 

@@ -221,24 +221,189 @@ linesAfterFirst = (text :: Text) -> Text => <
     | NotOk(_) => ""
 >
 
-~ Standard reason phrase for the status codes a server writes most; `"Unknown"` for any
-~ other code — `Response.status(code)` never guesses one.
-reasonPhrase = (code :: Num) -> Text => <
-  code == 200 ? "OK"
-    : code == 201 ? "Created"
-    : code == 204 ? "No Content"
-    : code == 400 ? "Bad Request"
-    : code == 404 ? "Not Found"
-    : code == 405 ? "Method Not Allowed"
-    : code == 500 ? "Internal Server Error"
-    : "Unknown"
->
+~ One `code`/`text` pair, `Status.describe()`'s own return shape — the one place the two
+~ ever come as a pair, so `Status.code()`/`Status.text()` each read off the field they want.
+StatusDetail = { code :: Num, text :: Text }
+
+~ An HTTP status: one variant per code the IANA registry lists as a standard code (every
+~ 1xx–5xx code except the ones the registry itself leaves unassigned), named from its
+~ reason phrase in CamelCase — except `OK` (200), spelled exactly that way so it never
+~ reads like `Result`'s `Ok` — plus `Other(Num)` for any code outside the table.
+~
+~ `describe()` is the ONE mapping from a `Status` to its code and reason phrase; `code()`
+~ and `text()` each read one field off it, so neither repeats the table `describe()` already
+~ has. `parse()` goes the other way (a number to a `Status`) and so cannot share
+~ `describe()`'s own match — matching is dispatch on the VALUE being matched, and here that
+~ is a `Num` rather than a `Status` — but still touches the table exactly once, as one
+~ `Num`-pattern match of its own rather than a chain of `==`.
+>> Status = Continue / SwitchingProtocols / Processing / EarlyHints
+  / OK / Created / Accepted / NonAuthoritativeInformation / NoContent / ResetContent
+  / PartialContent / MultiStatus / AlreadyReported / IMUsed
+  / MultipleChoices / MovedPermanently / Found / SeeOther / NotModified / UseProxy / Unused
+  / TemporaryRedirect / PermanentRedirect
+  / BadRequest / Unauthorized / PaymentRequired / Forbidden / NotFound / MethodNotAllowed
+  / NotAcceptable / ProxyAuthenticationRequired / RequestTimeout / Conflict / Gone
+  / LengthRequired / PreconditionFailed / ContentTooLarge / URITooLong / UnsupportedMediaType
+  / RangeNotSatisfiable / ExpectationFailed / ImATeapot / MisdirectedRequest
+  / UnprocessableContent / Locked / FailedDependency / TooEarly / UpgradeRequired
+  / PreconditionRequired / TooManyRequests / RequestHeaderFieldsTooLarge
+  / UnavailableForLegalReasons
+  / InternalServerError / NotImplemented / BadGateway / ServiceUnavailable / GatewayTimeout
+  / HTTPVersionNotSupported / VariantAlsoNegotiates / InsufficientStorage / LoopDetected
+  / NotExtended / NetworkAuthenticationRequired
+  / Other(Num) {
+  describe = () -> StatusDetail => <
+    it ?
+      | Continue                     => StatusDetail { code = 100, text = "Continue" }
+      | SwitchingProtocols           => StatusDetail { code = 101, text = "Switching Protocols" }
+      | Processing                   => StatusDetail { code = 102, text = "Processing" }
+      | EarlyHints                   => StatusDetail { code = 103, text = "Early Hints" }
+      | OK                           => StatusDetail { code = 200, text = "OK" }
+      | Created                      => StatusDetail { code = 201, text = "Created" }
+      | Accepted                     => StatusDetail { code = 202, text = "Accepted" }
+      | NonAuthoritativeInformation  => StatusDetail { code = 203, text = "Non-Authoritative Information" }
+      | NoContent                    => StatusDetail { code = 204, text = "No Content" }
+      | ResetContent                 => StatusDetail { code = 205, text = "Reset Content" }
+      | PartialContent               => StatusDetail { code = 206, text = "Partial Content" }
+      | MultiStatus                  => StatusDetail { code = 207, text = "Multi-Status" }
+      | AlreadyReported              => StatusDetail { code = 208, text = "Already Reported" }
+      | IMUsed                       => StatusDetail { code = 226, text = "IM Used" }
+      | MultipleChoices              => StatusDetail { code = 300, text = "Multiple Choices" }
+      | MovedPermanently             => StatusDetail { code = 301, text = "Moved Permanently" }
+      | Found                        => StatusDetail { code = 302, text = "Found" }
+      | SeeOther                     => StatusDetail { code = 303, text = "See Other" }
+      | NotModified                  => StatusDetail { code = 304, text = "Not Modified" }
+      | UseProxy                     => StatusDetail { code = 305, text = "Use Proxy" }
+      | Unused                       => StatusDetail { code = 306, text = "Unused" }
+      | TemporaryRedirect            => StatusDetail { code = 307, text = "Temporary Redirect" }
+      | PermanentRedirect            => StatusDetail { code = 308, text = "Permanent Redirect" }
+      | BadRequest                   => StatusDetail { code = 400, text = "Bad Request" }
+      | Unauthorized                 => StatusDetail { code = 401, text = "Unauthorized" }
+      | PaymentRequired              => StatusDetail { code = 402, text = "Payment Required" }
+      | Forbidden                    => StatusDetail { code = 403, text = "Forbidden" }
+      | NotFound                     => StatusDetail { code = 404, text = "Not Found" }
+      | MethodNotAllowed             => StatusDetail { code = 405, text = "Method Not Allowed" }
+      | NotAcceptable                => StatusDetail { code = 406, text = "Not Acceptable" }
+      | ProxyAuthenticationRequired  => StatusDetail { code = 407, text = "Proxy Authentication Required" }
+      | RequestTimeout               => StatusDetail { code = 408, text = "Request Timeout" }
+      | Conflict                     => StatusDetail { code = 409, text = "Conflict" }
+      | Gone                         => StatusDetail { code = 410, text = "Gone" }
+      | LengthRequired               => StatusDetail { code = 411, text = "Length Required" }
+      | PreconditionFailed           => StatusDetail { code = 412, text = "Precondition Failed" }
+      | ContentTooLarge              => StatusDetail { code = 413, text = "Content Too Large" }
+      | URITooLong                   => StatusDetail { code = 414, text = "URI Too Long" }
+      | UnsupportedMediaType         => StatusDetail { code = 415, text = "Unsupported Media Type" }
+      | RangeNotSatisfiable          => StatusDetail { code = 416, text = "Range Not Satisfiable" }
+      | ExpectationFailed            => StatusDetail { code = 417, text = "Expectation Failed" }
+      | ImATeapot                    => StatusDetail { code = 418, text = "I'm a Teapot" }
+      | MisdirectedRequest           => StatusDetail { code = 421, text = "Misdirected Request" }
+      | UnprocessableContent         => StatusDetail { code = 422, text = "Unprocessable Content" }
+      | Locked                       => StatusDetail { code = 423, text = "Locked" }
+      | FailedDependency             => StatusDetail { code = 424, text = "Failed Dependency" }
+      | TooEarly                     => StatusDetail { code = 425, text = "Too Early" }
+      | UpgradeRequired              => StatusDetail { code = 426, text = "Upgrade Required" }
+      | PreconditionRequired         => StatusDetail { code = 428, text = "Precondition Required" }
+      | TooManyRequests              => StatusDetail { code = 429, text = "Too Many Requests" }
+      | RequestHeaderFieldsTooLarge  => StatusDetail { code = 431, text = "Request Header Fields Too Large" }
+      | UnavailableForLegalReasons   => StatusDetail { code = 451, text = "Unavailable For Legal Reasons" }
+      | InternalServerError          => StatusDetail { code = 500, text = "Internal Server Error" }
+      | NotImplemented               => StatusDetail { code = 501, text = "Not Implemented" }
+      | BadGateway                   => StatusDetail { code = 502, text = "Bad Gateway" }
+      | ServiceUnavailable           => StatusDetail { code = 503, text = "Service Unavailable" }
+      | GatewayTimeout               => StatusDetail { code = 504, text = "Gateway Timeout" }
+      | HTTPVersionNotSupported      => StatusDetail { code = 505, text = "HTTP Version Not Supported" }
+      | VariantAlsoNegotiates        => StatusDetail { code = 506, text = "Variant Also Negotiates" }
+      | InsufficientStorage          => StatusDetail { code = 507, text = "Insufficient Storage" }
+      | LoopDetected                 => StatusDetail { code = 508, text = "Loop Detected" }
+      | NotExtended                  => StatusDetail { code = 510, text = "Not Extended" }
+      | NetworkAuthenticationRequired => StatusDetail { code = 511, text = "Network Authentication Required" }
+      | Other(code)                  => StatusDetail { code = code, text = "Unknown" }
+  >
+
+  ~ The numeral this status carries on the wire: `OK` → `200`, `Other(n)` → `n`.
+  code = () -> Num => < it.describe().code >
+
+  ~ The reason phrase this status carries on the wire: `OK` → `"OK"`, `NotFound` →
+  ~ `"Not Found"`, `Other(_)` → `"Unknown"`.
+  text = () -> Text => < it.describe().text >
+
+  ~ The `Status` a numeric code names: one of the variants above for a code the table
+  ~ carries, `Other(code)` for any other — `404` and `MethodNotAllowed.parse` alike never
+  ~ fail, unlike `Request.parse`, since every `Num` names SOME status.
+  parse = (code :: Num) -> Status => <
+    code ?
+      | 100 => Continue
+      | 101 => SwitchingProtocols
+      | 102 => Processing
+      | 103 => EarlyHints
+      | 200 => OK
+      | 201 => Created
+      | 202 => Accepted
+      | 203 => NonAuthoritativeInformation
+      | 204 => NoContent
+      | 205 => ResetContent
+      | 206 => PartialContent
+      | 207 => MultiStatus
+      | 208 => AlreadyReported
+      | 226 => IMUsed
+      | 300 => MultipleChoices
+      | 301 => MovedPermanently
+      | 302 => Found
+      | 303 => SeeOther
+      | 304 => NotModified
+      | 305 => UseProxy
+      | 306 => Unused
+      | 307 => TemporaryRedirect
+      | 308 => PermanentRedirect
+      | 400 => BadRequest
+      | 401 => Unauthorized
+      | 402 => PaymentRequired
+      | 403 => Forbidden
+      | 404 => NotFound
+      | 405 => MethodNotAllowed
+      | 406 => NotAcceptable
+      | 407 => ProxyAuthenticationRequired
+      | 408 => RequestTimeout
+      | 409 => Conflict
+      | 410 => Gone
+      | 411 => LengthRequired
+      | 412 => PreconditionFailed
+      | 413 => ContentTooLarge
+      | 414 => URITooLong
+      | 415 => UnsupportedMediaType
+      | 416 => RangeNotSatisfiable
+      | 417 => ExpectationFailed
+      | 418 => ImATeapot
+      | 421 => MisdirectedRequest
+      | 422 => UnprocessableContent
+      | 423 => Locked
+      | 424 => FailedDependency
+      | 425 => TooEarly
+      | 426 => UpgradeRequired
+      | 428 => PreconditionRequired
+      | 429 => TooManyRequests
+      | 431 => RequestHeaderFieldsTooLarge
+      | 451 => UnavailableForLegalReasons
+      | 500 => InternalServerError
+      | 501 => NotImplemented
+      | 502 => BadGateway
+      | 503 => ServiceUnavailable
+      | 504 => GatewayTimeout
+      | 505 => HTTPVersionNotSupported
+      | 506 => VariantAlsoNegotiates
+      | 507 => InsufficientStorage
+      | 508 => LoopDetected
+      | 510 => NotExtended
+      | 511 => NetworkAuthenticationRequired
+      | _   => Other(code)
+  >
+}
 
 ~ The wire text every `Response` constructor below builds: a status line, exactly the
 ~ headers it was given (no `content-type` added), then `content-length` counted in BYTES,
 ~ `connection: close`, a blank line, and `body`.
-statusReply = (code :: Num, body :: Text, headers :: Headers) -> Text => <
-  "HTTP/1.1 `code` `reasonPhrase(code)`\r\n" + headers.wire()
+statusReply = (status :: Status, body :: Text, headers :: Headers) -> Text => <
+  "HTTP/1.1 `status.code()` `status.text()`\r\n" + headers.wire()
     + "content-length: `body.size`\r\nconnection: close\r\n\r\n" + body
 >
 
@@ -257,15 +422,19 @@ statusReply = (code :: Num, body :: Text, headers :: Headers) -> Text => <
   blankLine = () -> Num => < blankLineIndex(it.raw) >
 
   ~ A 200 reply carrying `body`.
-  ok = (body :: Text) -> Response => < Response { raw = statusReply(200, body, Headers.empty()) } >,
-  ok = (body :: Text, headers :: Headers) -> Response => < Response { raw = statusReply(200, body, headers) } >,
+  ok = (body :: Text) -> Response => < Response { raw = statusReply(OK, body, Headers.empty()) } >,
+  ok = (body :: Text, headers :: Headers) -> Response => < Response { raw = statusReply(OK, body, headers) } >,
 
   ~ A 201 reply carrying `body`.
-  created = (body :: Text) -> Response => < Response { raw = statusReply(201, body, Headers.empty()) } >,
+  created = (body :: Text) -> Response => < Response { raw = statusReply(Created, body, Headers.empty()) } >,
 
-  ~ An empty-body reply carrying `code`'s standard reason phrase.
-  status = (code :: Num) -> Response => < Response { raw = statusReply(code, "", Headers.empty()) } >,
-  status = (code :: Num, headers :: Headers) -> Response => < Response { raw = statusReply(code, "", headers) } >,
+  ~ An empty-body reply carrying `status`'s reason phrase. The `Num` overloads exist so a
+  ~ caller who only has a bare code (parsed off the wire, say) need not name the variant;
+  ~ both go through `Status.parse` and this same, one `Status`-taking form.
+  status = (status :: Status, headers :: Headers) -> Response => < Response { raw = statusReply(status, "", headers) } >,
+  status = (status :: Status) -> Response => < Response.status(status, Headers.empty()) >,
+  status = (code :: Num, headers :: Headers) -> Response => < Response.status(Status.parse(code), headers) >,
+  status = (code :: Num) -> Response => < Response.status(Status.parse(code), Headers.empty()) >,
 
   ~ The text this reply sends on the wire.
   wire = () -> Text => < it.raw >
@@ -288,7 +457,8 @@ statusReply = (code :: Num, body :: Text, headers :: Headers) -> Text => <
 
   ~ The numeric status code (`HTTP/1.0 200 OK` -> 200), or 0 when the status line carries
   ~ no code that is digits throughout — a garbled reply reads as 0 rather than guessing.
-  status = () -> Num => <
+  ~ `status()` wraps this in `Status.parse`; `bodiless()` below wants the raw number.
+  numericStatus = () -> Num => <
     digitOf = (grapheme :: Text) -> Result => < "0123456789".indexOf(grapheme) >
     isDigit = (grapheme :: Text) -> Bool => <
       digitOf(grapheme) ?
@@ -307,10 +477,15 @@ statusReply = (code :: Num, body :: Text, headers :: Headers) -> Text => <
       : 0
   >
 
+  ~ The reply's status, parsed off the status line: `Status.parse`'s own `Other(0)` for a
+  ~ status line carrying no code that is digits throughout, the same "don't guess" rule
+  ~ `numericStatus()` already follows.
+  status = () -> Status => < Status.parse(it.numericStatus()) >
+
   ~ Whether this reply carries no body regardless of what its headers claim: an informational
   ~ (1xx), a 204, or a 304 status.
   bodiless = () -> Bool => <
-    code = it.status()
+    code = it.numericStatus()
     (code >= 100 && code < 200) || code == 204 || code == 304
   >
 
@@ -602,34 +777,37 @@ test.describe("validating a reply", () => <
 
 test.describe("the status line", () => <
   test.it("reads the code of a normal reply", () =>
-    expect(parsed(crlfReply).status(), equals(200)))
+    expect(parsed(crlfReply).status().code(), equals(200)))
+
+  test.it("reads the standard reason phrase for the code", () =>
+    expect(parsed(crlfReply).status().text(), equals("OK")))
 
   test.it("hands back the whole line, trimmed", () =>
     expect(parsed(crlfReply).statusLine(), equals("HTTP/1.1 200 OK")))
 
   test.it("accepts HTTP/1.0", () =>
-    expect(parsed("HTTP/1.0 301 Moved\r\n\r\n").status(), equals(301)))
+    expect(parsed("HTTP/1.0 301 Moved\r\n\r\n").status().code(), equals(301)))
 
   test.it("accepts HTTP/1.1", () =>
-    expect(parsed("HTTP/1.1 301 Moved\r\n\r\n").status(), equals(301)))
+    expect(parsed("HTTP/1.1 301 Moved\r\n\r\n").status().code(), equals(301)))
 
   test.it("reads a code with no reason phrase", () =>
-    expect(parsed("HTTP/1.1 204\r\n\r\n").status(), equals(204)))
+    expect(parsed("HTTP/1.1 204\r\n\r\n").status().code(), equals(204)))
 
   test.it("reads a non-numeric code as 0 rather than guessing", () => <
     ~ The letter O for a zero: no digit-salvaging, no plausible wrong number.
     garbled = Response { raw = "HTTP/1.1 2O0 OK\r\n\r\n" }
-    expect(garbled.status(), equals(0))
+    expect(garbled.status().code(), equals(0))
   >)
 
   test.it("reads a missing code as 0", () => <
     bare = Response { raw = "HTTP/1.1\r\n\r\n" }
-    expect(bare.status(), equals(0))
+    expect(bare.status().code(), equals(0))
   >)
 
   test.it("reads a garbage first line as 0", () => <
     garbage = Response { raw = "!!!\r\n\r\n" }
-    expect(garbage.status(), equals(0))
+    expect(garbage.status().code(), equals(0))
   >)
 >)
 
@@ -780,7 +958,7 @@ test.describe("line endings", () => <
     expect(parsed(lineFeedReply).statusLine(), equals("HTTP/1.1 200 OK")))
 
   test.it("reads a bare-LF reply's status code", () =>
-    expect(parsed(lineFeedReply).status(), equals(200)))
+    expect(parsed(lineFeedReply).status().code(), equals(200)))
 
   test.it("reads a bare-LF reply's headers", () => <
     reply = parsed(lineFeedReply)
@@ -807,7 +985,7 @@ test.describe("line endings", () => <
     strayCarriageReturn =
       parsed("HTTP/1.1 200 OK\r\nX-Foo: bar\r\r\nContent-Type: t\r\n\r\nbody")
     expect(strayCarriageReturn.body(), equals("body"))
-    expect(strayCarriageReturn.status(), equals(200))
+    expect(strayCarriageReturn.status().code(), equals(200))
   >)
 
   test.it("splits at the first blank line when the body carries a bare-LF one", () => <
@@ -832,7 +1010,7 @@ test.describe("line endings", () => <
     crlf = parsed(crlfReply)
     lineFeed = parsed(lineFeedReply)
     expect(lineFeed.statusLine(), equals(crlf.statusLine()))
-    expect(lineFeed.status(), equals(crlf.status()))
+    expect(lineFeed.status().code(), equals(crlf.status().code()))
     expect(lineFeed.body(), equals(crlf.body()))
     expect(headerOr(lineFeed, "content-type", "?"), equals(headerOr(crlf, "content-type", "!")))
   >)
@@ -1153,7 +1331,33 @@ test.describe("a round trip", () => <
     expect(request.wire(), contains("\r\n\r\n" + sent))
     echoed = parsed("HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\n\r\n" + sent)
     expect(echoed.body(), equals(sent))
-    expect(echoed.status(), equals(200))
+    expect(echoed.status().code(), equals(200))
+  >)
+>)
+
+test.describe("Status", () => <
+  test.it("OK is spelled exactly that way, not Ok, and carries code 200", () => <
+    expect(OK.code(), equals(200))
+    expect(OK.text(), equals("OK"))
+  >)
+
+  test.it("parse and the reason phrase agree across every class of status", () => <
+    expect(Status.parse(100).text(), equals("Continue"))
+    expect(Status.parse(226).text(), equals("IM Used"))
+    expect(Status.parse(308).text(), equals("Permanent Redirect"))
+    expect(Status.parse(404).text(), equals("Not Found"))
+    expect(Status.parse(418).text(), equals("I'm a Teapot"))
+    expect(Status.parse(451).text(), equals("Unavailable For Legal Reasons"))
+    expect(Status.parse(511).text(), equals("Network Authentication Required"))
+  >)
+
+  test.it("parse round-trips a known code through its variant's own code()", () =>
+    expect(Status.parse(404).code(), equals(404)))
+
+  test.it("an unrecognized code parses to Other, carrying the code and \"Unknown\"", () => <
+    other = Status.parse(419)
+    expect(other.code(), equals(419))
+    expect(other.text(), equals("Unknown"))
   >)
 >)
 
@@ -1169,6 +1373,9 @@ test.describe("Response's server-side constructors", () => <
   test.it("status writes an empty body and the standard reason phrase", () =>
     expect(Response.status(405).wire(), equals(
       "HTTP/1.1 405 Method Not Allowed\r\ncontent-length: 0\r\nconnection: close\r\n\r\n")))
+
+  test.it("status takes a Status directly, writing the exact same bytes as the Num overload", () =>
+    expect(Response.status(MethodNotAllowed).wire(), equals(Response.status(405).wire())))
 
   test.it("status falls back to Unknown for a code the table does not carry", () =>
     expect(Response.status(419).wire(), contains("419 Unknown\r\n")))
@@ -1191,6 +1398,12 @@ test.describe("Response's server-side constructors", () => <
     headers := Headers.empty()
     headers.add("X-Reason", "no soup for you")
     expect(Response.status(404, headers).wire(), contains("x-reason: no soup for you\r\n"))
+  >)
+
+  test.it("status with headers takes a Status directly too", () => <
+    headers := Headers.empty()
+    headers.add("X-Reason", "no soup for you")
+    expect(Response.status(NotFound, headers).wire(), equals(Response.status(404, headers).wire()))
   >)
 
   test.it("wire returns the raw text unchanged", () =>

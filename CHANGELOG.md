@@ -13,15 +13,21 @@ All notable changes to Quilon are documented here.
   server side of `wire()`, `Request.parse(head) -> Result`, parsing a request line and
   headers into a `Request` (a body-bearing method's `Body` is always empty — this layer
   does not read request bodies); a malformed request line or an unrecognized method comes
-  back `NotOk`, `core.http`'s own signal to answer 400 and close. `Response` gains
-  `ok(body)`/`ok(body, headers)`, `created(body)`, `status(code)`/`status(code, headers)`
-  (a small reason-phrase table, `"Unknown"` otherwise), and `wire()`; every constructor
-  sends only the headers it was given, plus `content-length` (bytes) and
-  `connection: close` — `Response.ok("x")` sends exactly `HTTP/1.1 200
-  OK\r\ncontent-length: 1\r\nconnection: close\r\n\r\nx`. A handler fault is fatal, like
-  everywhere else in the language; `kill` is `net.Server`'s own method. See
-  `docs/corelib/http.md#the-http-server`, `docs/concurrency/README.md`, and
-  `examples/http_server.qn`. Part of #435.
+  back `NotOk`, `core.http`'s own signal to answer 400 and close. **`Status` is a new
+  exported type: one variant per standard HTTP status code, named from its reason phrase
+  in CamelCase (`OK` spelled exactly that way, so it never reads like `Result`'s `Ok`),
+  plus `Other(Num)` for any other code** — `code()`/`text()` and `Status.parse(code)` are
+  three directions over the one table `describe()` keeps. `Response` gains
+  `ok(body)`/`ok(body, headers)`, `created(body)`, and
+  `status(status :: Status)`/`status(status, headers)` — with `status(code :: Num)` and
+  `status(code, headers)` overloads for a caller that only has a bare code, both going
+  through `Status.parse` — and `wire()`; every constructor sends only the headers it was
+  given, plus `content-length` (bytes) and `connection: close` — `Response.ok("x")` sends
+  exactly `HTTP/1.1 200 OK\r\ncontent-length: 1\r\nconnection: close\r\n\r\nx`. A handler
+  fault is fatal, like everywhere else in the language; `kill` is `net.Server`'s own
+  method. The client's `Response.status()` now returns `Status` (previously a bare `Num`).
+  See `docs/corelib/http.md#the-http-server`, `docs/corelib/http.md#status`,
+  `docs/concurrency/README.md`, and `examples/http_server.qn`. Part of #435.
 - **`net.@tcpServe(address, handler)` is the raw TCP server layer: the runtime accepts
   connections and runs each `handler` call on its own fiber, and returns the `Server`
   handle at once — the accept loop is a launch of the enclosing `< >` block, joined by
