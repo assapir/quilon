@@ -762,9 +762,9 @@ impl std::fmt::Display for TypeError {
             } => {
                 write!(
                     f,
-                    "`{name}` is `:=`, and the handler `{primitive}` runs on its own \
-                     fiber reaches it — a `:=` value reachable from more than one fiber \
-                     is a compile error unless it is bound `@{name} := …`"
+                    "`{name}` is a `:=` binding, and the handler passed to `{primitive}` \
+                     runs on its own fiber and reaches it; a `:=` value reachable from \
+                     more than one fiber must be declared atomic"
                 )
             }
         }

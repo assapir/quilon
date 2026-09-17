@@ -1,8 +1,5 @@
-~ A turnstile: every connection through `net.@tcpServe` bumps a shared counter, safe to
-~ touch from any of the server's per-connection fibers because it is bound `@visits := 0`
-~ — an atomic binding — rather than a plain `:=`, which the fiber-sharing check rejects at
-~ compile time for code the handler reaches. `^` walks through the turnstile twice with
-~ `net.@tcpRequest`, asserts both visits landed, then closes it.
+~ A turnstile server: every connection counts into the atomic global `@visits`. `^`
+~ connects twice, asserts the count, and closes the turnstile.
 << core.net
 << core.test
 
