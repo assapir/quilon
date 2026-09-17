@@ -28,8 +28,10 @@
 //! binding's mutability and atomicity is settled.
 
 use super::*;
+use crate::ast::walk::try_for_each_subexpression;
 use crate::ast::{Statement, at_primitive_name};
 use std::collections::{HashMap, HashSet};
+use std::ops::ControlFlow;
 
 /// Every primitive whose LAST argument is a handler run on its own fiber per call — the
 /// bare `@` name paired with how a program spells calling it, for the diagnostic. A
@@ -240,13 +242,15 @@ impl TypeChecker {
             _ => None,
         };
 
-        let roots: Vec<&Expression> = match (handler_body, handler) {
-            (Some(body), _) => vec![body],
-            (None, Expression::Identifier { name, .. }) => {
-                defined.get(name.as_str()).cloned().unwrap_or_default()
-            }
-            _ => Vec::new(),
-        };
+        let roots: Vec<&Expression> =
+            handler_body
+                .map(|body| vec![body])
+                .unwrap_or_else(|| match handler {
+                    Expression::Identifier { name, .. } => {
+                        defined.get(name.as_str()).cloned().unwrap_or_default()
+                    }
+                    _ => Vec::new(),
+                });
         if let Some((name, touch)) = self.first_shared_global(&roots, defined) {
             return Err(shared_across_fibers(name, touch, call_span, primitive));
         }
@@ -416,117 +420,33 @@ fn direct_mutable_locals(scope: &Expression) -> Vec<(&str, bool)> {
         .collect()
 }
 
-/// Every name `expression` reads or (re)declares, with where — the shape of
-/// `ast::reachability`'s mention walk, plus a `:=` declaration's own write target (its
-/// name is otherwise nothing the tree-shaker's own walk has a reason to see).
+/// Every name `expression` reads or (re)declares, with where. Delegates the traversal to
+/// the shared `ast::walk::try_for_each_subexpression` — which already descends into
+/// lambda bodies, nested function bodies, and type methods, and visits every
+/// `Expression::Block` itself — adding only what that generic walk has no reason to see:
+/// a `:=` declaration's own write target (`hits := 5` mentions no callable, so the
+/// tree-shaker's own walk skips it, but sharing state is exactly a question of what is
+/// written too).
 fn walk<'a>(expression: &'a Expression, out: &mut Vec<Touch<'a>>) {
-    match expression {
-        // `it` is a method's receiver, never a shared binding of its own.
-        Expression::Identifier { name, .. } if name == crate::ast::RECEIVER => {}
-        Expression::Identifier { name, span } => out.push(Touch { name, span }),
-        Expression::Number { .. }
-        | Expression::String { .. }
-        | Expression::Bool { .. }
-        | Expression::Unit { .. } => {}
-        Expression::Interpolation { parts, .. } => {
-            for part in parts {
-                if let crate::ast::InterpolationPart::Hole(hole) = part {
-                    walk(hole, out);
-                }
-            }
-        }
-        Expression::BinaryOperator { left, right, .. } => {
-            walk(left, out);
-            walk(right, out);
-        }
-        Expression::UnaryOperator { expression, .. }
-        | Expression::FieldAccess { expression, .. }
-        | Expression::Spread { expression, .. }
-        | Expression::Lambda {
-            body: expression, ..
-        } => walk(expression, out),
-        Expression::Range { start, end, .. } => {
-            walk(start, out);
-            walk(end, out);
-        }
-        Expression::FieldAssign { target, value, .. }
-        | Expression::IndexAssign { target, value, .. } => {
-            walk(target, out);
-            walk(value, out);
-        }
-        Expression::Index {
-            expression, index, ..
-        } => {
-            walk(expression, out);
-            walk(index, out);
-        }
-        Expression::Call {
-            function,
-            arguments,
-            ..
-        } => {
-            walk(function, out);
-            for argument in arguments {
-                walk(argument, out);
-            }
-        }
-        Expression::If {
-            condition,
-            then,
-            else_,
-            ..
-        } => {
-            walk(condition, out);
-            walk(then, out);
-            walk(else_, out);
-        }
-        Expression::Match {
-            expression, arms, ..
-        } => {
-            walk(expression, out);
-            for arm in arms {
-                walk(&arm.body, out);
-            }
-        }
-        Expression::Array { elements, .. } | Expression::SetLiteral { elements, .. } => {
-            for element in elements {
-                walk(element, out);
-            }
-        }
-        Expression::MapLiteral { entries, .. } => {
-            for (key, value) in entries {
-                walk(key, out);
-                walk(value, out);
-            }
-        }
-        Expression::Record { fields, .. } | Expression::Constructor { fields, .. } => {
-            for (_, value) in fields {
-                walk(value, out);
-            }
-        }
-        Expression::Block { statements, .. } => {
-            for statement in statements {
-                match statement {
-                    Statement::Expression(e) => walk(e, out),
-                    Statement::Item(Item::VariableDeclaration(declaration)) => {
-                        walk(&declaration.value, out);
-                        if declaration.mutable {
-                            out.push(Touch {
-                                name: &declaration.name,
-                                span: &declaration.span,
-                            });
-                        }
-                    }
-                    Statement::Item(Item::FunctionDeclaration(declaration)) => {
-                        walk(&declaration.body, out)
-                    }
-                    Statement::Item(Item::TypeDeclaration(declaration)) => {
-                        for method in declaration.type_definition.methods() {
-                            walk(&method.body, out);
-                        }
+    let _: ControlFlow<()> = try_for_each_subexpression(expression, &mut |expression| {
+        match expression {
+            // `it` is a method's receiver, never a shared binding of its own.
+            Expression::Identifier { name, .. } if name == crate::ast::RECEIVER => {}
+            Expression::Identifier { name, span } => out.push(Touch { name, span }),
+            Expression::Block { statements, .. } => {
+                for statement in statements {
+                    if let Statement::Item(Item::VariableDeclaration(declaration)) = statement
+                        && declaration.mutable
+                    {
+                        out.push(Touch {
+                            name: &declaration.name,
+                            span: &declaration.span,
+                        });
                     }
                 }
             }
+            _ => {}
         }
-    }
+        ControlFlow::Continue(())
+    });
 }
