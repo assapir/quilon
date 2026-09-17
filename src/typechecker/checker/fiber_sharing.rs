@@ -38,22 +38,26 @@ const FIBER_HANDLER_PRIMITIVES: &[(&str, &str)] = &[("tcpServe", "net.@tcpServe"
 /// One place a name is read or (re)declared/written. A `:=` declaration's own name counts
 /// as touched wherever it sits — the tree-shaker's mention walk has no reason to see it
 /// (assigning to a local mentions nothing callable), but sharing state is exactly a
-/// question of what is written, not only what is called.
+/// question of what is written, not only what is called. `Write`'s `bool` is the AST
+/// node's own `atomic` flag (`@name := …`'s marker) — true only on the DECLARING
+/// occurrence, never a later reassignment of the same binding (see
+/// `docs/concurrency/README.md#sharing-state-across-fibers`'s "`@` marks the declaration
+/// only"), so a caller that cares collects it by NAME across every touch, not off one node.
 enum Touch<'a> {
     Read(&'a str, &'a Span),
-    Write(&'a str, &'a Span),
+    Write(&'a str, &'a Span, bool),
 }
 
 impl<'a> Touch<'a> {
     fn name(&self) -> &'a str {
         match self {
-            Touch::Read(name, _) | Touch::Write(name, _) => name,
+            Touch::Read(name, _) | Touch::Write(name, _, _) => name,
         }
     }
 
     fn span(&self) -> &'a Span {
         match self {
-            Touch::Read(_, span) | Touch::Write(_, span) => span,
+            Touch::Read(_, span) | Touch::Write(_, span, _) => span,
         }
     }
 }
@@ -110,8 +114,10 @@ impl TypeChecker {
     }
 
     /// Check one `net.@tcpServe(..., handler)` call: `handler`, and everything it calls
-    /// transitively, may not reach a non-atomic top-level `:=` binding; an inline lambda
-    /// `handler` may not additionally capture a `:=` local of `enclosing_body`.
+    /// transitively, may not reach a non-atomic `:=` binding; a `handler` whose own body
+    /// this can see (an inline lambda, or a local — non-top-level — named handler, since
+    /// no-hoisting means its declaration already sits above this call in
+    /// `enclosing_body`) may not additionally capture a `:=` local of `enclosing_body`.
     fn check_fiber_launch(
         &self,
         primitive: &'static str,
@@ -124,38 +130,60 @@ impl TypeChecker {
             return Ok(());
         };
 
-        let roots: Vec<&Expression> = match handler {
-            Expression::Lambda { body, .. } => vec![body.as_ref()],
-            Expression::Identifier { name, .. } => {
+        // The body that actually runs on the fiber: an inline lambda's own body, or a
+        // local named handler's — `None` for a top-level function name, which has no
+        // enclosing block to capture from, or anything else this cannot see through.
+        let handler_body: Option<&Expression> = match handler {
+            Expression::Lambda { body, .. } => Some(body.as_ref()),
+            Expression::Identifier { name, .. } if !defined.contains_key(name.as_str()) => {
+                find_local_handler_body(enclosing_body, name)
+            }
+            _ => None,
+        };
+
+        let roots: Vec<&Expression> = match (handler_body, handler) {
+            (Some(body), _) => vec![body],
+            (None, Expression::Identifier { name, .. }) => {
                 defined.get(name.as_str()).cloned().unwrap_or_default()
             }
             _ => Vec::new(),
         };
         if let Some((name, touch)) = self.first_shared_global(&roots, defined) {
-            return Err(self.shared_across_fibers(name, touch, call_span, primitive));
+            return Err(shared_across_fibers(name, touch, call_span, primitive));
         }
 
-        // The local-capture case only exists for an inline lambda: a handler reached by
-        // name is a top-level function, which has no enclosing block to capture from.
-        if let Expression::Lambda { body, .. } = handler {
+        if let Some(body) = handler_body {
+            // Every `:=` name declared anywhere in `enclosing_body` OTHER than inside
+            // `body` itself (`skip` excludes it, so the handler's own locals never show
+            // up here) — a name among these that `body` also touches did not spring up
+            // twice by coincidence: a `:=` declaration always reassigns whatever already
+            // has that name, however far outside it lives, rather than shadowing it
+            // (`docs/mutation.md`), so it is the SAME binding. `atomic` is read off the
+            // AST directly (`declaration.atomic`, the DECLARING occurrence's own marker)
+            // rather than `self.env`, which by now holds only what is still top-level —
+            // every local scope closed as its own body finished checking.
             let mut outer_locals = Vec::new();
-            walk(enclosing_body, Some(handler), &mut outer_locals);
-            let captured_names: HashSet<&str> = outer_locals
-                .into_iter()
-                .filter_map(|touch| match touch {
-                    Touch::Write(name, _)
-                        if !self.env.is_top_level(name) && !self.env.is_atomic(name) =>
-                    {
-                        Some(name)
+            walk(enclosing_body, Some(body), &mut outer_locals);
+            let mut local_names: HashSet<&str> = HashSet::new();
+            let mut atomic_names: HashSet<&str> = HashSet::new();
+            for touch in &outer_locals {
+                if let Touch::Write(name, _, atomic) = touch {
+                    local_names.insert(name);
+                    if *atomic {
+                        atomic_names.insert(name);
                     }
-                    _ => None,
-                })
+                }
+            }
+            let captured_names: HashSet<&str> = local_names
+                .into_iter()
+                .filter(|name| !self.env.is_top_level(name) && !atomic_names.contains(name))
                 .collect();
+
             let mut handler_touches = Vec::new();
             walk(body, None, &mut handler_touches);
             for touch in &handler_touches {
                 if captured_names.contains(touch.name()) {
-                    return Err(self.shared_across_fibers(
+                    return Err(shared_across_fibers(
                         touch.name(),
                         touch.span(),
                         call_span,
@@ -203,20 +231,22 @@ impl TypeChecker {
         }
         None
     }
+}
 
-    fn shared_across_fibers(
-        &self,
-        name: &str,
-        touch: &Span,
-        call_span: &Span,
-        primitive: &'static str,
-    ) -> TypeError {
-        TypeError::SharedAcrossFibers {
-            name: name.to_string(),
-            primitive,
-            touch: touch.clone(),
-            span: call_span.clone(),
-        }
+/// Build the diagnostic: `name` is shared, touched at `touch`, through the launching call
+/// at `call_span` — a plain function (not a `TypeChecker` method, since it reads none of
+/// the checker's own state).
+fn shared_across_fibers(
+    name: &str,
+    touch: &Span,
+    call_span: &Span,
+    primitive: &'static str,
+) -> TypeError {
+    TypeError::SharedAcrossFibers {
+        name: name.to_string(),
+        primitive,
+        touch: touch.clone(),
+        span: call_span.clone(),
     }
 }
 
@@ -243,6 +273,48 @@ fn index_top_level_functions(program: &Program) -> HashMap<&str, Vec<&Expression
         }
     }
     defined
+}
+
+/// The body of a local (non-top-level) named handler `name` resolves to somewhere in
+/// `scope` — either a nested function declaration (`h = (c :: net.Connection) => < … >`,
+/// which parses as its own `FunctionDeclaration` inside the block, exactly like a
+/// top-level one) or a local variable bound to a lambda VALUE (`h = c => …`, which
+/// parses as a plain binding when the parser sees no reason to treat it as a
+/// declaration). No-hoisting means such a declaration already sits above its use, so
+/// searching the whole enclosing item's body finds it if anything does; over-broad (it
+/// does not stop at the call site, or refuse a same-named declaration inside an
+/// unrelated nested closure) in the same accepted direction as the rest of this module's
+/// coarse matching.
+fn find_local_handler_body<'a>(scope: &'a Expression, name: &str) -> Option<&'a Expression> {
+    let mut found = None;
+    let _: ControlFlow<()> = try_for_each_subexpression(scope, &mut |expression| {
+        if let Expression::Block { statements, .. } = expression {
+            for statement in statements {
+                let body = match statement {
+                    Statement::Item(Item::FunctionDeclaration(declaration))
+                        if declaration.name == name =>
+                    {
+                        Some(&declaration.body)
+                    }
+                    Statement::Item(Item::VariableDeclaration(declaration))
+                        if declaration.name == name =>
+                    {
+                        match &declaration.value {
+                            Expression::Lambda { body, .. } => Some(body.as_ref()),
+                            _ => None,
+                        }
+                    }
+                    _ => None,
+                };
+                if let Some(body) = body {
+                    found = Some(body);
+                    return ControlFlow::Break(());
+                }
+            }
+        }
+        ControlFlow::Continue(())
+    });
+    found
 }
 
 /// Every name `expression` reads or (re)declares, with where — the shape of
@@ -346,7 +418,11 @@ fn walk<'a>(expression: &'a Expression, skip: Option<&Expression>, out: &mut Vec
                     Statement::Item(Item::VariableDeclaration(declaration)) => {
                         walk(&declaration.value, skip, out);
                         if declaration.mutable {
-                            out.push(Touch::Write(&declaration.name, &declaration.span));
+                            out.push(Touch::Write(
+                                &declaration.name,
+                                &declaration.span,
+                                declaration.atomic,
+                            ));
                         }
                     }
                     Statement::Item(Item::FunctionDeclaration(declaration)) => {

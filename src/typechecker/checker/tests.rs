@@ -1001,3 +1001,30 @@ fn test_a_program_with_no_server_is_unaffected_by_the_fiber_sharing_check() {
                >";
     assert!(check_linked(src).is_ok());
 }
+
+#[test]
+fn test_fiber_handler_named_by_a_local_variable_is_still_checked() {
+    // `h` is a local (non-top-level) named handler, not an inline lambda — no-hoisting
+    // means it is declared above the call that passes it, so the check must find it there.
+    let src = "<< core.net\n\
+               hits := 0\n\
+               ^ = () -> Num => <\n  \
+                 h = (connection :: net.Connection) => < hits := hits + 1 >\n  \
+                 net.@tcpServe(\"127.0.0.1:59408\", h)\n  \
+                 0\n\
+               >";
+    assert_eq!(shared_across_fibers_name(src), "hits");
+}
+
+#[test]
+fn test_fiber_handler_capturing_an_atomic_local_of_the_enclosing_block_is_accepted() {
+    // The mirror of `test_fiber_handler_reaching_an_atomic_global_is_accepted`, one
+    // scope down: a BLOCK-local atomic binding is exactly as safe as a top-level one.
+    let src = "<< core.net\n\
+               ^ = () -> Num => <\n  \
+                 @hits := 0\n  \
+                 net.@tcpServe(\"127.0.0.1:59409\", connection => < hits := hits + 1 >)\n  \
+                 0\n\
+               >";
+    assert!(check_linked(src).is_ok());
+}
