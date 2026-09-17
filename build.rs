@@ -14,7 +14,7 @@
 //!    order). libgc must be installed to build/run Quilon (e.g. `libgc-dev` on
 //!    Debian/Ubuntu, `gc` on Arch). CI installs it explicitly.
 //!
-//! 2. Deterministically place the runtime staticlib (issue #38) — `quilon build`
+//! 2. Deterministically place the runtime staticlib — `quilon build`
 //!    links the compiled program against the `quilon-rt` *staticlib*. Cargo only
 //!    *uplifts* a dependency's staticlib to `target/<profile>/` when that crate is
 //!    a primary build target; as a mere dependency of `quilon`, cargo emits it to

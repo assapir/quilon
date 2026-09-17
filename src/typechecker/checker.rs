@@ -338,8 +338,7 @@ pub enum TypeError {
     /// A method called on the bare TYPE NAME (`Point.origin()`, not a value) whose body
     /// reads the receiver `it` — there is no value to bind it to. Only a STATIC method (one
     /// that never reads `it` — the natural spelling for a constructor, `Request.get(url)`)
-    /// may be called this way; this is what a checker/codegen agreement over #259's design
-    /// call (support static calls) requires rejecting.
+    /// may be called this way, which is what the checker and codegen agree on.
     StaticCallNeedsReceiverValue {
         method: String,
         type_name: String,

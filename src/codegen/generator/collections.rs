@@ -782,7 +782,7 @@ impl<'ctx> CodeGenerator<'ctx> {
     /// Emit the two trampolines a user key type `K` is hashed/compared through: `keyhash`
     /// loads the boxed key and returns its `%` `Num` hash; `keyeq` loads two boxed keys and
     /// returns `K`'s `==` as an `i64` (normalizing the member's `Bool`/`i1` across the C ABI).
-    /// Both call the monomorphized operator members `#178` emits for `K`.
+    /// Both call the monomorphized operator members codegen emits for `K`.
     fn emit_key_trampolines(
         &mut self,
         key_ty: &Type,
