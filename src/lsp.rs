@@ -1,33 +1,25 @@
 //! `quilon lsp` — the Quilon language server.
 //!
-//! A synchronous server over stdio (the `lsp-server` crate): one loop, one request at a
-//! time, and one fresh front-end run — the same lex → parse → link → check pipeline every
-//! other subcommand uses — behind each answer; definition, references, and rename stop
-//! after link, so a type error elsewhere in the document does not suppress them (see
-//! [`analysis::link_text`]). There is no incremental state: the open documents' text is the
-//! only thing the server holds, so every answer reflects the buffer as the editor last
-//! sent it, saved or not.
+//! A synchronous server over stdio (the `lsp-server` crate): one request at a time, one
+//! fresh front-end run (the same lex → parse → link → check pipeline every other subcommand
+//! uses) behind each answer. Definition, references, and rename stop after link, so a type
+//! error elsewhere in the document does not suppress them (see [`analysis::link_text`]).
+//! There is no incremental state: the open documents' text is the only thing the server
+//! holds, so every answer reflects the buffer as the editor last sent it, saved or not.
 //!
-//! The server answers diagnostics, go to definition, find references,
-//! rename, hover (the expression's inferred type, or — for a matcher inside
-//! `assert`/`expect` — its signature and the type it applies to), completion (triggered on
-//! `.`; see [`analysis::completions_at`]), semantic tokens (block `< >` delimiters versus
-//! comparison operators, plus declared type/function/parameter names), and a Run and a
-//! Debug code lens on every test suite and case. Both carry the block's own `/`-joined
-//! path as their client-side command's argument — `quilon.runTests` or
-//! `quilon.debugTests` — so running and debugging are the editor's job. The custom
-//! `quilon/testItems` request answers the same test tree as a flat list, each entry
-//! carrying that same path, for a client building a test explorer rather than a lens. The
-//! custom `quilon/corelibDir` request materializes the embedded corelib modules (which
-//! exist on no disk — see [`crate::modules`]) under the compiler's cache directory and
-//! answers with that directory, so a client can point a debugger's source map at real
-//! files when a `--debug` build's DWARF attributes a step to `corelib/*.qn`.
+//! Answers diagnostics, go to definition, find references, rename, hover, completion
+//! (triggered on `.`; see [`analysis::completions_at`]), semantic tokens, and a Run/Debug
+//! code lens on every test suite and case — both carrying the block's `/`-joined path as
+//! the client-side `quilon.runTests`/`quilon.debugTests` command's argument. The custom
+//! `quilon/testItems` request answers the same test tree as a flat list for a client
+//! building a test explorer; `quilon/corelibDir` materializes the embedded corelib modules
+//! (see [`crate::modules`]) under the compiler's cache directory, so a `--debug` build's
+//! DWARF can point a debugger's source map at real files.
 //!
 //! Find references and rename share one table: [`analysis::Resolver`] walks the
-//! import-linked program once, resolving every identifier to the declaration it binds.
-//! Both capabilities are document-scoped — a name declared in another file (an import)
-//! answers with a location there for go-to-definition, but carries no references or
-//! rename inside this document.
+//! import-linked program once, resolving every identifier to its declaration. Both are
+//! document-scoped — a name declared in another file answers with a location there for
+//! go-to-definition, but carries no references or rename inside this document.
 //!
 //! The protocol speaks UTF-16 line/column positions; every span crosses that boundary
 //! through [`DocumentPositions`], the shared byte-offset translation in `source_map`.

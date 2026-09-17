@@ -95,12 +95,10 @@ impl<'a> Parser<'a> {
     pub(super) fn parse_ternary(&mut self) -> Result<Expression, ParseError> {
         let expression = self.parse_logical_or()?;
 
-        // Check for ? operator - could be ternary or pattern match
         if self.check(&TokenKind::Question) {
             self.advance();
             let question_span = self.previous_span();
 
-            // Check if it's pattern match (next token is |) or ternary
             if self.check(&TokenKind::Pipe) {
                 if self.bare_match_forbidden {
                     return Err(ParseError::new(
@@ -268,7 +266,6 @@ impl<'a> Parser<'a> {
                     self.expect(&TokenKind::ParenClose)?;
                     let span = self.span(arguments[0].span().start, self.previous_span().end);
 
-                    // Create function call with method name
                     expression = Expression::Call {
                         function: Box::new(Expression::Identifier {
                             name: field,
