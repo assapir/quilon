@@ -4,10 +4,10 @@
 //! so sharing it costs nothing) rather than a second analysis. See
 //! `docs/concurrency/README.md#sharing-state-across-fibers`.
 //!
-//! `net.@tcpServe(address, handler)` is the one place, until `http.@serve` lands, where
-//! `handler` runs on a fiber of its own per call — [`FIBER_HANDLER_PRIMITIVES`] is the
-//! whole surface a second primitive joins. Two things reaching `handler` are unsafe unless
-//! atomic:
+//! `net.@tcpServe(address, handler)` and `http.@serve(address, handler)` (lowered onto the
+//! same accept loop) are where `handler` runs on a fiber of its own per call —
+//! [`FIBER_HANDLER_PRIMITIVES`] is the whole surface a further primitive joins. Two things
+//! reaching `handler` are unsafe unless atomic:
 //!
 //! - a non-atomic top-level `:=` binding, read or written by `handler` or by anything it
 //!   calls transitively (walked the coarse way `ast::reachability` already does for the
@@ -32,10 +32,10 @@ use crate::ast::{Statement, at_primitive_name};
 use std::collections::{HashMap, HashSet};
 
 /// Every primitive whose LAST argument is a handler run on its own fiber per call — the
-/// bare `@` name paired with how a program spells calling it, for the diagnostic. Adding
-/// `http.@serve` (lowered onto the same accept loop, see `docs/corelib/net.md`) is one
-/// more entry here.
-const FIBER_HANDLER_PRIMITIVES: &[(&str, &str)] = &[("tcpServe", "net.@tcpServe")];
+/// bare `@` name paired with how a program spells calling it, for the diagnostic. A
+/// further primitive on the same accept loop is one more entry here.
+const FIBER_HANDLER_PRIMITIVES: &[(&str, &str)] =
+    &[("tcpServe", "net.@tcpServe"), ("serve", "http.@serve")];
 
 /// One place a name is read or (re)declared/written — the callers below (the global-
 /// reachability walk and its result) never need to tell which, only where. A `:=`

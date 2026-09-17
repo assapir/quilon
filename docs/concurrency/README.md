@@ -100,10 +100,10 @@ rejects one that would (force it into a plain `=` binding first, then reassign).
 *inside* a bound record still follows the record's own rules; cross-field invariants belong
 to an atomic type `T = @{ … }`. (See `examples/atomic_binding.qn`.)
 
-The checker enforces the sharing rule against `net.@tcpServe`'s `handler` argument — the
-first Quilon code that runs on more than one fiber: a non-atomic `:=` binding it reaches,
-directly or through a call, is rejected at the `net.@tcpServe(...)` call under
-[QN350](../tooling/errors.md#qn350---value-shared-across-fibers). (See
+The checker enforces the sharing rule against `net.@tcpServe`'s and `http.@serve`'s
+`handler` argument — the first Quilon code that runs on more than one fiber: a non-atomic
+`:=` binding it reaches, directly or through a call, is rejected at the launching call
+under [QN350](../tooling/errors.md#qn350---value-shared-across-fibers). (See
 `examples/shared_counter.qn`, whose handler counts connections into an atomic
 `@visits := 0`.)
 

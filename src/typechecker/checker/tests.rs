@@ -1074,3 +1074,33 @@ fn test_fiber_handler_local_of_its_own_is_accepted_despite_a_same_named_local_el
                >";
     assert!(check_linked(src).is_ok());
 }
+
+#[test]
+fn test_http_serve_handler_writing_a_plain_global_is_rejected() {
+    // `http.@serve` joins `net.@tcpServe` on the same fiber-launching accept loop, so the
+    // check must reject a non-atomic global its handler writes exactly the same way.
+    let src = "<< core.http\n\
+               hits := 0\n\
+               ^ = () -> Num => <\n  \
+                 http.@serve(\"127.0.0.1:59414\", request => <\n    \
+                   hits := hits + 1\n    \
+                   http.Response.reply(http.OK, \"ok\")\n  \
+                 >)\n  \
+                 0\n\
+               >";
+    assert_eq!(shared_across_fibers_name(src), "hits");
+}
+
+#[test]
+fn test_http_serve_handler_writing_an_atomic_global_is_accepted() {
+    let src = "<< core.http\n\
+               @hits := 0\n\
+               ^ = () -> Num => <\n  \
+                 http.@serve(\"127.0.0.1:59415\", request => <\n    \
+                   hits := hits + 1\n    \
+                   http.Response.reply(http.OK, \"ok\")\n  \
+                 >)\n  \
+                 0\n\
+               >";
+    assert!(check_linked(src).is_ok());
+}
