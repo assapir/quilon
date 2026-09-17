@@ -1,9 +1,12 @@
-//! End-to-end proof of `http.@serve`: a GET, a POST, a malformed request line, and a
-//! `/quit` path that stops the server through an atomic global — the same pattern
-//! `tcp_serve_test.rs` uses for the raw layer underneath, one level up the stack. The
-//! client side is a plain `std::net::TcpStream` writing the request bytes by hand and
-//! reading the reply to EOF (the server always closes after one response), under both the
-//! in-process JIT (`quilon run`) and a native AOT binary (`quilon build`).
+//! End-to-end proof of `http.@serve`: a GET and a POST driven by `core.http`'s own client
+//! (a second, short-lived `quilon run` program), then a malformed request line and a
+//! `/quit` path that stops the server through an atomic global driven raw (the client
+//! cannot produce a malformed request line at all, and the `/quit` connection's own reply
+//! races `kill` — see `drive_malformed_then_quit`) — the same pattern `tcp_serve_test.rs`
+//! uses for the raw layer underneath, one level up the stack. Both the client program and
+//! the raw checks run under the in-process JIT (`quilon run`) and a native AOT binary
+//! (`quilon build`) of the SERVER; the client program itself always runs under the JIT —
+//! it is a checking tool here, not the thing under test.
 
 mod common;
 
@@ -61,6 +64,56 @@ hummus = (request :: http.Request) -> http.Response => <
     )
 }
 
+/// A second, short-lived program: places one GET and one POST order against the server
+/// already listening on `address` (`host:port`) with `core.http`'s own client
+/// (`http.Request.get`/`post(...).send()`), asserting each reply's status and body — the
+/// same checks `examples/http_server.qn` makes of itself. Exits 0 on success; a mismatch or
+/// a transport failure trips an assertion (exit 5), which `run_client_check` surfaces.
+fn client_check_program(address: &str) -> String {
+    format!(
+        r#"
+<< core.http
+<< core.test
+
+checkReply = (reply :: http.Response, expectedStatus :: Num, expectedBody :: Text) -> $ => <
+  assert(reply.status(), equals(expectedStatus))
+  assert(reply.body(), equals(expectedBody))
+>
+
+^ = () -> Num => <
+  http.Request.get("http://{address}/pantry").send() ?
+    | Ok(reply)    => checkReply(reply, 200, "chickpeas: plenty")
+    | NotOk(error) => test.failAt(error)
+
+  http.Request.post(
+    "http://{address}/pantry", http.Body {{ content = "beans", contentType = "text/plain" }}
+  ).send() ?
+    | Ok(reply)    => checkReply(reply, 201, "stocked ")
+    | NotOk(error) => test.failAt(error)
+
+  0
+>
+"#
+    )
+}
+
+/// Run `client_check_program(address)` under the JIT and return its exit code and captured
+/// stderr — a diagnostic's own text is worth showing on failure, since a transport failure
+/// here (the client cannot reach the server that is, by this point in each test, already
+/// listening) is a bug in one of the two layers, not something to work around.
+fn run_client_check(quilon: &str, address: &str) -> (Option<i32>, String) {
+    let file = common::temp_ql("http_serve_client_check", &client_check_program(address));
+    let output = Command::new(quilon)
+        .args(["run", file.to_str().unwrap()])
+        .output()
+        .expect("run the client-check program");
+    let _ = std::fs::remove_file(&file);
+    (
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr).into_owned(),
+    )
+}
+
 /// Connect to `host:port` with a bounded read/write timeout on every op, mirroring
 /// `tcp_serve_test.rs`'s own helper: a bug that leaves a connection open with nothing
 /// arriving fails the test in a few seconds instead of hanging the run.
@@ -84,17 +137,21 @@ fn connect_once_listening(host: &str, port: u16) -> TcpStream {
     }
 }
 
+/// Block until the server at `host:port` is accepting connections — the one place any test
+/// below waits out the server's own startup, so every later connect attempt (raw or through
+/// the client-check program, which retries nothing on its own) can fail fast on a genuine
+/// problem instead of a race with `@serve` still binding.
+fn wait_until_listening(host: &str, port: u16) {
+    drop(connect_once_listening(host, port));
+}
+
 /// Send `request` over a fresh connection and read the reply to EOF — valid because the
 /// server always answers with `connection: close` and closes right after, one response per
-/// connection (this version's own rule). `first` waits out the server's own startup;
-/// every later call connects once and fails fast if the server is gone, rather than
-/// burning the same retry budget on a genuine crash between requests.
-fn send_raw(host: &str, port: u16, request: &[u8], first: bool) -> String {
-    let mut stream = if first {
-        connect_once_listening(host, port)
-    } else {
-        connect_with_timeout(host, port).expect("connect to the running server")
-    };
+/// connection (this version's own rule). Connects once and fails fast: by the time any
+/// caller reaches this, `wait_until_listening` has already confirmed the server is up, so a
+/// connect failure here is a genuine problem, not the server still starting.
+fn send_raw(host: &str, port: u16, request: &[u8]) -> String {
+    let mut stream = connect_with_timeout(host, port).expect("connect to the running server");
     stream.write_all(request).expect("write the request");
     let mut response = String::new();
     stream
@@ -120,35 +177,13 @@ fn wait_bounded(mut child: Child, timeout: Duration) -> i32 {
     }
 }
 
-/// Drive a GET, a POST, a malformed request line, and finally `/quit` against a server
-/// already listening on `host:port`, asserting each reply's status line, `content-length`,
-/// and body.
-fn drive_get_post_malformed_then_quit(host: &str, port: u16) {
-    let get = send_raw(
-        host,
-        port,
-        b"GET /pantry HTTP/1.1\r\nHost: shop\r\nConnection: close\r\n\r\n",
-        true,
-    );
-    assert!(get.starts_with("HTTP/1.1 200 OK\r\n"), "GET reply: {get}");
-    assert!(get.contains("content-length: 17\r\n"), "GET reply: {get}");
-    assert!(get.ends_with("chickpeas: plenty"), "GET reply: {get}");
-
-    let post = send_raw(
-        host,
-        port,
-        b"POST /pantry HTTP/1.1\r\nHost: shop\r\nContent-Length: 5\r\nConnection: close\r\n\r\nbeans",
-        false,
-    );
-    assert!(
-        post.starts_with("HTTP/1.1 201 Created\r\n"),
-        "POST reply: {post}"
-    );
-    assert!(post.contains("content-length: 8\r\n"), "POST reply: {post}");
-    // The request body is never read: a POST arrives with an empty body.
-    assert!(post.ends_with("stocked "), "POST reply: {post}");
-
-    let malformed = send_raw(host, port, b"GARBAGE\r\n\r\n", false);
+/// Drive a malformed request line and finally `/quit` against a server already listening
+/// on `host:port`, raw — the GET and POST cases are the client program's job
+/// (`run_client_check`), since the client cannot produce a malformed request line at all,
+/// and the `/quit` reply races `kill` (see the comment below), which a real client would
+/// just read as a transport failure rather than the thing this test wants to prove.
+fn drive_malformed_then_quit(host: &str, port: u16) {
+    let malformed = send_raw(host, port, b"GARBAGE\r\n\r\n");
     assert!(
         malformed.starts_with("HTTP/1.1 400 Bad Request\r\n"),
         "malformed reply: {malformed}"
@@ -160,7 +195,7 @@ fn drive_get_post_malformed_then_quit(host: &str, port: u16) {
 
     // A request that is nothing but the blank line is a COMPLETE (if empty) head, not a
     // peer that closed early — it must still get a 400, not silence.
-    let blank_only = send_raw(host, port, b"\r\n\r\n", false);
+    let blank_only = send_raw(host, port, b"\r\n\r\n");
     assert!(
         blank_only.starts_with("HTTP/1.1 400 Bad Request\r\n"),
         "blank-only reply: {blank_only}"
@@ -182,9 +217,10 @@ fn drive_get_post_malformed_then_quit(host: &str, port: u16) {
 #[test]
 fn jit_http_serve_answers_then_kill_stops_the_server() {
     let port = free_port();
+    let quilon = env!("CARGO_BIN_EXE_quilon");
     let file = common::temp_ql("http_serve_jit", &program(&format!("127.0.0.1:{port}")));
 
-    let child = Command::new(env!("CARGO_BIN_EXE_quilon"))
+    let child = Command::new(quilon)
         .args(["run", file.to_str().unwrap()])
         .stdin(Stdio::null())
         .stdout(Stdio::null())
@@ -192,7 +228,16 @@ fn jit_http_serve_answers_then_kill_stops_the_server() {
         .spawn()
         .expect("spawn quilon run");
 
-    drive_get_post_malformed_then_quit("127.0.0.1", port);
+    wait_until_listening("127.0.0.1", port);
+    let (code, stderr) = run_client_check(quilon, &format!("127.0.0.1:{port}"));
+    assert_eq!(
+        code,
+        Some(0),
+        "the client-check program must exit 0 (a mismatch or a transport failure trips \
+         an assertion in it):\n{stderr}"
+    );
+
+    drive_malformed_then_quit("127.0.0.1", port);
 
     assert_eq!(
         wait_bounded(child, Duration::from_secs(15)),
@@ -241,7 +286,16 @@ fn aot_http_serve_answers_then_kill_stops_the_server() {
         .spawn()
         .expect("spawn the native AOT server binary");
 
-    drive_get_post_malformed_then_quit("127.0.0.1", port);
+    wait_until_listening("127.0.0.1", port);
+    let (code, stderr) = run_client_check(quilon, &format!("127.0.0.1:{port}"));
+    assert_eq!(
+        code,
+        Some(0),
+        "the client-check program must exit 0 (a mismatch or a transport failure trips \
+         an assertion in it):\n{stderr}"
+    );
+
+    drive_malformed_then_quit("127.0.0.1", port);
 
     assert_eq!(
         wait_bounded(child, Duration::from_secs(15)),

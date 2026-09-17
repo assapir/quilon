@@ -1,9 +1,8 @@
 ~ A chickpea stand over `http.@serve`: `hummus` answers a GET with what's on the counter, a
 ~ POST with what got stocked, and anything else with 405. `^` opens the stand, places one
-~ order of each kind with `net.@tcpRequest` (the same round trip a real client would make),
-~ asserts both replies, then closes the stand before returning.
+~ order of each kind with `core.http`'s own client, asserts both replies, then closes the
+~ stand before returning.
 << core.http
-<< core.net
 << core.test
 
 hummus = (request :: http.Request) -> http.Response => <
@@ -13,18 +12,23 @@ hummus = (request :: http.Request) -> http.Response => <
     | _               => http.Response.status(405)
 >
 
+~ Both orders below check the same two things: the status code and the body text.
+checkReply = (reply :: http.Response, expectedStatus :: Num, expectedBody :: Text) -> $ => <
+  assert(reply.status(), equals(expectedStatus))
+  assert(reply.body(), equals(expectedBody))
+>
+
 ^ = () -> Num => <
   stand = http.@serve("127.0.0.1:9048", request => hummus(request))
 
-  net.@tcpRequest(
-    "127.0.0.1:9048", "GET /counter HTTP/1.1\r\nHost: stand\r\nConnection: close\r\n\r\n") ?
-    | Ok(reply)    => assert(reply, contains("chickpeas: plenty"))
+  http.Request.get("http://127.0.0.1:9048/counter").send() ?
+    | Ok(reply)    => checkReply(reply, 200, "chickpeas: plenty")
     | NotOk(error) => test.failAt(error)
 
-  net.@tcpRequest(
-    "127.0.0.1:9048",
-    "POST /counter HTTP/1.1\r\nHost: stand\r\nContent-Length: 5\r\nConnection: close\r\n\r\nbeans") ?
-    | Ok(reply)    => assert(reply, contains("HTTP/1.1 201 Created"))
+  http.Request.post(
+    "http://127.0.0.1:9048/counter", http.Body { content = "beans", contentType = "text/plain" }
+  ).send() ?
+    | Ok(reply)    => checkReply(reply, 201, "stocked ")
     | NotOk(error) => test.failAt(error)
 
   stand.kill(1)
