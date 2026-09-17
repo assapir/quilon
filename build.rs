@@ -1,44 +1,25 @@
 //! Cargo build script for the `quilon` crate.
 //!
-//! NOTE: this is the *cargo build script* (runs at `cargo build` time). It is a
-//! different file from `src/build.rs`, which implements the `quilon build`
-//! subcommand (native AOT of a `.qn` program). Don't confuse the two.
+//! NOTE: this is the *cargo build script* (runs at `cargo build` time) — not `src/build.rs`,
+//! which implements the `quilon build` subcommand (native AOT of a `.qn` program).
 //!
 //! Two jobs:
 //!
-//! 1. libgc link trigger — the Boehm GC (libgc) is linked via a
-//!    `#[link(name = "gc")]` extern block in `src/runtime/intrinsics.rs` rather
-//!    than here: attaching the link to the actual `GC_malloc`/`GC_init` symbol
-//!    references keeps the linker from dropping libgc under `--as-needed` (which
-//!    a bare `cargo:rustc-link-lib=gc` here is subject to, depending on link
-//!    order). libgc must be installed to build/run Quilon (e.g. `libgc-dev` on
-//!    Debian/Ubuntu, `gc` on Arch). CI installs it explicitly.
+//! 1. Libgc link trigger — links libgc via the `#[link(name = "gc")]` extern block on the
+//!    actual `GC_malloc`/`GC_init` symbol references in `src/runtime/intrinsics.rs`, rather
+//!    than a bare `cargo:rustc-link-lib=gc` here, which `--as-needed` can drop. libgc must
+//!    be installed (`libgc-dev` on Debian/Ubuntu, `gc` on Arch); CI installs it.
 //!
-//! 2. Deterministically place the runtime staticlib — `quilon build`
-//!    links the compiled program against the `quilon-rt` *staticlib*. Cargo only
-//!    *uplifts* a dependency's staticlib to `target/<profile>/` when that crate is
-//!    a primary build target; as a mere dependency of `quilon`, cargo emits it to
-//!    `target/<profile>/deps/libquilon_rt-<hash>.a` and never to a fixed name in
-//!    `target/<profile>/`. So `cargo build --release` followed by `quilon build …`
-//!    (the documented flow) used to fail: the archive wasn't where `quilon build`
-//!    looks for it.
-//!
-//!    We can't just copy the `deps/` archive from here: this build script runs
-//!    *before* cargo compiles the `quilon-rt` dependency, so at this point the
-//!    archive doesn't exist yet. Instead we build `quilon-rt` ourselves into an
-//!    isolated target dir (a nested `cargo build -p quilon-rt` — the same
-//!    technique `tests/examples_test.rs` uses; `-p` means the `quilon` bin/build
-//!    script is *not* re-entered, so there is no recursion, and a dedicated
-//!    `--target-dir` avoids deadlocking on the outer build's `target/` lock),
-//!    then copy the freshly emitted archive to `libquilon_rt.bundled.a` next to
-//!    where the `quilon` binary lands (baked as `QUILON_RT_LIB` for the dev
-//!    loop) — a name cargo itself never produces, so a plain `cargo build -p
-//!    quilon-rt` or `cargo build --workspace` (which uplifts its own
-//!    `libquilon_rt.a` to that same directory) can't overwrite it — and embed a
-//!    gzip-compressed copy (baked as `QUILON_RT_GZ`, with a `QUILON_RT_KEY`
-//!    content key) that `src/build.rs` `include_bytes!`s into the compiler
-//!    binary itself — so a *distributed* `quilon` (a bare binary download, no
-//!    archive alongside it) can extract and link the runtime from its own
+//! 2. Deterministically place the runtime staticlib — cargo only uplifts a dependency's
+//!    staticlib to `target/<profile>/` when that crate is a primary build target, so as a
+//!    mere dependency `quilon-rt`'s archive lands at `target/<profile>/deps/` under a
+//!    hashed name `quilon build` can't find. This job builds `quilon-rt` itself into an
+//!    isolated `--target-dir` (so it doesn't re-enter this script or deadlock on the outer
+//!    build's `target/` lock) and copies the result to the fixed name
+//!    `libquilon_rt.bundled.a` (baked as `QUILON_RT_LIB`) next to the `quilon` binary, and
+//!    embeds a gzip-compressed copy (`QUILON_RT_GZ`, keyed by `QUILON_RT_KEY`) that
+//!    `src/build.rs` `include_bytes!`s into the compiler binary, so a distributed `quilon`
+//!    binary (no archive alongside it) can extract and link the runtime from its own
 //!    embedded copy.
 
 use std::path::PathBuf;
