@@ -11,13 +11,21 @@ use crate::mem::{QlSlice, alloc_text};
 use std::collections::HashMap;
 use std::os::raw::c_void;
 
+/// One snapshot slot: a key's identity pair and its value box, kept together so the
+/// collector anchors all three with one GC-allocated array (see [`refresh_snapshot`])
+/// instead of three arrays that must be rebuilt, and stay the same length, in lockstep.
+#[repr(C)]
+struct QlMapEntry {
+    key_a: u64,
+    key_b: u64,
+    value: *const c_void,
+}
+
 /// GC-managed native map header. See the module docs for the GC-visibility contract.
 #[repr(C)]
 struct QlMap {
     table: HashMap<QlKey, *const c_void, FixedState>,
-    snapshot_a: *const u64,
-    snapshot_b: *const u64,
-    snapshot_values: *const *const c_void,
+    snapshot: *const QlMapEntry,
     len: i64,
 }
 
@@ -30,9 +38,7 @@ unsafe fn build_map(table: HashMap<QlKey, *const c_void, FixedState>) -> *mut Ql
             header,
             QlMap {
                 table,
-                snapshot_a: std::ptr::null(),
-                snapshot_b: std::ptr::null(),
-                snapshot_values: std::ptr::null(),
+                snapshot: std::ptr::null(),
                 len: 0,
             },
         );
@@ -41,26 +47,27 @@ unsafe fn build_map(table: HashMap<QlKey, *const c_void, FixedState>) -> *mut Ql
     header
 }
 
-/// Rebuild `header`'s ordered snapshot arrays and `len` from its current `table`. Called
+/// Rebuild `header`'s ordered snapshot array and `len` from its current `table`. Called
 /// after every in-place mutation (`__map_set`/`__map_remove`) so `keys`/`values`/`each`
 /// keep seeing a consistent, freshly GC-anchored snapshot.
 unsafe fn refresh_snapshot(header: *mut QlMap) {
     let table = unsafe { &(*header).table };
     let n = table.len();
-    let snapshot_a = alloc_slots::<u64>(n);
-    let snapshot_b = alloc_slots::<u64>(n);
-    let snapshot_values = alloc_slots::<*const c_void>(n);
+    let snapshot = alloc_slots::<QlMapEntry>(n);
     for (i, (key, value)) in table.iter().enumerate() {
         unsafe {
-            *snapshot_a.add(i) = key.a;
-            *snapshot_b.add(i) = key.b;
-            *snapshot_values.add(i) = *value;
+            std::ptr::write(
+                snapshot.add(i),
+                QlMapEntry {
+                    key_a: key.a,
+                    key_b: key.b,
+                    value: *value,
+                },
+            );
         }
     }
     unsafe {
-        (*header).snapshot_a = snapshot_a;
-        (*header).snapshot_b = snapshot_b;
-        (*header).snapshot_values = snapshot_values;
+        (*header).snapshot = snapshot;
         (*header).len = n as i64;
     }
 }
@@ -195,15 +202,15 @@ pub extern "C" fn __map_len(map: *const c_void) -> i64 {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn __map_key_a(map: *const c_void, i: i64) -> i64 {
-    unsafe { *(*(map as *const QlMap)).snapshot_a.add(i as usize) as i64 }
+    unsafe { (*(*(map as *const QlMap)).snapshot.add(i as usize)).key_a as i64 }
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn __map_key_b(map: *const c_void, i: i64) -> i64 {
-    unsafe { *(*(map as *const QlMap)).snapshot_b.add(i as usize) as i64 }
+    unsafe { (*(*(map as *const QlMap)).snapshot.add(i as usize)).key_b as i64 }
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn __map_val(map: *const c_void, i: i64) -> *const c_void {
-    unsafe { *(*(map as *const QlMap)).snapshot_values.add(i as usize) }
+    unsafe { (*(*(map as *const QlMap)).snapshot.add(i as usize)).value }
 }

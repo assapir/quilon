@@ -1,10 +1,10 @@
 // Lexer implementation for Quilon
 
 use crate::diagnostic::Code;
-use crate::lexer::bidi;
 use crate::lexer::token::BidiIssue;
 use crate::lexer::{FileId, ROOT_FILE, Span, Token, TokenKind, TokenLexError};
 use logos::Logos;
+use quilon_rt::bidi;
 
 /// Namespace for the lexer's entry point. Tokenizing is a single batch call
 /// (`Lexer::tokenize`); there is no streaming/stateful lexer.

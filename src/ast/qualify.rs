@@ -24,8 +24,8 @@
 //! - the built-ins that belong to no module (`Result`/`Ok`/`NotOk`, `assert`, matchers).
 
 use crate::ast::nodes::{
-    Expression, InterpolationPart, Item, MethodDeclaration, Parameter, Pattern, Program, RECEIVER,
-    Statement, Type, TypeDefinition,
+    Expression, FunctionDeclaration, InterpolationPart, Item, MethodDeclaration, Parameter,
+    Pattern, Program, RECEIVER, Statement, Type, TypeDefinition,
 };
 use crate::diagnostic::Code;
 use crate::lexer::Span;
@@ -343,21 +343,7 @@ impl Walker<'_> {
                 }
                 self.expression(&mut declaration.value)
             }
-            Item::FunctionDeclaration(declaration) => {
-                self.locals.push(HashSet::new());
-                for parameter in &mut declaration.parameters {
-                    self.parameter(parameter)?;
-                }
-                if let Some(annotation) = &mut declaration.return_type {
-                    self.type_(annotation, &declaration.span)?;
-                }
-                if let Some(annotation) = &mut declaration.binding_type {
-                    self.type_(annotation, &declaration.span)?;
-                }
-                let result = self.expression(&mut declaration.body);
-                self.locals.pop();
-                result
-            }
+            Item::FunctionDeclaration(declaration) => self.function_declaration_body(declaration),
             Item::TypeDeclaration(declaration) => {
                 let span = declaration.span.clone();
                 match &mut declaration.type_definition {
@@ -385,6 +371,30 @@ impl Walker<'_> {
                 Ok(())
             }
         }
+    }
+
+    /// A function declaration's own scope: push a fresh locals frame, walk its parameters,
+    /// return-type annotation, binding-type annotation, and body, then pop the frame. Shared
+    /// by a top-level declaration (`item`) and a block-local one (`statement`) — the two
+    /// differ only in whether the declaration's own name is already in scope for
+    /// self-recursion, which `statement` handles at its call site before calling this.
+    fn function_declaration_body(
+        &mut self,
+        declaration: &mut FunctionDeclaration,
+    ) -> Result<(), QualifyError> {
+        self.locals.push(HashSet::new());
+        for parameter in &mut declaration.parameters {
+            self.parameter(parameter)?;
+        }
+        if let Some(annotation) = &mut declaration.return_type {
+            self.type_(annotation, &declaration.span)?;
+        }
+        if let Some(annotation) = &mut declaration.binding_type {
+            self.type_(annotation, &declaration.span)?;
+        }
+        let result = self.expression(&mut declaration.body);
+        self.locals.pop();
+        result
     }
 
     fn method(&mut self, method: &mut MethodDeclaration) -> Result<(), QualifyError> {
@@ -431,22 +441,11 @@ impl Walker<'_> {
                 }
                 self.declare(&declaration.name, &declaration.span)
             }
-            // …while a local function is in scope for its own body (self-recursion).
+            // …while a local function is in scope for its own body (self-recursion), so its
+            // name is declared here, before the shared walk, unlike the top-level case.
             Statement::Item(Item::FunctionDeclaration(declaration)) => {
                 self.declare(&declaration.name, &declaration.span)?;
-                self.locals.push(HashSet::new());
-                for parameter in &mut declaration.parameters {
-                    self.parameter(parameter)?;
-                }
-                if let Some(annotation) = &mut declaration.return_type {
-                    self.type_(annotation, &declaration.span)?;
-                }
-                if let Some(annotation) = &mut declaration.binding_type {
-                    self.type_(annotation, &declaration.span)?;
-                }
-                let result = self.expression(&mut declaration.body);
-                self.locals.pop();
-                result
+                self.function_declaration_body(declaration)
             }
             Statement::Item(item @ Item::TypeDeclaration(_)) => self.item(item),
         }

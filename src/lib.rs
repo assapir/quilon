@@ -12,7 +12,6 @@ pub mod lsp;
 pub mod modules;
 pub mod parser;
 pub mod quips;
-pub mod runtime;
 pub mod source_extension;
 pub mod source_map;
 pub mod status;

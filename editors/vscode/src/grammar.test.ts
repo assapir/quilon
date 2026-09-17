@@ -9,30 +9,86 @@
 // before the single-char ones. We assert each operator yields exactly one token
 // with one scope.
 //
-// We tokenize with a small faithful re-implementation of that algorithm
-// (`./grammar`) rather than the native `vscode-textmate` engine, to keep the
-// tests dependency-free and runnable under plain `node --test`.
+// We tokenize through the real `vscode-textmate` engine (the same one VS Code
+// runs), backed by `vscode-oniguruma` for its regex engine, so these tests
+// exercise the actual grammar the editor uses.
 
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
-import { Grammar, type Token } from "./grammar";
+import { loadWASM, OnigScanner, OnigString } from "vscode-oniguruma";
+import { INITIAL, parseRawGrammar, Registry, type IGrammar, type IOnigLib } from "vscode-textmate";
 
-const grammar = Grammar.fromFile(join(__dirname, "..", "syntaxes", "quilon.tmLanguage.json"));
+/** One tokenized slice of a line: its text and the innermost (last) scope on its scope stack. */
+export interface Token {
+  readonly text: string;
+  /** The grammar's innermost scope for this slice, or `undefined` for unscoped (plain) text. */
+  readonly scope: string | undefined;
+}
+
+const GRAMMAR_PATH = join(__dirname, "..", "syntaxes", "quilon.tmLanguage.json");
+const SCOPE_NAME = "source.quilon";
+
+const onigLib: Promise<IOnigLib> = (async () => {
+  const wasmPath = require.resolve("vscode-oniguruma/release/onig.wasm");
+  await loadWASM(readFileSync(wasmPath).buffer);
+  return {
+    createOnigScanner: (patterns: string[]) => new OnigScanner(patterns),
+    createOnigString: (s: string) => new OnigString(s),
+  };
+})();
+
+const grammarPromise: Promise<IGrammar> = (async () => {
+  const registry = new Registry({
+    onigLib,
+    loadGrammar: async (scopeName: string) => {
+      if (scopeName !== SCOPE_NAME) {
+        return null;
+      }
+      return parseRawGrammar(readFileSync(GRAMMAR_PATH, "utf8"), GRAMMAR_PATH);
+    },
+  });
+  const grammar = await registry.loadGrammar(SCOPE_NAME);
+  if (!grammar) {
+    throw new Error(`failed to load grammar ${SCOPE_NAME}`);
+  }
+  return grammar;
+})();
+
+/**
+ * Tokenize a single line with the real engine (from `INITIAL` state — every
+ * test line here is self-contained, none spans a multi-line construct) and
+ * flatten each token's scope stack down to its innermost scope, mirroring the
+ * `name`-per-slice shape the tests reason about. The grammar's own top-level
+ * `source.quilon` scope (present on every token) counts as "unscoped".
+ */
+async function tokenizeLine(line: string): Promise<Token[]> {
+  const grammar = await grammarPromise;
+  const { tokens } = grammar.tokenizeLine(line, INITIAL);
+  return tokens.map((t) => {
+    const scopes = t.scopes.filter((s) => s !== SCOPE_NAME);
+    return {
+      text: line.slice(t.startIndex, t.endIndex),
+      scope: scopes.length > 0 ? scopes[scopes.length - 1] : undefined,
+    };
+  });
+}
 
 /** All scoped (non-plain) tokens of a line, in order. */
-function scopedTokens(line: string): Token[] {
-  return grammar.tokenizeLine(line).filter((t) => t.scope !== undefined);
+async function scopedTokens(line: string): Promise<Token[]> {
+  return (await tokenizeLine(line)).filter((t) => t.scope !== undefined);
 }
 
 /** Find the single token whose text is exactly `op`; fail if 0 or >1. */
-function uniqueToken(line: string, op: string): Token {
-  const matches = grammar.tokenizeLine(line).filter((t) => t.text === op);
+async function uniqueToken(line: string, op: string): Promise<Token> {
+  const all = await tokenizeLine(line);
+  const matches = all.filter((t) => t.text === op);
   assert.equal(
     matches.length,
     1,
     `expected exactly one token with text ${JSON.stringify(op)} in ${JSON.stringify(line)}, ` +
-      `got ${JSON.stringify(grammar.tokenizeLine(line))}`,
+      `got ${JSON.stringify(all)}`,
   );
   return matches[0];
 }
@@ -61,44 +117,42 @@ for (const [op, scope] of MULTI_CHAR_OPERATORS) {
   const spaced = `a ${op} b`;
   const tight = `a${op}b`;
 
-  test(`multi-char operator ${op} is one token with scope ${scope}`, () => {
-    for (const line of [spaced, tight]) {
-      const token = uniqueToken(line, op);
+  test(`multi-char operator ${op} is one token with scope ${scope}`, async () => {
+    const tokens = await Promise.all([spaced, tight].map((line) => uniqueToken(line, op)));
+    for (const token of tokens) {
       assert.equal(token.text, op);
       assert.equal(token.scope, scope);
     }
   });
 
-  test(`multi-char operator ${op} is not split into its first character`, () => {
+  test(`multi-char operator ${op} is not split into its first character`, async () => {
     // The regression: the first char would appear as its own scoped token.
     const firstChar = op[0];
-    const standalone = grammar
-      .tokenizeLine(spaced)
-      .filter((t) => t.scope !== undefined && t.text === firstChar);
+    const all = await tokenizeLine(spaced);
+    const standalone = all.filter((t) => t.scope !== undefined && t.text === firstChar);
     assert.equal(
       standalone.length,
       0,
-      `${op} leaked a standalone ${JSON.stringify(firstChar)} token: ` +
-        JSON.stringify(grammar.tokenizeLine(spaced)),
+      `${op} leaked a standalone ${JSON.stringify(firstChar)} token: ` + JSON.stringify(all),
     );
   });
 }
 
 // `<<` / `>>` are module markers (import / export), handled before the operator
 // rules — assert they are still single tokens too.
-test("<< import marker is a single token", () => {
-  const token = uniqueToken("<< core.io", "<<");
+test("<< import marker is a single token", async () => {
+  const token = await uniqueToken("<< core.io", "<<");
   assert.equal(token.scope, "keyword.control.import.quilon");
 });
 
-test(">> export marker is a single token", () => {
-  const token = uniqueToken(">> add = (a, b) => a + b", ">>");
+test(">> export marker is a single token", async () => {
+  const token = await uniqueToken(">> add = (a, b) => a + b", ">>");
   assert.equal(token.scope, "keyword.control.export.quilon");
 });
 
-test("adjacent operators on one line each stay a single token", () => {
+test("adjacent operators on one line each stay a single token", async () => {
   // `a==b!=c<=d>=e` — four two-char comparisons back to back, no spaces.
-  const tokens = scopedTokens("a==b!=c<=d>=e");
+  const tokens = await scopedTokens("a==b!=c<=d>=e");
   const ops = tokens.filter((t) => t.scope === "keyword.operator.comparison.quilon");
   assert.deepEqual(
     ops.map((t) => t.text),
@@ -106,10 +160,10 @@ test("adjacent operators on one line each stay a single token", () => {
   );
 });
 
-test("a representative lambda + arrow-type line highlights each operator once", () => {
+test("a representative lambda + arrow-type line highlights each operator once", async () => {
   // `double = (x :: Num) -> Num => x * 2`
   const line = "double = (x :: Num) -> Num => x * 2";
-  const tokens = scopedTokens(line);
+  const tokens = await scopedTokens(line);
   const find = (text: string) => tokens.filter((t) => t.text === text);
 
   assert.equal(find("::").length, 1, ":: should be one token");
@@ -123,16 +177,18 @@ test("a representative lambda + arrow-type line highlights each operator once", 
 
 // --- Regression guards for things the fix must NOT disturb -------------------
 
-test("single < and > stay comparison operators when an operand follows", () => {
-  const lt = uniqueToken("a < b", "<");
+test("single < and > stay comparison operators when an operand follows", async () => {
+  const lt = await uniqueToken("a < b", "<");
   assert.equal(lt.scope, "keyword.operator.comparison.quilon");
-  for (const line of ["a > b", "a > 1", "a > -b", "a > !flag", "a > _tmp"]) {
+  const lines = ["a > b", "a > 1", "a > -b", "a > !flag", "a > _tmp"];
+  const gts = await Promise.all(lines.map((line) => uniqueToken(line, ">")));
+  lines.forEach((line, i) => {
     assert.equal(
-      uniqueToken(line, ">").scope,
+      gts[i].scope,
       "keyword.operator.comparison.quilon",
       `\`${line}\` should keep > as a comparison`,
     );
-  }
+  });
 });
 
 // The block-closing `>` was colored differently from the opening `<` — red, as if
@@ -141,18 +197,20 @@ test("single < and > stay comparison operators when an operand follows", () => {
 // with no operand after it on its line.
 const BLOCK_PUNCT_FAMILY = "punctuation.definition.block";
 
-test("line-final < opens a block as block punctuation", () => {
+test("line-final < opens a block as block punctuation", async () => {
   // `compute = x => <` — the trailing `<` opens a multi-statement block.
-  const open = uniqueToken("compute = x => <", "<");
+  const open = await uniqueToken("compute = x => <", "<");
   assert.ok(
     open.scope?.startsWith(BLOCK_PUNCT_FAMILY),
     `block-open < should be ${BLOCK_PUNCT_FAMILY}.*, got ${JSON.stringify(open.scope)}`,
   );
 });
 
-test("> closes a block as block punctuation (not error/invalid)", () => {
-  for (const line of [">", "  >", ">   ", ">)", ">]", ">,", "> ~ done", "> !=", "> ->"]) {
-    const close = uniqueToken(line, ">");
+test("> closes a block as block punctuation (not error/invalid)", async () => {
+  const lines = [">", "  >", ">   ", ">)", ">]", ">,", "> ~ done", "> !=", "> ->"];
+  const closes = await Promise.all(lines.map((line) => uniqueToken(line, ">")));
+  lines.forEach((line, i) => {
+    const close = closes[i];
     assert.ok(
       close.scope?.startsWith(BLOCK_PUNCT_FAMILY),
       `block-close > should be ${BLOCK_PUNCT_FAMILY}.*, got ${JSON.stringify(close.scope)} for ${JSON.stringify(line)}`,
@@ -161,47 +219,51 @@ test("> closes a block as block punctuation (not error/invalid)", () => {
       !close.scope?.includes("invalid"),
       `block-close > must not be scoped invalid, got ${JSON.stringify(close.scope)}`,
     );
-  }
+  });
 });
 
-test("a trailing >= is a comparison, not split into a block-close >", () => {
+test("a trailing >= is a comparison, not split into a block-close >", async () => {
   // The block-close lookahead must not steal the `>` from a `>=`.
-  assert.equal(uniqueToken("a >=", ">=").scope, "keyword.operator.comparison.quilon");
+  const token = await uniqueToken("a >=", ">=");
+  assert.equal(token.scope, "keyword.operator.comparison.quilon");
 });
 
-test("single = stays an immutable-binding operator", () => {
-  const token = uniqueToken("x = 42", "=");
+test("single = stays an immutable-binding operator", async () => {
+  const token = await uniqueToken("x = 42", "=");
   assert.equal(token.scope, "keyword.operator.assignment.quilon");
 });
 
-test("@ before an atomic binding's declaration gets its own scope", () => {
-  const token = uniqueToken("@hits := 0", "@");
+test("@ before an atomic binding's declaration gets its own scope", async () => {
+  const token = await uniqueToken("@hits := 0", "@");
   assert.equal(token.scope, "keyword.operator.atomic.quilon");
   // The `:=` right after it still tokenizes as one ordinary mutable-assignment token.
-  assert.equal(uniqueToken("@hits := 0", ":=").scope, "keyword.operator.assignment.mutable.quilon");
+  const assign = await uniqueToken("@hits := 0", ":=");
+  assert.equal(assign.scope, "keyword.operator.assignment.mutable.quilon");
 });
 
-test("@ before a type-annotated atomic binding's declaration still scopes", () => {
-  assert.equal(uniqueToken("@hits :: Num := 0", "@").scope, "keyword.operator.atomic.quilon");
+test("@ before a type-annotated atomic binding's declaration still scopes", async () => {
+  const token = await uniqueToken("@hits :: Num := 0", "@");
+  assert.equal(token.scope, "keyword.operator.atomic.quilon");
 });
 
-test("a bare read of an atomic binding carries no @ scope", () => {
-  const tokens = grammar.tokenizeLine("hits := hits + 1");
+test("a bare read of an atomic binding carries no @ scope", async () => {
+  const tokens = await tokenizeLine("hits := hits + 1");
   assert.equal(tokens.filter((t) => t.scope === "keyword.operator.atomic.quilon").length, 0);
 });
 
-test("@ on a primitive call keeps the call-site behavior, unscoped by the atomic rule", () => {
+test("@ on a primitive call keeps the call-site behavior, unscoped by the atomic rule", async () => {
   // `@sleep(...)` is a primitive reference, not a declaration — the atomic-binding
   // lookahead requires a `:=` after the name, which a call's `(` never provides.
-  const tokens = grammar.tokenizeLine("@sleep(1)");
+  const tokens = await tokenizeLine("@sleep(1)");
   assert.equal(tokens.filter((t) => t.scope === "keyword.operator.atomic.quilon").length, 0);
-  assert.equal(uniqueToken("@sleep(1)", "sleep").scope, "entity.name.function.quilon");
+  const sleep = await uniqueToken("@sleep(1)", "sleep");
+  assert.equal(sleep.scope, "entity.name.function.quilon");
 });
 
-test("$ (unit) keeps its builtin-type scope in both type and value position", () => {
+test("$ (unit) keeps its builtin-type scope in both type and value position", async () => {
   // `f = () -> $ => $`: the `$` return type and the `$` value are both scoped,
   // and the surrounding `->` / `=>` are each still a single operator token.
-  const tokens = grammar.tokenizeLine("f = () -> $ => $");
+  const tokens = await tokenizeLine("f = () -> $ => $");
   const units = tokens.filter((t) => t.text === "$");
   assert.equal(units.length, 2);
   for (const u of units) {
@@ -211,8 +273,8 @@ test("$ (unit) keeps its builtin-type scope in both type and value position", ()
   assert.equal(tokens.filter((t) => t.text === "=>").length, 1);
 });
 
-test("~ comment swallows operators to end of line", () => {
-  const tokens = grammar.tokenizeLine("~ a note => not an operator");
+test("~ comment swallows operators to end of line", async () => {
+  const tokens = await tokenizeLine("~ a note => not an operator");
   // The whole comment is one scoped token; no operator scope leaks out of it.
   const operatorTokens = tokens.filter((t) => t.scope?.startsWith("keyword.operator"));
   assert.equal(operatorTokens.length, 0);
@@ -222,16 +284,16 @@ test("~ comment swallows operators to end of line", () => {
   );
 });
 
-test("string contents are not tokenized as operators", () => {
-  const tokens = grammar.tokenizeLine('s = "a => b"');
+test("string contents are not tokenized as operators", async () => {
+  const tokens = await tokenizeLine('s = "a => b"');
   const operatorInString = tokens.filter(
     (t) => t.text === "=>" && t.scope?.startsWith("keyword.operator"),
   );
   assert.equal(operatorInString.length, 0, "=> inside a string must not be an operator");
 });
 
-test("numbers still tokenize", () => {
-  const token = uniqueToken("x = 3.14", "3.14");
+test("numbers still tokenize", async () => {
+  const token = await uniqueToken("x = 3.14", "3.14");
   assert.equal(token.scope, "constant.numeric.quilon");
 });
 
@@ -241,26 +303,26 @@ test("numbers still tokenize", () => {
 // dedicated rule the two halves of a `[|`/`|]` fence would be colored
 // differently even though they read as one delimiter pair.
 
-test("[| and |] are each a single collection-fence token", () => {
+test("[| and |] are each a single collection-fence token", async () => {
   const line = '[|"a" => 1|]';
-  const open = uniqueToken(line, "[|");
+  const open = await uniqueToken(line, "[|");
   assert.equal(open.scope, "punctuation.definition.collection.begin.quilon");
-  const close = uniqueToken(line, "|]");
+  const close = await uniqueToken(line, "|]");
   assert.equal(close.scope, "punctuation.definition.collection.end.quilon");
 });
 
-test("a set literal's [| and |] fence tokenizes the same way", () => {
+test("a set literal's [| and |] fence tokenizes the same way", async () => {
   const line = "[|1, 2|]";
-  const open = uniqueToken(line, "[|");
+  const open = await uniqueToken(line, "[|");
   assert.equal(open.scope, "punctuation.definition.collection.begin.quilon");
-  const close = uniqueToken(line, "|]");
+  const close = await uniqueToken(line, "|]");
   assert.equal(close.scope, "punctuation.definition.collection.end.quilon");
 });
 
-test("|| still tokenizes as the logical operator, not two fence halves", () => {
-  const token = uniqueToken("a || b", "||");
+test("|| still tokenizes as the logical operator, not two fence halves", async () => {
+  const token = await uniqueToken("a || b", "||");
   assert.equal(token.scope, "keyword.operator.logical.quilon");
-  const tokens = grammar.tokenizeLine("a || b");
+  const tokens = await tokenizeLine("a || b");
   assert.equal(
     tokens.filter((t) => t.scope?.startsWith("punctuation.definition.collection")).length,
     0,
@@ -279,11 +341,11 @@ test("|| still tokenizes as the logical operator, not two fence halves", () => {
 const HOLE_SCOPE = "meta.embedded.interpolation.quilon";
 const STRING_SCOPE = "string.quoted.double.quilon";
 
-test('a `"` inside an interpolation hole does not end the outer string', () => {
+test('a `"` inside an interpolation hole does not end the outer string', async () => {
   // io.print("hi `name + "rld"` !") — one string literal with a hole whose
   // expression itself contains a nested string.
   const line = 'io.print("hi `name + "rld"` !")';
-  const tokens = grammar.tokenizeLine(line);
+  const tokens = await tokenizeLine(line);
 
   // Two string ends is correct here — the nested `"rld"` closes, then the
   // outer string closes — but the call's closing `)` must land outside both,
@@ -336,8 +398,8 @@ test('a `"` inside an interpolation hole does not end the outer string', () => {
   );
 });
 
-test("a plain string with no hole is unchanged", () => {
-  const tokens = grammar.tokenizeLine('x = "plain"');
+test("a plain string with no hole is unchanged", async () => {
+  const tokens = await tokenizeLine('x = "plain"');
   assert.ok(
     tokens.some((t) => t.text === "plain" && t.scope === STRING_SCOPE),
     `expected "plain" scoped as a string, got ${JSON.stringify(tokens)}`,
@@ -349,8 +411,8 @@ test("a plain string with no hole is unchanged", () => {
   );
 });
 
-test("`` (doubled backtick) is an escape and opens no hole", () => {
-  const tokens = grammar.tokenizeLine('x = "a``b"');
+test("`` (doubled backtick) is an escape and opens no hole", async () => {
+  const tokens = await tokenizeLine('x = "a``b"');
   assert.ok(
     tokens.some((t) => t.text === "``" && t.scope === "constant.character.escape.quilon"),
     `expected \`\` scoped as an escape, got ${JSON.stringify(tokens)}`,
@@ -371,12 +433,12 @@ test("`` (doubled backtick) is an escape and opens no hole", () => {
   );
 });
 
-test("a hole nested inside another hole's own nested string still tokenizes (depth 2)", () => {
+test("a hole nested inside another hole's own nested string still tokenizes (depth 2)", async () => {
   // `f("n `g` m")` as a hole's expression: the hole's own nested string
-  // ("n `g` m") itself contains a further hole (`g`). Exercises the lazily
-  // resolved `children()` recursion at more than one level.
+  // ("n `g` m") itself contains a further hole (`g`). Exercises the grammar's
+  // recursive begin/end nesting at more than one level.
   const line = 'io.print("u `f("n `g` m")` w")';
-  const tokens = grammar.tokenizeLine(line);
+  const tokens = await tokenizeLine(line);
 
   assert.deepEqual(tokens[tokens.length - 1], { text: ")", scope: undefined }); // io.print's own closing paren, unscoped
   assert.equal(
@@ -398,13 +460,13 @@ test("a hole nested inside another hole's own nested string still tokenizes (dep
   );
 });
 
-test("~ inside a hole does not open a comment (does not swallow the rest of the string)", () => {
+test("~ inside a hole does not open a comment (does not swallow the rest of the string)", async () => {
   // Before the fix, the hole's patterns re-included #comments (via `$self`),
   // so `~` inside a hole opened a comment running to end-of-line — eating the
   // hole's own closing backtick, the string's closing quote, and everything
   // after them on the line.
   const line = 'io.print("a `x ~ y` b") + 1';
-  const tokens = grammar.tokenizeLine(line);
+  const tokens = await tokenizeLine(line);
 
   assert.equal(
     tokens.filter((t) => t.scope === "comment.line.tilde.quilon").length,

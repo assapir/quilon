@@ -51,7 +51,9 @@
     "oxfmt": "^0.62.0",
     "oxlint": "^1.77.0",
     "rolldown": "^1.2.6",
-    "typescript": "^7.0.2"
+    "typescript": "^7.0.2",
+    "vscode-oniguruma": "^2.0.1",
+    "vscode-textmate": "^9.3.2"
   },
   "contributes": {
     "languages": [

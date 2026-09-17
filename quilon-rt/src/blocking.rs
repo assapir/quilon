@@ -259,61 +259,10 @@ fn submit(pool: &Arc<BlockingPool>, job: Job) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::gc;
+    use crate::gc_test_harness::on_gc_thread;
     use crate::scheduler::{run, spawn};
-    use crate::test_support::GC_LOCK;
-    use std::os::raw::{c_int, c_void};
-    use std::ptr;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::time::{Duration, Instant};
-
-    #[link(name = "gc", kind = "static")]
-    unsafe extern "C" {
-        fn GC_register_my_thread(sb: *const GcStackBase) -> c_int;
-        fn GC_get_stack_base(sb: *mut GcStackBase) -> c_int;
-    }
-
-    #[repr(C)]
-    struct GcStackBase {
-        mem_base: *mut c_void,
-    }
-
-    // A single persistent Boehm-registered worker thread runs every GC-touching test body
-    // (see the identical rationale in `scheduler`'s and `net`'s tests): funneling fiber work
-    // onto one long-lived registered thread keeps Boehm's thread set stable so stop-the-world
-    // signalling never targets an exited thread.
-    fn gc_worker() -> &'static mpsc::Sender<Job> {
-        static WORKER: OnceLock<mpsc::Sender<Job>> = OnceLock::new();
-        WORKER.get_or_init(|| {
-            let (sender, receiver) = mpsc::channel::<Job>();
-            std::thread::spawn(move || {
-                gc::install_hooks();
-                let mut stack_base = GcStackBase {
-                    mem_base: ptr::null_mut(),
-                };
-                unsafe {
-                    GC_get_stack_base(&mut stack_base);
-                    GC_register_my_thread(&stack_base);
-                }
-                for job in receiver {
-                    job();
-                }
-            });
-            sender
-        })
-    }
-
-    fn on_gc_thread<F: FnOnce() + Send + 'static>(f: F) {
-        let _guard = GC_LOCK.lock().unwrap_or_else(|p| p.into_inner());
-        let (done_sender, done_receiver) = mpsc::channel();
-        gc_worker()
-            .send(Box::new(move || {
-                f();
-                let _ = done_sender.send(());
-            }))
-            .unwrap();
-        done_receiver.recv().unwrap();
-    }
 
     #[test]
     fn a_blocking_call_parks_the_fiber_without_blocking_the_scheduler() {
