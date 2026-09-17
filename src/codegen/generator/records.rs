@@ -284,6 +284,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             if let Expression::Identifier { name, .. } = expression
                 && let Some((var_ptr, var_type)) = self.variables.get(name).cloned()
             {
+                // Arrays are the only struct-typed variable this branch can see.
                 if let BasicTypeEnum::StructType(struct_type) = var_type {
                     // Field 1 is the size field of the array struct.
                     let size_field = self
