@@ -11,7 +11,7 @@
   response = result ?
     | Ok(page) => page
     | NotOk(_) => http.Response { raw = "" }
-  assert(response.status(), equals(200))
+  assert(response.status().code(), equals(200))
   assert(response.body().size > 0, equals(true))
   assert(response.headers().get("Content-Type"), isOk())
 
@@ -74,7 +74,7 @@
   postResponse = postResult ?
     | Ok(page) => page
     | NotOk(_) => http.Response { raw = "" }
-  assert(postResponse.status() > 0, equals(true))
+  assert(postResponse.status().code() > 0, equals(true))
   assert(http.Request.put("http://example.com/", body).send(), isOk())
   assert(http.Request.put("http://example.com/", body, options).send(), isOk())
   assert(http.Request.patch("http://example.com/", body).send(), isOk())

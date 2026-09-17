@@ -34,7 +34,7 @@ fn core_http_contributes_no_bare_names() {
         );
     }
     // The exported surface is reachable under the client's own prefix.
-    for name in ["Body", "Method", "Response", "Request"] {
+    for name in ["Body", "Method", "Status", "Response", "Request"] {
         let qualified = format!("core.http.{name}");
         assert!(
             items.iter().any(|item| item.name() == qualified),
@@ -61,7 +61,7 @@ fn an_importer_may_define_every_name_the_client_uses() {
         "^ = () -> $ => <\n",
         "  reply = http.Response { raw = \"HTTP/1.1 200 OK\\r\\nX-A: b\\r\\n\\r\\nhi\" }\n",
         "  assert(reply.validate(), isOk())\n",
-        "  assert(reply.status(), equals(200))\n",
+        "  assert(reply.status().code(), equals(200))\n",
         "  assert(reply.body(), equals(\"hi\"))\n",
         "  assert(reply.headers().get(\"x-a\"), isOk())\n",
         "  own = Response { note = \"mine\" }\n",

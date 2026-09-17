@@ -1,0 +1,36 @@
+~ A chickpea stand over `http.@serve`: `hummus` answers a GET with what's on the counter, a
+~ POST with what got stocked, and anything else with 405. `^` opens the stand, places one
+~ order of each kind with `core.http`'s own client, asserts both replies, then closes the
+~ stand before returning.
+<< core.http
+<< core.test
+
+hummus = (request :: http.Request) -> http.Response => <
+  request.method ?
+    | http.Get        => http.Response.reply(http.OK, "chickpeas: plenty")
+    | http.Post(body) => http.Response.reply(http.Created, "stocked " + body.content)
+    | _               => http.Response.reply(http.MethodNotAllowed)
+>
+
+~ Both orders below check the same two things: the status code and the body text.
+checkReply = (reply :: http.Response, expectedStatus :: Num, expectedBody :: Text) -> $ => <
+  assert(reply.status().code(), equals(expectedStatus))
+  assert(reply.body(), equals(expectedBody))
+>
+
+^ = () -> Num => <
+  stand = http.@serve("127.0.0.1:9048", request => hummus(request))
+
+  http.Request.get("http://127.0.0.1:9048/counter").send() ?
+    | Ok(reply)    => checkReply(reply, 200, "chickpeas: plenty")
+    | NotOk(error) => test.failAt(error)
+
+  http.Request.post(
+    "http://127.0.0.1:9048/counter", http.Body { content = "beans", contentType = "text/plain" }
+  ).send() ?
+    | Ok(reply)    => checkReply(reply, 201, "stocked ")
+    | NotOk(error) => test.failAt(error)
+
+  stand.kill(1)
+  0
+>
