@@ -228,6 +228,48 @@ fn test_non_exhaustive_match_on_a_non_sum_is_rejected() {
 }
 
 #[test]
+fn test_text_literal_pattern_with_catch_all_is_accepted() {
+    // A `Text` scrutinee matched against literal text, covered by a trailing catch-all.
+    assert!(
+        check_ok(
+            "^ = () -> Num => <\n  val = \"GET\"\n  val ? | \"GET\" => 0 | \"POST\" => 1 | _ => 2\n>"
+        )
+        .is_ok()
+    );
+}
+
+#[test]
+fn test_text_literal_pattern_without_catch_all_is_rejected() {
+    // Nothing enumerates the values of a `Text` either — the same rule a `Num` match
+    // follows.
+    assert!(matches!(
+        check_ok("^ = () -> Num => <\n  val = \"GET\"\n  val ? | \"GET\" => 0 | \"POST\" => 1\n>"),
+        Err(TypeError::NonExhaustiveMatch { .. })
+    ));
+}
+
+#[test]
+fn test_text_literal_pattern_against_a_num_scrutinee_is_rejected() {
+    // The same mismatch a `Number` pattern gives against a `Text` scrutinee, the other
+    // way round.
+    assert!(matches!(
+        check_ok("^ = () -> Num => <\n  val = 5\n  val ? | \"GET\" => 0 | _ => 1\n>"),
+        Err(TypeError::TypeMismatch { .. })
+    ));
+}
+
+#[test]
+fn test_text_literal_pattern_against_a_sum_is_rejected() {
+    // A sum's values carry no `Text`, so a text pattern can't dispatch on one.
+    assert!(matches!(
+        check_ok(
+            "^ = () -> Num => <\n  val :: Result = Ok(5)\n  val ? | \"GET\" => 0 | _ => 1\n>"
+        ),
+        Err(TypeError::TypeMismatch { .. })
+    ));
+}
+
+#[test]
 fn test_constructor_missing_field_is_rejected() {
     // `P { x = 1 }` leaves out `P`'s declared `y` field.
     assert!(matches!(

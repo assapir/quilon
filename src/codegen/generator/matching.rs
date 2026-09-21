@@ -237,6 +237,15 @@ impl<'ctx> CodeGenerator<'ctx> {
                 }
             }
 
+            Pattern::Text { value: text, .. } => {
+                // Lower to the same `Text == Text` comparison a `==` expression on two
+                // `Text` values uses (`generate_text_compare`), against a constant built the
+                // same way a `Text` literal expression is (`build_text_constant`).
+                let constant = self.build_text_constant(text)?;
+                self.generate_text_compare(BinaryOperator::Eq, value, constant)
+                    .map(|result| result.into_int_value())
+            }
+
             Pattern::Constructor { name, .. } => match value {
                 BasicValueEnum::StructValue(_) => self.variant_tag_matches(name, value),
                 // Not a struct - pattern doesn't match

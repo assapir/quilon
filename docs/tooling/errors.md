@@ -104,6 +104,7 @@ its name relative to the first block (`` ```quilon title="lib/util.qn" ``).
 | QN113 | disallowed character glued to a name |
 | QN114 | match used as a match-arm body without parentheses |
 | QN115 | a line-final `>` closed a block earlier than intended |
+| QN116 | text pattern with interpolation |
 | QN200 | `@` primitive declared outside the corelib |
 | QN201 | missing module |
 | QN202 | private member reached through its module |
@@ -440,6 +441,21 @@ mangoTally = (crate :: Num) -> Num => <
 `ripe >` ends its line, so it closes `mangoTally`'s block right there. The report points
 at that `>` — the actual cause — wherever the parse derails further down. To compare, put
 the right operand on the same line as `>`: `ripe > bruised`.
+
+### QN116 — text pattern with interpolation
+
+A `Text` pattern (`| "…" =>`) contains a backtick hole. A pattern is checked against a
+fixed literal, so its text cannot depend on a runtime value.
+
+```quilon ignore
+greet = (title :: Text, name :: Text) -> Text => < name ?
+  | "`title` Smith" => "the whole family"
+  | _                => "just " + name
+>
+```
+
+Write the pattern as a plain literal — `| "Smith" => …` — and compare the computed part
+in the arm's body instead.
 
 ## Imports
 

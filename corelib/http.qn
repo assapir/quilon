@@ -156,19 +156,19 @@ Values = {
 
   ~ The `Method` a request line's own token names, its carried `Body` always empty (a
   ~ server never reads one — see `Request.parse`): `Ok(method)` for a token this module
-  ~ recognizes, `NotOk(reason)` for any other token. A ternary chain rather than a match:
-  ~ the pattern grammar has no `Text` literal pattern yet.
+  ~ recognizes, `NotOk(reason)` for any other token.
   parse = (token :: Text) -> Result => <
     noBody = Body { content = "", contentType = "" }
-    token == "GET" ? Ok(Get)
-      : token == "POST" ? Ok(Post(noBody))
-      : token == "PUT" ? Ok(Put(noBody))
-      : token == "QUERY" ? Ok(Query(noBody))
-      : token == "DELETE" ? Ok(Delete)
-      : token == "HEAD" ? Ok(Head)
-      : token == "OPTIONS" ? Ok(Options)
-      : token == "PATCH" ? Ok(Patch(noBody))
-      : NotOk("unrecognized method `token`")
+    token ?
+      | "GET"     => Ok(Get)
+      | "POST"    => Ok(Post(noBody))
+      | "PUT"     => Ok(Put(noBody))
+      | "QUERY"   => Ok(Query(noBody))
+      | "DELETE"  => Ok(Delete)
+      | "HEAD"    => Ok(Head)
+      | "OPTIONS" => Ok(Options)
+      | "PATCH"   => Ok(Patch(noBody))
+      | _         => NotOk("unrecognized method `token`")
   >
 
   ~ The body this method carries — an empty one for the methods that carry none.

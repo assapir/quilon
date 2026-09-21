@@ -102,6 +102,25 @@ impl<'a> Parser<'a> {
                 self.advance();
                 Ok(Pattern::Number { value, span })
             }
+            TokenKind::String(chunks) => {
+                let span = token.span.clone();
+                let chunks = chunks.clone();
+                self.advance();
+                match chunks.as_slice() {
+                    [StrChunk::Lit(value)] => Ok(Pattern::Text {
+                        value: value.clone(),
+                        span,
+                    }),
+                    // A hole's text depends on a runtime value, so it cannot stand for a
+                    // fixed pattern to compare against — the same reasoning that rejects
+                    // one in an import path (`Code::ImportPathInterpolated`).
+                    _ => Err(ParseError::new(
+                        Code::InterpolatedTextPattern,
+                        span,
+                        "a text pattern is a plain string literal",
+                    )),
+                }
+            }
             TokenKind::Underscore => {
                 let span = token.span.clone();
                 self.advance();

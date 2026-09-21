@@ -1,0 +1,18 @@
+~ A `Text` scrutinee matched against literal text arms, with a catch-all for anything
+~ else — the same shape a `Num` match uses, now over words instead of numbers.
+<< core.test
+
+cast = (incantation :: Text) -> Text => <
+  incantation ?
+    | "abracadabra" => "a rabbit appears"
+    | "shazam"      => "lightning cracks"
+    | "open sesame" => "a door swings wide"
+    | mumbled       => "nothing happens (you mumbled `mumbled`)"
+>
+
+^ = () -> $ => <
+  assert(cast("shazam"), equals("lightning cracks"))
+  assert(cast("abracadabra"), equals("a rabbit appears"))
+  assert(cast("open sesame"), equals("a door swings wide"))
+  assert(cast("fus ro dah"), equals("nothing happens (you mumbled fus ro dah)"))
+>
