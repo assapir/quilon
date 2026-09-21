@@ -67,7 +67,7 @@ impl TypeChecker {
                 && self.overloaded_names.contains(&declaration.name)
                 && !declaration.is_inert_corelib_placeholder()
             {
-                // An operator overload now lives inside a type (as a member), not at the
+                // An operator overload lives inside a type (as a member), not at the
                 // top level: `it` is the left operand. Reject a top-level operator-symbol
                 // definition and point to the member form. (Ordinary function overload
                 // sets are unaffected — only operator symbols move.)
@@ -204,7 +204,6 @@ impl TypeChecker {
     ) -> Result<(), TypeError> {
         use crate::ast::{SumVariant, Type, TypeDefinition};
 
-        // Build the type from the definition
         // A setter is DECLARED, with `:=` — the binding operator means here what it means
         // everywhere else. Records only: a sum's methods cannot mutate `it` (no fields to
         // write), the parser rejects `:=` on them, and running the verifier over one would
@@ -1062,10 +1061,9 @@ impl TypeChecker {
 
         self.check_binding_signature(declaration)?;
 
-        // Build function type from parameters and return type. A parameter takes its
-        // written annotation, else the matching slot of a function type declared on the
-        // binding itself. With neither it is a compile-time error: there is no `Num`
-        // default, and nothing else here to infer from.
+        // A parameter takes its written annotation, else the matching slot of a function
+        // type declared on the binding itself. With neither it is a compile-time error:
+        // there is no `Num` default, and nothing else here to infer from.
         let parameter_types = self.resolve_parameter_types(
             &declaration.parameters,
             declaration.declared_parameters(),
@@ -1129,9 +1127,9 @@ impl TypeChecker {
         self.env.push_scope();
         let enclosing_declaration = self.enter_declaration();
 
-        // Add parameters to scope, each as its own argument slot: a parameter's value
-        // belongs to the caller, so the body may not alias it mutably, and a result built
-        // from it inherits the argument's mutability at each call site.
+        // Each parameter is its own argument slot: a parameter's value belongs to the
+        // caller, so the body may not alias it mutably, and a result built from it
+        // inherits the argument's mutability at each call site.
         for (slot, (parameter, parameter_type)) in declaration
             .parameters
             .iter()
@@ -1147,10 +1145,10 @@ impl TypeChecker {
             )?;
         }
 
-        // Check body and infer return type through the same contextual-typing helper a
-        // call argument uses (`infer_argument`): a FUNCTION-typed return annotation types
-        // a lambda body's otherwise-unannotated parameters — the third contextual-typing
-        // position, after arguments and declared bindings — so
+        // The same contextual-typing helper a call argument uses (`infer_argument`) infers
+        // the body: a FUNCTION-typed return annotation types a lambda body's
+        // otherwise-unannotated parameters — the third contextual-typing position, after
+        // arguments and declared bindings — so
         // `adder = (n :: Num) -> (Num) -> Num => (x) => x + n` types `x` from the return;
         // any OTHER annotation is instead the expected type an otherwise-uninferable empty
         // collection literal body takes its element type from

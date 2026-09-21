@@ -204,10 +204,8 @@ impl<'ctx> CodeGenerator<'ctx> {
             field_values.push(self.generate_expression(expression)?);
         }
 
-        // Get field types
         let field_types: Vec<BasicTypeEnum> = field_values.iter().map(|v| v.get_type()).collect();
 
-        // Create struct type
         let struct_type = self.context.struct_type(&field_types, false);
 
         // GC-allocate the struct (not a stack alloca) so a record VALUE can outlive the
@@ -227,7 +225,6 @@ impl<'ctx> CodeGenerator<'ctx> {
             .as_any_value_enum()
             .into_pointer_value();
 
-        // Store each field
         for (i, value) in field_values.iter().enumerate() {
             let gep = self
                 .builder
@@ -282,14 +279,14 @@ impl<'ctx> CodeGenerator<'ctx> {
             && field_name == "size"
             && !self.defer.is_force_site(expression.span())
         {
-            // For arrays (which are structs {ptr, i64}), we need special handling
-            // Check if it's an identifier - we can directly work with the alloca
+            // Arrays lower to a struct type {ptr, i64}; read the size straight from the
+            // alloca when the receiver is an identifier bound to one.
             if let Expression::Identifier { name, .. } = expression
                 && let Some((var_ptr, var_type)) = self.variables.get(name).cloned()
             {
-                // Check if this is a struct type (could be an array)
+                // Arrays are the only struct-typed variable this branch can see.
                 if let BasicTypeEnum::StructType(struct_type) = var_type {
-                    // Get field 1 (size field of array struct) directly from the alloca
+                    // Field 1 is the size field of the array struct.
                     let size_field = self
                         .builder
                         .build_struct_gep(struct_type, var_ptr, 1, "size_field")

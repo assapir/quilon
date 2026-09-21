@@ -187,7 +187,7 @@ fn render_report(site: *const QlSite, code: u16, message: &str, style: &Style) -
 }
 
 /// A failing `assert(actual, matcher)`: report `message` at the assertion's own call site and
-/// terminate with [`RUNTIME_EXIT_CODE`]. Never returns.
+/// terminate with `RUNTIME_EXIT_CODE`. Never returns.
 ///
 /// # Safety contract (upheld by the compiler)
 /// `site` is null or points to a valid `QlSite`; `message`/`length` are a UTF-8 `Text`.
@@ -233,7 +233,7 @@ fn location_of(site: *const QlSite) -> (String, u64) {
 }
 
 /// A `?`/`|` match no arm matched: report at `site` (the match expression's own location)
-/// and terminate with [`RUNTIME_EXIT_CODE`]. Never returns.
+/// and terminate with `RUNTIME_EXIT_CODE`. Never returns.
 ///
 /// The checker requires every match to be total, so this is the backstop for what it cannot
 /// prove — reached only if that guarantee is broken, which is why it fails loudly instead of

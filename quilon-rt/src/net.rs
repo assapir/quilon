@@ -5,12 +5,12 @@
 //!
 //! [`TcpStream`] wraps a `mio` non-blocking socket and registers it with the reactor's
 //! `Poll`. Every op that would block parks the calling fiber
-//! (via [`crate::scheduler::park_on_readiness`]) instead of spinning or blocking the OS
+//! (via `crate::scheduler::park_on_readiness`) instead of spinning or blocking the OS
 //! thread: it (re)registers the source for the readiness it needs, yields to the
 //! scheduler, and is resumed only when the reactor reports that token ready — exactly
 //! the way [`crate::scheduler::sleep`] parks on a deadline. Many sockets thus make
-//! progress cooperatively on one thread. [`TcpListener`] is its server-side twin, and
-//! [`resolve`]/[`resolve_hostname`] turn a `host:port` address into the `SocketAddr`
+//! progress cooperatively on one thread. `TcpListener` is its server-side twin, and
+//! `resolve`/`resolve_hostname` turn a `host:port` address into the `SocketAddr`
 //! both [`client`] and [`server`] connect or bind to.
 //!
 //! GC note: parking is transparent to the collector. A parked fiber's stack — with

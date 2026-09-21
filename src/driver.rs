@@ -162,7 +162,7 @@ pub fn front_end_reporting(
 /// diagnostics report its path.
 ///
 /// Always silent: an LSP answer must not carry stage/quip text meant for a terminal onto
-/// the protocol's own stdio, so this never takes a `status` — [`front_end_source_reporting`]
+/// the protocol's own stdio, so this never takes a `status` — `front_end_source_reporting`
 /// is where a caller that DOES want progress (there is none yet) would hook in.
 pub fn front_end_source(
     file: &Path,

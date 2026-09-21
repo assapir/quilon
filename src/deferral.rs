@@ -1,62 +1,35 @@
 //! Deferral analysis — the compiler's view of Quilon's `@` leaf-IO-primitive tier, and the
 //! deferred-value taint that makes force-on-use real.
 //!
-//! The pass produces one thing: the **taint**. That is which expressions may evaluate to a
-//! *deferred* value (a promise, from a value-returning `@` primitive like `@readStdin`), plus
-//! the **force-set** (`force_sites`) — the exact spans where the code generator must force
-//! such a value, because a strict primitive is about to read its bytes or it would escape.
+//! Produces the **taint**: which expressions may evaluate to a *deferred* value (a promise,
+//! from a value-returning `@` primitive like `@readStdin`), plus the **force-set**
+//! (`force_sites`) — the exact spans where the code generator must force one, because a
+//! strict primitive is about to read its bytes or it would escape.
 //!
-//! It reads no types and adds none. So the type checker is untouched, and a deferred `Text`
-//! keeps the ordinary type `Text` — the load-bearing guardrail of the model.
+//! It reads no types and adds none: a deferred `Text` keeps the ordinary type `Text` — the
+//! load-bearing guardrail of the model.
 //!
-//! Taint is a forward dataflow. A value is deferred iff it flows from `@readStdin` through only
-//! *lazy carriers* — a `=` binding, and the arms/result of `?`/ternary/blocks — without
-//! crossing a *strict* slot. At every strict slot (arithmetic/comparison/logical operands,
-//! `?`/ternary/match scrutinee, `print`/`eprint`/`write` and native/`@` args, indexing, field
-//! and array/record construction, interpolation holes, and a function/method/lambda body
-//! result) a deferred child is forced. Forcing at the body result and at call arguments keeps
-//! a promise inside the one function body it was born in (this step launches independent IO
-//! and overlaps it; cross-function promise pipelining — a function *returning* a deferred
-//! value — is a later step). Only tainted spans get forces, so pure code pays nothing.
+//! Taint is a forward dataflow: a value is deferred iff it flows from `@readStdin` through
+//! only *lazy carriers* (a `=` binding, and the arms/result of `?`/ternary/blocks) without
+//! crossing a *strict* slot (arithmetic/comparison/logical operands, a match scrutinee,
+//! `print`/native/`@` args, indexing, field/array/record construction, interpolation holes,
+//! and a function/method/lambda body result). Only tainted spans get forces, so pure code
+//! pays nothing. A promise stays inside the function body it was born in — cross-function
+//! promise pipelining is a later step.
 //!
-//! The one exception to "inside the one function body it was born in" is a top-level `:=`
-//! binding: any function may store a deferred value into it, and any other function may
-//! read it back, so the taint also tracks a program-wide `deferred_globals` set — the
-//! top-level bindings some store has left deferred, whether that store is the declaration's
-//! own initial value or a later reassignment, wherever it sits. A read of a global in that
-//! set is a read of a deferred value like any other, forced at the first strict slot that
-//! needs it; a store into it does not force, so a function may return before its own stored
-//! read completes. A store's deferredness may itself depend on another global already in the
-//! set (`copy := testimony`), so `analyze` runs the walk in rounds, each starting from the
-//! previous round's set and only adding to it, until a round adds nothing — bounded by the
-//! program's number of top-level `:=` bindings, so it always terminates.
+//! A top-level `:=` binding is the one exception: any function may store a deferred value
+//! into it and any other may read it back, so `analyze` also tracks a program-wide
+//! `deferred_globals` set, computed in rounds (bounded by the program's number of
+//! top-level bindings, so it always terminates) since one global's deferredness may depend
+//! on another's already in the set.
 //!
-//! The same walk also enforces one rule about `@name := …` atomic bindings (see
-//! `docs/concurrency/README.md#sharing-state-across-fibers`): a reassignment's right side
-//! may not force a deferred value, because forcing parks the fiber mid-statement, and the
-//! statement resumes holding a value read before the park — stale if another fiber wrote
-//! the binding while this one was parked. The force-set this pass already computes is
-//! exactly the set of force points, so the check is "did evaluating the right side add to
-//! `force_sites`", read off the same walk rather than a second one.
-//!
-//! Telling a reassignment of an atomic binding apart from an ordinary one, though, is NOT
-//! this pass's job: only the type checker resolves a `:=` to the specific binding it
-//! targets (`TypeChecker::check_variable_declaration`'s "reassign if the name is already
-//! bound" branch) — this pass's own `Scope` is a much coarser, per-analysis-call
-//! convenience that starts fresh at every named function's body and knows nothing about
-//! which enclosing name is which binding. So `analyze` takes the checker's own answer
-//! ready-made: the span of every `:=` statement the checker resolved as reassigning an
-//! atomic binding (`TypeChecker::take_atomic_reassignments`). The rule becomes "is this
-//! `VariableDeclaration`'s span in that set, and did evaluating its value add to
-//! `force_sites`" — no name resolution of any kind on this side.
-//!
-//! Telling a reassignment of a TOP-LEVEL binding apart from a fresh local `:=` of the same
-//! name is the identical problem, for the identical reason, so it gets the identical
-//! answer: `analyze` also takes `TypeChecker::take_top_level_reassignments`, the span of
-//! every `:=` statement the checker resolved as reassigning a binding declared at the top
-//! level (atomic or not) — a superset of `atomic_reassignments` where both apply. A
-//! reassignment whose span is in that set feeds `deferred_globals` when its value is
-//! deferred, instead of only the enclosing function's local scope.
+//! The same walk enforces that an `@name := …` atomic-binding reassignment's right side may
+//! not force a deferred value (see
+//! `docs/concurrency/README.md#sharing-state-across-fibers` — forcing parks the fiber
+//! mid-statement, risking a stale read from before the park). Which `:=` spans are atomic
+//! or top-level reassignments is the type checker's answer
+//! (`TypeChecker::take_atomic_reassignments`/`take_top_level_reassignments`), taken
+//! ready-made: this pass's own per-call `Scope` does no name resolution of its own.
 
 use crate::ast::{
     Expression, InterpolationPart, Item, MethodDeclaration, Program, Statement,

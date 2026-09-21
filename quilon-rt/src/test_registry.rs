@@ -11,9 +11,9 @@
 //!
 //! Three thread-locals stay here, still per-thread (which keeps parallel runs in one
 //! process independent), because nothing in `.qn` writes them:
-//! - [`CASE_FAILURE`] is written from the compiler-emitted `__expect_failed` path
+//! - `CASE_FAILURE` is written from the compiler-emitted `__expect_failed` path
 //!   (`crate::report`), not from `describe`/`it`.
-//! - [`REPORTER`] and [`SELECTION`] are written by the `quilon test` CLI before the run
+//! - `REPORTER` and `SELECTION` are written by the `quilon test` CLI before the run
 //!   starts, through [`set_reporter`]/[`set_selection`]; the harness itself never sees them.
 //!
 //! A case carries a failed flag: a failing `expect` sets it, and the case's close tallies it
@@ -222,7 +222,7 @@ pub extern "C" fn __test_case_run_guarded(function: *const c_void, environment: 
 
 /// Report the case named by `name`/`length` that just ran, at report-path `path` and
 /// nesting `depth`, `failed` (0/1) telling human report and JSON `status` alike which way
-/// it went. Clears [`CASE_FAILURE`] for the next case, taking the message/file/line a
+/// it went. Clears `CASE_FAILURE` for the next case, taking the message/file/line a
 /// failure carries into the JSON event; `.qn` already read `failed` off the same mark
 /// (through [`__test_case_failing`]) before tallying its own counters and calling here.
 ///
