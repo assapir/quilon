@@ -62,6 +62,15 @@ Values = {
   ~ Every header name present, already lower-cased.
   names = () -> []Text => < it.values.names() >,
 
+  ~ The first value under `name`, or `""` when absent — the fallback every framing header
+  ~ (`transfer-encoding`, `content-length`) and content type read below shares, rather than
+  ~ repeating its own `Ok`/`NotOk` match at each call site.
+  value = (name :: Text) -> Text => <
+    it.get(name) ?
+      | Ok(found) => found
+      | NotOk(_)  => ""
+  >,
+
   add := (name :: Text, value :: Text) -> $ => <
     it.values.add(name.trim().toLower(), value)
     $
@@ -95,15 +104,6 @@ Values = {
     headers
   >
 }
-
-~ `headers`'s first value under `name`, or `""` when absent — the fallback every framing
-~ header (`transfer-encoding`, `content-length`) and content type read below shares, rather
-~ than repeating its own `Ok`/`NotOk` match at each call site.
-headerValue = (headers :: Headers, name :: Text) -> Text => <
-  headers.get(name) ?
-    | Ok(value) => value
-    | NotOk(_)  => ""
->
 
 ~ A URL's query parameters, name-sensitive (unlike `Headers`): `add`/`get`/`all` compare
 ~ names exactly as written. No percent-encoding on the way out or decoding on the way in.
@@ -229,13 +229,44 @@ frameBody = (raw :: Text, bodiless :: Bool, transferEncoding :: Text, contentLen
 ~ whether the request body `transferEncoding`/`contentLength` declare has fully arrived in
 ~ `accumulated` yet (the connection's own bytes received so far, from the very first one —
 ~ the intrinsic locates the head/body blank line itself, exactly as `frameBody` does).
-~ `Ok(bodyBytes)` once it has; `NotOk("incomplete")` while more bytes are still needed —
-~ `receiveBody`'s own signal to read another chunk and try again; `NotOk("too large")` once
-~ the declared or decoded size passes `maxBodySize`; `NotOk(reason)` for any other malformed
-~ framing. Compiler-lowered, like `frameBody` — the body below is an inert placeholder
-~ pinning the checker's inferred `Result` payload type to `Text`.
+~ `Ok(bodyBytes)` once it has; `NotOk("incomplete")` while more bytes are still needed;
+~ `NotOk("too large")` once the declared or decoded size passes `maxBodySize`;
+~ `NotOk(reason)` for any other malformed framing — `classifyBodyProgress`, below, maps all
+~ four onto `BodyProgress` once so nothing downstream compares these strings by hand.
+~ Compiler-lowered, like `frameBody` — the body below is an inert placeholder pinning the
+~ checker's inferred `Result` payload type to `Text`.
 bodyProgress = (accumulated :: Text, transferEncoding :: Text, contentLength :: Text, maxBodySize :: Num) -> Result => <
   accumulated == "" ? Ok("") : NotOk("incomplete")
+>
+
+~ What `bodyProgress`'s raw `Result` means, read once so `readBody`/`answer` match on a
+~ proper sum instead of comparing reason strings: the framed bytes, once framing is
+~ complete; still waiting on more; over `maxBodySize`; or malformed in some other way,
+~ carrying the native's own reason.
+BodyProgress = Complete(Text) / Incomplete / TooLarge / Malformed(Text)
+
+~ Whether `reason` equals `expected`, through a plain function call rather than the `==`
+~ operator directly: `reason`, bound off `bodyProgress`'s own `Result` inside
+~ `classifyBodyProgress` below, is a `Text` the operator itself cannot always resolve a
+~ concrete type for, while a call to an already `:: Text`-parameterized function can.
+reasonIs = (reason :: Text, expected :: Text) -> Bool => < reason == expected >
+
+~ `bodyProgress(accumulated, transferEncoding, contentLength, maxBodySize)`'s own `Result`
+~ (`Ok(bytes)` / `NotOk(reason)`), classified into `BodyProgress` — the one place the
+~ native's raw `Result` is read at all; `readBody`/`answer` see only the sum. Calls
+~ `bodyProgress` directly (rather than taking an already-computed `:: Result` as its own
+~ parameter) so the match below is on that call's own concrete payload type, not on a
+~ generic `Result` arriving with no such anchor. A `==` chain (through `reasonIs`) rather
+~ than a match on `reason`: the pattern grammar has no `Text` literal pattern yet.
+classifyBodyProgress = (
+  accumulated :: Text, transferEncoding :: Text, contentLength :: Text, maxBodySize :: Num
+) -> BodyProgress => <
+  bodyProgress(accumulated, transferEncoding, contentLength, maxBodySize) ?
+    | Ok(body)      => Complete(body)
+    | NotOk(reason) =>
+        reasonIs(reason, "incomplete") ? Incomplete
+          : reasonIs(reason, "too large") ? TooLarge
+          : Malformed(reason)
 >
 
 ~ The index of `needle`'s first occurrence in `raw`, or `raw.length` when it never occurs —
@@ -600,7 +631,7 @@ statusReply = (status :: Status, body :: Text, headers :: Headers) -> Text => <
   bodyResult = () -> Result => <
     frameBody(
       it.raw, it.bodiless(),
-      headerValue(it.headers(), "transfer-encoding"), headerValue(it.headers(), "content-length"))
+      it.headers().value("transfer-encoding"), it.headers().value("content-length"))
   >
 
   ~ The reply's body: dechunked when `Transfer-Encoding: chunked`, exactly `Content-Length`
@@ -666,7 +697,7 @@ statusReply = (status :: Status, body :: Text, headers :: Headers) -> Text => <
       ? NotOk("malformed request line")
       : (Method.parse(fields[0]) ?
           | Ok(method) => Ok(Request { method = method, url = fields[1], options = RequestOptions { headers = headers } }
-              .attachBody(body, headerValue(headers, "content-type")))
+              .attachBody(body, headers.value("content-type")))
           | NotOk(reason) => NotOk(reason))
   >,
 
@@ -826,93 +857,58 @@ receiveHead = (connection :: net.Connection, soFar :: Text) -> Result => <
         : receiveHead(connection, accumulated))
 >
 
-~ Read from `connection` until `accumulated`'s body satisfies `transferEncoding`/
-~ `contentLength` (`bodyProgress`'s native): `Ok(body)`, the framed bytes, once it does;
-~ `NotOk(reason)` otherwise — `"connection closed..."` once the peer closes before a
-~ complete body arrives, else whatever `bodyProgress` itself reports (`answer`'s own signal
-~ for which status to answer with: `"too large"` names `413`, anything else `400`). Always
-~ reads one more chunk before checking again — `answer` only calls this once its own first
-~ check of `accumulated` already reads `"incomplete"`, so a read here is always warranted
-~ (mirrors `receiveHead`'s own read-then-check shape; pure self-recursion, unlike
-~ `receiveHead`+`serveConnection`'s two-function split, since a body-progress check that
-~ must run BEFORE the first read as well as after every later one has nowhere else to live
-~ that top-to-bottom name resolution — no mutual recursion between two functions — would
-~ accept).
+~ Check `accumulated`'s body progress (`bodyProgress`'s native, through
+~ `classifyBodyProgress`) and, while it reads `Incomplete`, read one more chunk and try
+~ again: `Complete`/`TooLarge`/`Malformed` all return as they are, `Incomplete` reads
+~ through the local `readMore` closure (so the read happens only on that one path,
+~ recursing back into `readBody` itself with the chunk appended) — mirrors `receiveHead`'s
+~ own read-then-check shape, one function rather than a caller/loop split: `readMore` calls
+~ `readBody`, its own enclosing function, which top-to-bottom name resolution allows (it is
+~ in scope for its own body) the way it would not for two top-level functions calling each
+~ other. An empty read means the peer closed before a complete body arrived, which reads as
+~ `Malformed` — no complete body to answer, and the connection is already dead either way.
 ~
-~ ponytail: like `receiveHead`, this rescans `accumulated` (now a BODY, up to
-~ `maxBodySize`) from byte zero on every recursion — quadratic in the number of reads.
-~ Fine for the small bodies examples and tests carry; a body anywhere near the 16 MiB
-~ default cap wants an incremental reader that carries the chunk decoder's own position
-~ across calls instead of restarting it, before this sees real traffic.
-receiveBody = (
+~ ponytail: rescans `accumulated` (up to `maxBodySize`) from byte zero on every recursion —
+~ quadratic in the number of reads. Fine for the small bodies examples and tests carry; a
+~ body anywhere near the 16 MiB default cap wants an incremental reader that carries the
+~ chunk decoder's own position across calls instead of restarting it, before this sees
+~ real traffic.
+readBody = (
   connection :: net.Connection, accumulated :: Text, transferEncoding :: Text,
   contentLength :: Text, maxBodySize :: Num
-) -> Result => <
-  chunk = connection.@read()
-  next = accumulated + chunk
-  chunk == ""
-    ? NotOk("connection closed before the body finished arriving")
-    : (bodyProgress(next, transferEncoding, contentLength, maxBodySize) ?
-        | Ok(body)      => Ok(body)
-        | NotOk(reason) =>
-            reason == "incomplete"
-              ? receiveBody(connection, next, transferEncoding, contentLength, maxBodySize)
-              : NotOk(reason))
->
-
-~ `handler` on `request`, `body` and the request's own `content-type` header attached, its
-~ reply written to `connection` — `answer`'s own success path, once a body has fully
-~ arrived. `body :: Text` rather than a generic `:: Result` parameter, on purpose: a
-~ `Result` arriving as a bare parameter, with no `Ok`/`NotOk` construction of its own inside
-~ this function to anchor a concrete payload type, has none in scope for the checker to
-~ extract at a member call or an operator — see `answer`'s own doc for where that bites.
-respondWithBody = (
-  connection :: net.Connection, request :: Request, handler :: (Request) -> Response, body :: Text
-) -> $ => <
-  connection.@write(handler(
-    request.attachBody(body, headerValue(request.headers(), "content-type"))).wire())
->
-
-~ `answer`'s own failure path, `reason :: Text` for the same reason `respondWithBody` takes
-~ a plain `body`: `413` for `"too large"`, `400` for anything else (malformed chunked
-~ framing, a malformed `Content-Length`, or a peer that closed before a complete body
-~ arrived) — `handler` is never called.
-respondWithFailure = (connection :: net.Connection, reason :: Text) -> $ => <
-  connection.@write(Response.reply(reason == "too large" ? ContentTooLarge : BadRequest).wire())
+) -> BodyProgress => <
+  progress = classifyBodyProgress(accumulated, transferEncoding, contentLength, maxBodySize)
+  readMore = () -> BodyProgress => <
+    chunk = connection.@read()
+    chunk == ""
+      ? Malformed("connection closed before the body finished arriving")
+      : readBody(connection, accumulated + chunk, transferEncoding, contentLength, maxBodySize)
+  >
+  progress ?
+    | Incomplete => readMore()
+    | _          => progress
 >
 
 ~ Finish handling `request`, once its head has parsed successfully: a method that carries a
-~ body and declares one of the two framing headers has it read — `bodyProgress` checked
-~ once against what `receiveHead` already returned (so a body that arrived alongside the
-~ head needs no further read at all), `receiveBody`'s own read-then-check loop taking over
-~ only when that first check is `"incomplete"`. Anything else — a nullary method, or a
-~ body-carrying one given neither header — calls `handler` on `request` exactly as parsed,
-~ its `Body` empty.
-~
-~ `Ok`/`NotOk` each dispatch to `respondWithBody`/`respondWithFailure` from TWO separate
-~ match sites (the first check, and again after `receiveBody`'s loop) rather than once
-~ through a shared `:: Result` parameter: the checker extracts a match's own bound payload
-~ fine (`body`/`reason` below, each immediately an argument to an already-Text-typed
-~ parameter), but a `Result` VALUE passed on as a bare parameter carries no such anchor for
-~ a later function to extract from — see `respondWithBody`'s own doc. The nested match's own
-~ bindings are named `readBody`/`readReason`, not `body`/`reason` again: reusing the outer
-~ match's own names for the inner one miscompiled the OUTER arm's `Text` (read back as
-~ garbage at the `413`/`400` branch) — distinct names side-step it.
+~ body and declares one of the two framing headers has it read (`readBody`); anything else
+~ — a nullary method, or a body-carrying one given neither header — calls `handler` on
+~ `request` exactly as parsed, its `Body` empty. `TooLarge` answers `413`; `Malformed` and
+~ `Incomplete` (which cannot actually occur here — `readBody` only ever returns it while
+~ still recursing) both answer `400`, `handler` never called either way.
 answer = (
   connection :: net.Connection, accumulated :: Text, request :: Request,
   handler :: (Request) -> Response, options :: ServerOptions
 ) -> $ => <
-  transferEncoding = headerValue(request.headers(), "transfer-encoding")
-  contentLength = headerValue(request.headers(), "content-length")
+  transferEncoding = request.headers().value("transfer-encoding")
+  contentLength = request.headers().value("content-length")
   request.method.carriesBody() && (transferEncoding != "" || contentLength != "")
-    ? (bodyProgress(accumulated, transferEncoding, contentLength, options.maxBodySize) ?
-        | Ok(body)      => respondWithBody(connection, request, handler, body)
-        | NotOk(reason) =>
-            reason == "incomplete"
-              ? (receiveBody(connection, accumulated, transferEncoding, contentLength, options.maxBodySize) ?
-                  | Ok(readBody)      => respondWithBody(connection, request, handler, readBody)
-                  | NotOk(readReason) => respondWithFailure(connection, readReason))
-              : respondWithFailure(connection, reason))
+    ? (readBody(connection, accumulated, transferEncoding, contentLength, options.maxBodySize) ?
+        | Complete(body) =>
+            connection.@write(handler(
+              request.attachBody(body, request.headers().value("content-type"))).wire())
+        | TooLarge     => connection.@write(Response.reply(ContentTooLarge).wire())
+        | Malformed(_) => connection.@write(Response.reply(BadRequest).wire())
+        | Incomplete   => connection.@write(Response.reply(BadRequest).wire()))
     : connection.@write(handler(request).wire())
 >
 

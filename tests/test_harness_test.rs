@@ -576,9 +576,11 @@ fn importing_core_http_contributes_exactly_this_surface() {
         "core.http.@serve",
         // The server's own per-server settings, `@serve`'s three-argument overload takes.
         "core.http.ServerOptions",
-        // The private base record `Headers`/`Params` compose over: carried with the
-        // module, exported to no importer.
+        // The private base record `Headers`/`Params` compose over, and the private sum
+        // `bodyProgress`'s native `Result` is classified into: carried with the module,
+        // exported to no importer.
         "core.http.Values",
+        "core.http.BodyProgress",
         // The native body-framing/body-progress primitives: carried with the module (an
         // exported item calls each), exported to no importer.
         "core.http.frameBody",
@@ -590,11 +592,10 @@ fn importing_core_http_contributes_exactly_this_surface() {
         "core.http.foundOrEnd",
         "core.http.linesAfterFirst",
         "core.http.statusReply",
-        "core.http.headerValue",
+        "core.http.reasonIs",
+        "core.http.classifyBodyProgress",
         "core.http.receiveHead",
-        "core.http.receiveBody",
-        "core.http.respondWithBody",
-        "core.http.respondWithFailure",
+        "core.http.readBody",
         "core.http.answer",
         "core.http.serveConnection",
         // The client's own PRIVATE test fixtures: carried with the module (an exported

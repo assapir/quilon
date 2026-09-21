@@ -8,7 +8,7 @@
 //! [`__http_frame_body`] frames a REPLY already fully in hand (the client waits for the
 //! peer to close before calling it); [`__http_body_progress`] answers the same framing
 //! question incrementally for a REQUEST body still arriving, so `corelib/http.qn`'s own
-//! `receiveBody` knows when to stop reading. Head parsing (status/request line, headers)
+//! `readBody` knows when to stop reading. Head parsing (status/request line, headers)
 //! stays Quilon either way.
 
 use crate::deferred::QlResult;
@@ -42,84 +42,13 @@ fn is_chunked(transfer_encoding: &str) -> bool {
         .is_some_and(|token| token.trim().eq_ignore_ascii_case("chunked"))
 }
 
-/// Dechunk `body`: a hex size line (an optional `;extension` ignored), exactly that many
-/// data bytes, a terminating CRLF, repeated; a `0` chunk ends the data, and any trailers up
-/// to the final blank line are dropped without being parsed. A non-hex size, a missing
-/// CRLF, or data ending early is malformed framing.
-fn dechunk(body: &[u8]) -> Result<Vec<u8>, &'static str> {
-    let mut decoded = Vec::new();
-    let mut rest = body;
-    loop {
-        let line_end = find_subslice(rest, b"\r\n").ok_or("malformed chunked framing")?;
-        let size_field = &rest[..line_end];
-        let size_hex = match size_field.iter().position(|&byte| byte == b';') {
-            Some(at) => &size_field[..at],
-            None => size_field,
-        };
-        let size_text = std::str::from_utf8(size_hex).map_err(|_| "malformed chunked framing")?;
-        let size =
-            usize::from_str_radix(size_text.trim(), 16).map_err(|_| "malformed chunked framing")?;
-        rest = &rest[line_end + 2..];
-        if size == 0 {
-            return Ok(decoded);
-        }
-        // `checked_add`, not `size + 2`: a crafted size near `usize::MAX` (a valid hex
-        // parse) would otherwise wrap the length check past `rest.len()`, falling through
-        // to a slice that panics instead of reporting malformed framing.
-        let Some(chunk_and_terminator) = size.checked_add(2) else {
-            return Err("malformed chunked framing");
-        };
-        if rest.len() < chunk_and_terminator || &rest[size..chunk_and_terminator] != b"\r\n" {
-            return Err("malformed chunked framing");
-        }
-        decoded.extend_from_slice(&rest[..size]);
-        rest = &rest[chunk_and_terminator..];
-    }
-}
-
-/// The framing rule `core.http` applies to one reply's body, given what the head already
-/// established. A `bodiless` reply (1xx/204/304, or any HEAD reply) carries no body
-/// regardless of what its headers claim; `chunked` (once the blank line is found) takes
-/// precedence over `Content-Length`; with neither, the close delimits the body. Pure bytes
-/// throughout — a server may cut a chunk or a `Content-Length` count in the middle of a
-/// multi-byte character, so nothing here ever decodes as UTF-8.
-fn frame_body(
-    raw: &[u8],
-    bodiless: bool,
-    transfer_encoding: &str,
-    content_length: &str,
-) -> QlResult {
-    let Some((at, spelling_len)) = find_blank_line(raw) else {
-        return QlResult::ok(&[]);
-    };
-    let body = &raw[at + spelling_len..];
-    if bodiless {
-        return QlResult::ok(&[]);
-    }
-    if is_chunked(transfer_encoding) {
-        return match dechunk(body) {
-            Ok(decoded) => QlResult::ok(&decoded),
-            Err(reason) => QlResult::not_ok(reason),
-        };
-    }
-    if !content_length.is_empty() {
-        return match content_length.trim().parse::<usize>() {
-            Ok(expected) if body.len() >= expected => QlResult::ok(&body[..expected]),
-            Ok(expected) => QlResult::not_ok(&format!(
-                "truncated body: expected {expected} bytes, got {}",
-                body.len()
-            )),
-            Err(_) => QlResult::not_ok("malformed Content-Length"),
-        };
-    }
-    QlResult::ok(body)
-}
-
-/// The three things [`body_progress`] can determine about a REQUEST body still arriving,
-/// unlike [`frame_body`]'s reply — which always sees the whole thing, since the client
-/// waits for the peer to close before framing anything: framed already (`Complete`), more
-/// bytes needed (`Incomplete`), too big for the server's own cap (`TooLarge`), or broken
-/// beyond repair (`Malformed`).
+/// The three things [`dechunk_progress`]/[`body_progress`] can determine about a REQUEST
+/// body still arriving, unlike [`frame_body`]'s reply — which always sees the whole thing,
+/// since the client waits for the peer to close before framing anything: framed already
+/// (`Complete`), more bytes needed (`Incomplete`), too big for the server's own cap
+/// (`TooLarge`), or broken beyond repair (`Malformed`). [`dechunk`] reuses the same
+/// state machine with an unbounded cap, where `Incomplete`/`TooLarge` fold into the one
+/// error a reply already fully in hand has no room to distinguish them from.
 enum BodyProgress {
     Complete(Vec<u8>),
     Incomplete,
@@ -127,10 +56,12 @@ enum BodyProgress {
     Malformed(&'static str),
 }
 
-/// [`dechunk`]'s own rule, but distinguishing data that has not finished arriving yet
-/// (`Incomplete`) from data that will never parse (`Malformed`), and stopping the moment
-/// the decoded total would exceed `max_body_size` — before waiting for a chunk bigger than
-/// the whole cap to finish arriving.
+/// Dechunk a hex size line (an optional `;extension` ignored), exactly that many data
+/// bytes, a terminating CRLF, repeated; a `0` chunk ends the data, and any trailers up to
+/// the final blank line are dropped without being parsed. Stops the moment the decoded
+/// total would exceed `max_body_size` — before waiting for a chunk bigger than the whole
+/// cap to finish arriving — and reports data that has not finished arriving yet
+/// (`Incomplete`) apart from data that will never parse (`Malformed`).
 fn dechunk_progress(body: &[u8], max_body_size: usize) -> BodyProgress {
     let mut decoded = Vec::new();
     let mut rest = body;
@@ -178,6 +109,58 @@ fn dechunk_progress(body: &[u8], max_body_size: usize) -> BodyProgress {
     }
 }
 
+/// Dechunk a reply already fully in hand: [`dechunk_progress`] with no cap
+/// (`usize::MAX`), so `TooLarge` cannot occur except from the same size-overflow
+/// [`dechunk_progress`] itself treats as malformed, and `Incomplete` — data that would
+/// finish arriving given more bytes, which a reply already fully received never will —
+/// means the framing was truncated, exactly as malformed as anything else `dechunk`
+/// itself reports.
+fn dechunk(body: &[u8]) -> Result<Vec<u8>, &'static str> {
+    match dechunk_progress(body, usize::MAX) {
+        BodyProgress::Complete(decoded) => Ok(decoded),
+        BodyProgress::Incomplete | BodyProgress::TooLarge => Err("malformed chunked framing"),
+        BodyProgress::Malformed(reason) => Err(reason),
+    }
+}
+
+/// The framing rule `core.http` applies to one reply's body, given what the head already
+/// established. A `bodiless` reply (1xx/204/304, or any HEAD reply) carries no body
+/// regardless of what its headers claim; `chunked` (once the blank line is found) takes
+/// precedence over `Content-Length`; with neither, the close delimits the body. Pure bytes
+/// throughout — a server may cut a chunk or a `Content-Length` count in the middle of a
+/// multi-byte character, so nothing here ever decodes as UTF-8.
+fn frame_body(
+    raw: &[u8],
+    bodiless: bool,
+    transfer_encoding: &str,
+    content_length: &str,
+) -> QlResult {
+    let Some((at, spelling_len)) = find_blank_line(raw) else {
+        return QlResult::ok(&[]);
+    };
+    let body = &raw[at + spelling_len..];
+    if bodiless {
+        return QlResult::ok(&[]);
+    }
+    if is_chunked(transfer_encoding) {
+        return match dechunk(body) {
+            Ok(decoded) => QlResult::ok(&decoded),
+            Err(reason) => QlResult::not_ok(reason),
+        };
+    }
+    if !content_length.is_empty() {
+        return match content_length.trim().parse::<usize>() {
+            Ok(expected) if body.len() >= expected => QlResult::ok(&body[..expected]),
+            Ok(expected) => QlResult::not_ok(&format!(
+                "truncated body: expected {expected} bytes, got {}",
+                body.len()
+            )),
+            Err(_) => QlResult::not_ok("malformed Content-Length"),
+        };
+    }
+    QlResult::ok(body)
+}
+
 /// The framing rule `core.http`'s connection handler applies to a REQUEST body still being
 /// read, given `raw` (the connection's own bytes received so far, from the very first
 /// one): `chunked` takes precedence over `Content-Length`, mirroring [`frame_body`]'s own
@@ -213,7 +196,7 @@ fn body_progress(
 
 /// `core.http.bodyProgress(accumulated, transferEncoding, contentLength, maxBodySize) ->
 /// Result`: the native primitive behind `serveConnection`'s own body-reading loop
-/// (`receiveBody`/`answer` in `corelib/http.qn`). `Ok(bodyBytes)` once the framing
+/// (`readBody`/`answer` in `corelib/http.qn`). `Ok(bodyBytes)` once the framing
 /// `transferEncoding`/`contentLength` declare has fully arrived; `NotOk("incomplete")`
 /// while more bytes are still needed; `NotOk("too large")` once the declared or decoded
 /// size passes `maxBodySize`; `NotOk(reason)` for any other malformed framing.
@@ -339,7 +322,7 @@ mod tests {
 
     /// `__http_body_progress`'s own harness, mirroring `frame` above: a `NotOk` payload is
     /// read back as TEXT (`"incomplete"`, `"too large"`, or a malformed-framing reason)
-    /// rather than raw bytes, since that is what `receiveBody` itself matches on.
+    /// rather than raw bytes, since that is what `readBody`/`answer` themselves match on.
     fn progress(
         raw: &[u8],
         transfer_encoding: &str,
