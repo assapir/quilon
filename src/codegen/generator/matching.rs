@@ -8,27 +8,15 @@ use super::tco::BodyPosition;
 use super::*;
 
 impl<'ctx> CodeGenerator<'ctx> {
-    /// Value-position `match` (`scrutinee ? | pat => body ...`): every arm always yields a
-    /// value (see [`match_position`](CodeGenerator::match_position)'s tail variant for the
-    /// self-tail-call case). `match_expression` is the whole `Expression::Match` node (used
-    /// only to look up the match's result type in the oracle); `scrutinee` is the value being
-    /// matched.
-    pub(super) fn generate_match(
-        &mut self,
-        match_expression: &Expression,
-        scrutinee: &Expression,
-        arms: &[MatchArm],
-    ) -> Result<BasicValueEnum<'ctx>, String> {
-        Ok(self
-            .match_position(match_expression, scrutinee, arms, BodyPosition::Value)?
-            .expect("value position always yields a value"))
-    }
-
-    /// Lower a `?`/`|` match, emitting each arm's body at `position`. In
-    /// [`BodyPosition::Value`] every arm always produces a value; in [`BodyPosition::Tail`] an
-    /// arm may instead tail-recurse and branch straight to the loop header, storing nothing —
-    /// if every arm does, the continuation block is unreachable and this returns `None` (see
-    /// `generate_tail_expression`'s `None` invariant).
+    /// Lower a `?`/`|` match (`scrutinee ? | pat => body ...`), emitting each arm's body at
+    /// `position`. `match_expression` is the whole `Expression::Match` node (used only to look
+    /// up the match's result type in the oracle); `scrutinee` is the value being matched. In
+    /// [`BodyPosition::Value`] (the ordinary case — `generate_expression`'s `Expression::Match`
+    /// arm calls this with `Value`, then `.expect`s the `Some` it always gets back) every arm
+    /// always produces a value; in [`BodyPosition::Tail`] (`generate_tail_expression`'s
+    /// `Expression::Match` arm) an arm may instead tail-recurse and branch straight to the loop
+    /// header, storing nothing — if every arm does, the continuation block is unreachable and
+    /// this returns `None` (see `generate_tail_expression`'s `None` invariant).
     pub(super) fn match_position(
         &mut self,
         match_expression: &Expression,

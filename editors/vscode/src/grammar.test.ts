@@ -20,13 +20,6 @@ import { test } from "node:test";
 import { loadWASM, OnigScanner, OnigString } from "vscode-oniguruma";
 import { INITIAL, parseRawGrammar, Registry, type IGrammar, type IOnigLib } from "vscode-textmate";
 
-/** One tokenized slice of a line: its text and the innermost (last) scope on its scope stack. */
-export interface Token {
-  readonly text: string;
-  /** The grammar's innermost scope for this slice, or `undefined` for unscoped (plain) text. */
-  readonly scope: string | undefined;
-}
-
 const GRAMMAR_PATH = join(__dirname, "..", "syntaxes", "quilon.tmLanguage.json");
 const SCOPE_NAME = "source.quilon";
 
@@ -63,25 +56,27 @@ const grammarPromise: Promise<IGrammar> = (async () => {
  * `name`-per-slice shape the tests reason about. The grammar's own top-level
  * `source.quilon` scope (present on every token) counts as "unscoped".
  */
-async function tokenizeLine(line: string): Promise<Token[]> {
+async function tokenizeLine(line: string) {
   const grammar = await grammarPromise;
   const { tokens } = grammar.tokenizeLine(line, INITIAL);
   return tokens.map((t) => {
     const scopes = t.scopes.filter((s) => s !== SCOPE_NAME);
     return {
       text: line.slice(t.startIndex, t.endIndex),
+      // The grammar's innermost scope for this slice, or `undefined` for unscoped
+      // (plain) text.
       scope: scopes.length > 0 ? scopes[scopes.length - 1] : undefined,
     };
   });
 }
 
 /** All scoped (non-plain) tokens of a line, in order. */
-async function scopedTokens(line: string): Promise<Token[]> {
+async function scopedTokens(line: string) {
   return (await tokenizeLine(line)).filter((t) => t.scope !== undefined);
 }
 
 /** Find the single token whose text is exactly `op`; fail if 0 or >1. */
-async function uniqueToken(line: string, op: string): Promise<Token> {
+async function uniqueToken(line: string, op: string) {
   const all = await tokenizeLine(line);
   const matches = all.filter((t) => t.text === op);
   assert.equal(
@@ -118,8 +113,10 @@ for (const [op, scope] of MULTI_CHAR_OPERATORS) {
   const tight = `a${op}b`;
 
   test(`multi-char operator ${op} is one token with scope ${scope}`, async () => {
-    const tokens = await Promise.all([spaced, tight].map((line) => uniqueToken(line, op)));
-    for (const token of tokens) {
+    for (const line of [spaced, tight]) {
+      // Two iterations, milliseconds-fast: sequential awaits read plainer than a Promise.all.
+      // oxlint-disable-next-line no-await-in-loop
+      const token = await uniqueToken(line, op);
       assert.equal(token.text, op);
       assert.equal(token.scope, scope);
     }
@@ -180,15 +177,16 @@ test("a representative lambda + arrow-type line highlights each operator once", 
 test("single < and > stay comparison operators when an operand follows", async () => {
   const lt = await uniqueToken("a < b", "<");
   assert.equal(lt.scope, "keyword.operator.comparison.quilon");
-  const lines = ["a > b", "a > 1", "a > -b", "a > !flag", "a > _tmp"];
-  const gts = await Promise.all(lines.map((line) => uniqueToken(line, ">")));
-  lines.forEach((line, i) => {
+  for (const line of ["a > b", "a > 1", "a > -b", "a > !flag", "a > _tmp"]) {
+    // Five iterations, milliseconds-fast: sequential awaits read plainer than a Promise.all.
+    // oxlint-disable-next-line no-await-in-loop
+    const gt = await uniqueToken(line, ">");
     assert.equal(
-      gts[i].scope,
+      gt.scope,
       "keyword.operator.comparison.quilon",
       `\`${line}\` should keep > as a comparison`,
     );
-  });
+  }
 });
 
 // The block-closing `>` was colored differently from the opening `<` — red, as if
@@ -207,10 +205,10 @@ test("line-final < opens a block as block punctuation", async () => {
 });
 
 test("> closes a block as block punctuation (not error/invalid)", async () => {
-  const lines = [">", "  >", ">   ", ">)", ">]", ">,", "> ~ done", "> !=", "> ->"];
-  const closes = await Promise.all(lines.map((line) => uniqueToken(line, ">")));
-  lines.forEach((line, i) => {
-    const close = closes[i];
+  for (const line of [">", "  >", ">   ", ">)", ">]", ">,", "> ~ done", "> !=", "> ->"]) {
+    // Nine iterations, milliseconds-fast: sequential awaits read plainer than a Promise.all.
+    // oxlint-disable-next-line no-await-in-loop
+    const close = await uniqueToken(line, ">");
     assert.ok(
       close.scope?.startsWith(BLOCK_PUNCT_FAMILY),
       `block-close > should be ${BLOCK_PUNCT_FAMILY}.*, got ${JSON.stringify(close.scope)} for ${JSON.stringify(line)}`,
@@ -219,7 +217,7 @@ test("> closes a block as block punctuation (not error/invalid)", async () => {
       !close.scope?.includes("invalid"),
       `block-close > must not be scoped invalid, got ${JSON.stringify(close.scope)}`,
     );
-  });
+  }
 });
 
 test("a trailing >= is a comparison, not split into a block-close >", async () => {
