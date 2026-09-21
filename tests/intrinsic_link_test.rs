@@ -89,6 +89,15 @@ linkedGreeting = "linked " + "again"
   smokeServer = net.@tcpServe("127.0.0.1:0", connection => respondSmoke(connection))
   smokeServer.kill(0.01)
 
+  ~ __http_body_progress, via the compiled body of `core.http.serveConnection` (and the
+  ~ functions it calls: `receiveBody`, `answer`) — reached because `http.@serve` calls it,
+  ~ not because any real connection ever carries a request body here.
+  respondSmokeHttp = (request :: http.Request) -> http.Response => <
+    http.Response.reply(http.OK, "ok")
+  >
+  smokeHttpServer = http.@serve("127.0.0.1:0", request => respondSmokeHttp(request))
+  smokeHttpServer.kill(0.01)
+
   ~ __stream_file_run (the io.@streamFile leaf IO primitive) and the onChunk thunk it calls
   ~ through. A missing path is a safe, deterministic NotOk — no real file needed.
   streamed = io.@streamFile("/definitely/does/not/exist/quilon-smoke", 10, chunk => true)
