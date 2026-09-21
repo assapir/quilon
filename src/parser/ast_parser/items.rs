@@ -84,17 +84,13 @@ impl<'a> Parser<'a> {
             // File-path import: << "some/path.qn". A path is a plain literal — an
             // interpolation hole here is meaningless, so reject it clearly.
             let span = self.peek().span.clone();
-            self.advance();
-            match chunks.as_slice() {
-                [StrChunk::Lit(s)] => ModulePath::FilePath(s.clone()),
-                _ => {
-                    return Err(ParseError::new(
-                        Code::ImportPathInterpolated,
-                        span,
-                        "an import path is a plain string literal",
-                    ));
-                }
-            }
+            let value = self.plain_string_literal(
+                &chunks,
+                span,
+                Code::ImportPathInterpolated,
+                "an import path is a plain string literal",
+            )?;
+            ModulePath::FilePath(value)
         } else {
             // Built-in dotted import: << core.io
             let mut parts = vec![self.expect_ident()?];
