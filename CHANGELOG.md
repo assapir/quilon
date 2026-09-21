@@ -6,6 +6,20 @@ All notable changes to Quilon are documented here.
 
 ### Added
 
+- **The HTTP server reads request bodies.** A body-carrying method (`Post`/`Put`/`Query`/
+  `Patch`) whose request declares `Content-Length` or `Transfer-Encoding: chunked` has its
+  body read — exactly `Content-Length` more bytes past the head, or dechunked to the
+  zero-size terminator, the same rules the client's own `Response.body()` applies — before
+  `handler` runs; neither header means no body to read. `Request.parse` takes the body as
+  a second argument (`Request.parse(head, body) -> Result`), attaching it and the
+  request's own `content-type` header to a body-carrying method's `Body`; a nullary method
+  ignores both. A new exported record, **`ServerOptions { maxBodySize :: Num }`**
+  (`ServerOptions.default()`: 16 MiB, the client's own response cap), governs how large a
+  body this server accepts, reached through a new `http.@serve(address, handler, options)`
+  overload — the two-argument form keeps the default. A body over the cap gets `413
+  Content Too Large`, checked against a declared `Content-Length` before any of the body
+  has to arrive; malformed chunked framing gets `400 Bad Request`. See
+  `docs/corelib/http.md#request-bodies` and `examples/http_server.qn`. Part of #435.
 - **`http.@serve(address, handler)` is the HTTP server layer, built on `net.@tcpServe`:
   its lowering calls that same runtime entry with `core.http`'s own connection handler
   filled in, so each accepted connection reads its request head, calls `handler` once,

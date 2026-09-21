@@ -325,6 +325,25 @@ impl<'ctx> CodeGenerator<'ctx> {
                 ],
                 false,
             ),
+            // void __http_body_progress({i8,{ptr,i64}}* out, i8* raw,i64,
+            // i8* transferEncoding,i64, i8* contentLength,i64, double maxBodySize) — the
+            // native `core.http` body-PROGRESS primitive: whether the request body
+            // `transferEncoding`/`contentLength` declare has fully arrived yet in `raw` (the
+            // connection's own bytes received so far), writing the resulting `Result` into
+            // `out`. Synchronous, like `__http_frame_body`.
+            "__http_body_progress" => ctx.void_type().fn_type(
+                &[
+                    ptr.into(),
+                    ptr.into(),
+                    i64t.into(),
+                    ptr.into(),
+                    i64t.into(),
+                    ptr.into(),
+                    i64t.into(),
+                    f64t.into(),
+                ],
+                false,
+            ),
             // { ptr, i64 } __force_text(i8* promise) — force a deferred Text: park until the
             // promise is fulfilled, then return its `{ ptr, i64 }` bytes (memoized).
             "__force_text" => self.ptr_len_struct_type().fn_type(&[ptr.into()], false),
@@ -701,6 +720,53 @@ impl<'ctx> CodeGenerator<'ctx> {
         self.builder
             .build_load(result_ty, out, "frame_body")
             .map_err(ctx("Failed to load core.http.frameBody result"))
+    }
+
+    /// Lower a call to `core.http`'s native body-PROGRESS primitive (`bodyProgress`, the
+    /// server-side sibling of `frameBody`): the declaration's own body is an inert
+    /// placeholder, so every call is redirected here instead. `accumulated` is the
+    /// connection's own bytes received so far — the intrinsic locates the head/body blank
+    /// line itself, exactly as `frameBody` does.
+    pub(super) fn generate_body_progress(
+        &mut self,
+        arguments: &[Expression],
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        if arguments.len() != 4 {
+            return Err(format!(
+                "core.http.bodyProgress expects exactly 4 arguments (accumulated, \
+                 transferEncoding, contentLength, maxBodySize), got {}",
+                arguments.len()
+            ));
+        }
+        let (raw_ptr, raw_len) = self.extract_text(&arguments[0])?;
+        let (transfer_encoding_ptr, transfer_encoding_len) = self.extract_text(&arguments[1])?;
+        let (content_length_ptr, content_length_len) = self.extract_text(&arguments[2])?;
+        let BasicValueEnum::FloatValue(max_body_size) = self.generate_expression(&arguments[3])?
+        else {
+            return Err("core.http.bodyProgress expects a Num maxBodySize argument".to_string());
+        };
+        let result_ty = self.sum_struct_type("Result");
+        let out = self.create_entry_block_alloca("body_progress_out", result_ty.into())?;
+        let body_progress = self.get_intrinsic("__http_body_progress")?;
+        self.builder
+            .build_call(
+                body_progress,
+                &[
+                    out.into(),
+                    raw_ptr.into(),
+                    raw_len.into(),
+                    transfer_encoding_ptr.into(),
+                    transfer_encoding_len.into(),
+                    content_length_ptr.into(),
+                    content_length_len.into(),
+                    max_body_size.into(),
+                ],
+                "",
+            )
+            .map_err(ctx("Failed to call core.http.bodyProgress"))?;
+        self.builder
+            .build_load(result_ty, out, "body_progress")
+            .map_err(ctx("Failed to load core.http.bodyProgress result"))
     }
 
     /// Lower the `write(content, fd)` builtin: render `content` through its `` ` ``
