@@ -297,9 +297,9 @@ fn spawn_with_stack<F: FnOnce() + 'static>(stack_size: usize, f: F) {
     });
 }
 
-/// Spawn `f` as a child fiber, with the standard [`FIBER_STACK_SIZE`] stack. Call it from
+/// Spawn `f` as a child fiber, with the standard `FIBER_STACK_SIZE` stack. Call it from
 /// within a running fiber; [`run`] seeds the program's own fiber directly, at
-/// [`SEED_STACK_SIZE`]. Panics if no scheduler is active.
+/// `SEED_STACK_SIZE`. Panics if no scheduler is active.
 pub fn spawn<F: FnOnce() + 'static>(f: F) {
     spawn_with_stack(FIBER_STACK_SIZE, f);
 }

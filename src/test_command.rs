@@ -277,7 +277,7 @@ fn compile_and_run(suite: &Path, options: &Options, status: &Status) -> bool {
 ///
 /// `root` must be one suite file: a directory (the default `.` included) cannot name the
 /// one entry point a build produces. `only`, when given, is checked against the suite's
-/// paths exactly as [`compile_and_run`] checks it, then baked in by pruning every
+/// paths exactly as `compile_and_run` checks it, then baked in by pruning every
 /// `describe`/`it` it excludes from the program before code generation — the produced
 /// binary carries no code for what was excluded and needs no selection at run time to
 /// honour it, so running it plain reproduces the filtered run.

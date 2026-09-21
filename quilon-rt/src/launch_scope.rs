@@ -7,7 +7,7 @@
 //! (`@readStdin`, `@tcpRequest`) opens a launch registry on entry ([`__block_scope_enter`])
 //! and joins it before its value flows out ([`__block_scope_join`]) — the code generator
 //! emits both calls only around such a block (`src/deferral.rs`'s `is_launch_scope`), so
-//! every other block pays nothing. [`crate::deferred::launch`] registers itself with
+//! every other block pays nothing. `crate::deferred::launch` registers itself with
 //! whatever scope is open at the moment it launches, so codegen never has to name a launch
 //! site to register it — the registry is keyed by BLOCK, not by value, which is also what
 //! lets a future primitive whose own result is ready at once but whose work is a
@@ -25,7 +25,7 @@
 //! call-level launch tomorrow), parking and resuming interleaved, so a plain thread-local
 //! stack would let one fiber's close pop a scope another fiber opened and has not closed
 //! yet. Each fiber's own open scopes are kept under its own id
-//! ([`crate::scheduler::current_fiber_id`]).
+//! (`crate::scheduler::current_fiber_id`).
 
 use crate::io::write_to_fd;
 use crate::process::__exit;

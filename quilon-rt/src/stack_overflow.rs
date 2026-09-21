@@ -4,10 +4,11 @@
 //!
 //! A fiber's stack is bounded by one guard page (see
 //! [`crate::scheduler`]'s `spawn_with_stack`); recursion deep enough to reach it faults
-//! there. [`install`] puts a signal handler on its own alternate stack — the fault happens
+//! there. `install` puts a signal handler on its own alternate stack — the fault happens
 //! with no room left on the fiber's own stack — that checks the faulting address against
-//! the currently RUNNING fiber's guard page and reports [`report::codes::STACK_OVERFLOW`]
-//! through the runtime's usual [`report::RUNTIME_EXIT_CODE`] when it lands there. A fault
+//! the currently RUNNING fiber's guard page and reports
+//! [`crate::report::codes::STACK_OVERFLOW`] through the runtime's usual
+//! `report::RUNTIME_EXIT_CODE` when it lands there. A fault
 //! outside that page is not one the runtime knows how to explain, so the handler restores
 //! the default disposition and returns, letting the CPU re-execute the faulting
 //! instruction — now fatal, with the original registers and program counter intact for
@@ -17,7 +18,7 @@
 //! resumes, so only the one currently executing can newly fault on its own guard page.
 //!
 //! `sigaltstack` is a per-THREAD attribute, unlike `sigaction`'s process-wide
-//! disposition, so [`install`] gives every thread that calls it its own — a compiled
+//! disposition, so `install` gives every thread that calls it its own — a compiled
 //! program has exactly one, but a host running several programs' schedulers on separate
 //! threads (the test suite, via `register_thread`) needs one per thread.
 

@@ -514,7 +514,7 @@ pub fn text_header(bytes: &[u8]) -> (i64, i64) {
     (count, flags)
 }
 
-/// [`text_header`], plus [`TEXT_LITERAL`] — the only place that bit is ever set.
+/// [`text_header`], plus `TEXT_LITERAL` — the only place that bit is ever set.
 pub fn literal_header(bytes: &[u8]) -> (i64, i64) {
     let (count, flags) = text_header(bytes);
     (count, flags | TEXT_LITERAL)
