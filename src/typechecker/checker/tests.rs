@@ -262,9 +262,7 @@ fn test_text_literal_pattern_against_a_num_scrutinee_is_rejected() {
 fn test_text_literal_pattern_against_a_sum_is_rejected() {
     // A sum's values carry no `Text`, so a text pattern can't dispatch on one.
     assert!(matches!(
-        check_ok(
-            "^ = () -> Num => <\n  val :: Result = Ok(5)\n  val ? | \"GET\" => 0 | _ => 1\n>"
-        ),
+        check_ok("^ = () -> Num => <\n  val :: Result = Ok(5)\n  val ? | \"GET\" => 0 | _ => 1\n>"),
         Err(TypeError::TypeMismatch { .. })
     ));
 }

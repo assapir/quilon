@@ -290,8 +290,7 @@ fn test_parse_pattern_wildcard() {
 
 #[test]
 fn test_parse_pattern_text_literal() {
-    let tokens =
-        Lexer::tokenize("result = value ? | \"GET\" => 0 | other => 1").unwrap();
+    let tokens = Lexer::tokenize("result = value ? | \"GET\" => 0 | other => 1").unwrap();
     let result = parse(&tokens).unwrap();
     if let Item::VariableDeclaration(declaration) = &result.items[0] {
         if let Expression::Match { arms, .. } = &declaration.value {
