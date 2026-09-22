@@ -1619,6 +1619,25 @@ fn reject_result_parameter_bound_but_uninformed_variant_fed_into_a_concrete_cons
     assert_type_error_code(src, Code::UnresolvedResultPayload);
 }
 
+/// The same danger, but the uninformed binding flows into a PLAIN function's own
+/// concrete parameter instead of a sum-variant constructor: left `Generic`, `shout`
+/// would receive an `f64` where it expects `{ ptr, i64 }` — an LLVM module verification
+/// failure, not a silent mismatch.
+#[test]
+fn reject_result_parameter_bound_but_uninformed_variant_fed_into_a_concrete_function_call() {
+    let src = r#"
+        shout = (text :: Text) -> Text => < text + "!" >
+
+        judge = (result :: Result) -> Text => <
+          result ?
+            | Ok(text)     => text
+            | NotOk(text2) => shout(text2)
+        >
+        ^ = () -> Num => < judge(Ok("hi")).length >
+    "#;
+    assert_type_error_code(src, Code::UnresolvedResultPayload);
+}
+
 /// A `Result`'s payload also crosses an OVERLOADED callee: the one-argument `make`'s
 /// return type is refined from its own body (`Ok(Thing)`), so a call to it through the
 /// two-argument overload sees the real payload instead of the opaque annotation.

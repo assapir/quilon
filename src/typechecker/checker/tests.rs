@@ -267,6 +267,27 @@ fn test_result_parameter_bound_but_uninformed_and_fed_into_a_concrete_constructo
 }
 
 #[test]
+fn test_result_parameter_bound_but_uninformed_and_fed_into_a_concrete_function_call_is_rejected() {
+    // The same danger as the constructor case above, but the uninformed binding is
+    // passed to a PLAIN function (`shout`) whose own parameter is a concrete `Text`,
+    // not a sum-variant constructor. Left `Generic`, this would reach codegen as an
+    // `f64` argument against a function expecting `{ ptr, i64 }` — an LLVM module
+    // verification failure, not a silent mismatch.
+    assert!(matches!(
+        check_ok(
+            "shout = (text :: Text) -> Text => < text + \"!\" >\n\
+             judge = (result :: Result) -> Text => <\n  \
+               result ?\n    \
+                 | Ok(text)     => text\n    \
+                 | NotOk(text2) => shout(text2)\n\
+             >\n\
+             ^ = () -> Num => < judge(Ok(\"hi\")).length >"
+        ),
+        Err(TypeError::UnresolvedResultPayload { .. })
+    ));
+}
+
+#[test]
 fn test_result_parameter_shadow_of_an_unrelated_sibling_local_does_not_hide_a_real_match() {
     // Regression: two SIBLING nested functions each declare their own, unrelated local
     // named `copy`; one of them happens to copy the outer `result` alias into its OWN

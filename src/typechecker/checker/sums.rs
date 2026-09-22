@@ -296,11 +296,12 @@ impl TypeChecker {
     /// body, never from a caller.
     ///
     /// A bound position no direct call informs is rejected instead of left `Generic`
-    /// when the binding itself is passed straight into a sum-variant constructor whose
-    /// field there is concrete and isn't `Num` (see
+    /// when the binding itself is passed straight into a sum-variant constructor OR a
+    /// plain function whose own slot there is concrete and isn't `Num` (see
     /// [`Self::pin_one_result_parameter`] and `flows_into_a_non_num_constructor`) — the
-    /// one shape that reaches codegen as `Num`'s `f64` stored into a differently-shaped
-    /// slot, an internal error rather than a silent mismatch.
+    /// one shape that reaches codegen as `Num`'s `f64` stored against a
+    /// differently-shaped slot, an internal error (a constructor's `coerce_payload`, or
+    /// a plain call's own LLVM module verification) rather than a silent mismatch.
     ///
     /// One gap this leaves: a parameter FORWARDED into another function's own bare
     /// `:: Result` parameter, rather than called with a concrete `Ok`/`NotOk` argument
@@ -526,7 +527,7 @@ impl TypeChecker {
             && ok_pin.is_none()
             && let Some((binding_name, binding_span)) =
                 sites.iter().find_map(|s| s.ok_binding.as_ref())
-            && flows_into_a_non_num_constructor(&self.sum_types, body, binding_name)
+            && flows_into_a_non_num_constructor(self, body, binding_name)
         {
             return Err(TypeError::UnresolvedResultPayload {
                 function: name.to_string(),
@@ -538,7 +539,7 @@ impl TypeChecker {
             && not_ok_pin.is_none()
             && let Some((binding_name, binding_span)) =
                 sites.iter().find_map(|s| s.not_ok_binding.as_ref())
-            && flows_into_a_non_num_constructor(&self.sum_types, body, binding_name)
+            && flows_into_a_non_num_constructor(self, body, binding_name)
         {
             return Err(TypeError::UnresolvedResultPayload {
                 function: name.to_string(),
@@ -1069,8 +1070,50 @@ fn unify_result_pin(pinned: &mut Option<Type>, field: &Type, span: &Span) -> Res
 /// function's or a lambda's own concrete-typed parameter is the same, already-accepted
 /// forwarding gap [`TypeChecker::pin_result_parameters`]'s doc comment names, since a
 /// user function's declared parameter type isn't looked up here.
+impl TypeChecker {
+    /// Whether `binding_name` is passed, anywhere in `body`, as a bare argument to EITHER
+    /// a sum-variant constructor OR a plain (non-overloaded) function whose slot at that
+    /// position is CONCRETE and isn't `Num` — see [`flows_into_a_non_num_constructor`]'s
+    /// doc comment for why that shape is unsafe to leave `Generic`. An overloaded name's
+    /// own member isn't resolved here (`self.env.get_type` answers only a plain
+    /// function's single registered type, and correctly answers nothing useful for one),
+    /// so a payload forwarded into an overload set keeps the same accepted, non-widened
+    /// forwarding gap it already had.
+    fn slot_is_unsafe_for_generic(&self, callee: &str, position: usize) -> bool {
+        let concrete_non_num = |field: &Type| !matches!(field, Type::Generic { .. } | Type::Num);
+        self.sum_types.values().any(|sum_type| {
+            let Type::Sum { variants, .. } = sum_type else {
+                return false;
+            };
+            variants
+                .iter()
+                .find(|v| v.name == callee)
+                .and_then(|v| v.fields.get(position))
+                .is_some_and(concrete_non_num)
+        }) || matches!(
+            self.env.get_type(callee),
+            Some(Type::Function { parameters, .. })
+                if parameters.get(position).is_some_and(concrete_non_num)
+        )
+    }
+}
+
+/// Whether `binding_name` is passed, anywhere in `body`, as a bare argument to a call
+/// whose slot at that position is CONCRETE and isn't `Num` (see
+/// [`TypeChecker::slot_is_unsafe_for_generic`]) — the one shape
+/// [`TypeChecker::pin_one_result_parameter`] cannot safely leave `Generic`: `Num` is safe
+/// because Generic's own codegen default (`f64`) already IS `Num`'s representation, so
+/// nothing downstream can tell the difference; anything else (`Text`, a record, another
+/// sum, an array) has its own, DIFFERENT representation, and a `Generic` value flowing
+/// into that slot is exactly what makes `coerce_payload` (a constructor) or LLVM's own
+/// module verifier (a plain function call) fail. A purely local scan, like
+/// [`result_parameter_matches`] itself: it reads only what `binding_name` is passed to,
+/// not what any OTHER declaration's body contains — an OVERLOADED function's own member
+/// isn't resolved (see [`TypeChecker::slot_is_unsafe_for_generic`]), which remains the
+/// same, already-accepted forwarding gap [`TypeChecker::pin_result_parameters`]'s doc
+/// comment names.
 fn flows_into_a_non_num_constructor(
-    sum_types: &HashMap<String, Type>,
+    checker: &TypeChecker,
     body: &Expression,
     binding_name: &str,
 ) -> bool {
@@ -1085,23 +1128,12 @@ fn flows_into_a_non_num_constructor(
             member_call: false,
             ..
         } = expression
-            && let Expression::Identifier {
-                name: constructor, ..
-            } = function.as_ref()
+            && let Expression::Identifier { name: callee, .. } = function.as_ref()
         {
             for (position, argument) in arguments.iter().enumerate() {
                 if let Expression::Identifier { name, .. } = argument
                     && name == binding_name
-                    && sum_types.values().any(|sum_type| {
-                        let Type::Sum { variants, .. } = sum_type else {
-                            return false;
-                        };
-                        variants
-                            .iter()
-                            .find(|v| v.name == *constructor)
-                            .and_then(|v| v.fields.get(position))
-                            .is_some_and(|field| !matches!(field, Type::Generic { .. } | Type::Num))
-                    })
+                    && checker.slot_is_unsafe_for_generic(callee, position)
                 {
                     found = true;
                     return ControlFlow::Break(());

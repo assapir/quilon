@@ -289,9 +289,10 @@ All notable changes to Quilon are documented here.
   payload is a type mismatch at the second one, and a bound position no direct call informs
   is left generic (the historical, sound-for-`Num` default an unconstructed local variant's
   own slot already gets), rather than rejected — UNLESS that binding is itself passed
-  straight into a sum-variant constructor whose field there is concrete and isn't `Num`,
-  which would reach codegen as `Num`'s own representation stored into a differently-shaped
-  slot; that specific shape is still reported rather than left to crash. This covers a
+  straight into a sum-variant constructor or a plain function whose slot there is
+  concrete and isn't `Num`, which would reach codegen as `Num`'s own representation
+  stored into (or passed against) a differently-shaped slot; that specific shape is
+  still reported rather than left to crash. This covers a
   top-level function's, a `:=`/`=`-bound lambda's, and a nested function or lambda's
   parameter, at any nesting depth. A method's or an overloaded function's own parameter has
   no such call site to pin from at all — a member call's argument can't be attributed to one
