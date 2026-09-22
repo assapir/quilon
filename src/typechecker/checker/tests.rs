@@ -187,10 +187,11 @@ fn test_sum_type_result_match() {
 }
 
 #[test]
-fn test_result_parameter_disagreeing_callers_is_a_type_mismatch() {
-    // A bare `:: Result` parameter's payload is pinned from what callers pass at that
-    // position; a second caller disagreeing with the first is a `TypeMismatch` at the
-    // second call, the same rule a constructor's own argument already enforces.
+fn test_result_parameter_matched_and_bound_is_rejected() {
+    // Every bare `:: Result` annotation is the same unspecialized shape, so matching
+    // `classify`'s parameter directly and binding `text` is unresolved regardless of
+    // what any caller passes — the checker does not infer a parameter's payload from
+    // its callers at all (see `sums::reject_unresolved_result_parameters`).
     assert!(matches!(
         check_ok(
             "classify = (result :: Result) -> Text => <\n  \
@@ -198,18 +199,17 @@ fn test_result_parameter_disagreeing_callers_is_a_type_mismatch() {
              >\n\
              ^ = () -> Num => <\n  \
                a = classify(Ok(\"hi\"))\n  \
-               b = classify(Ok(5))\n  \
-               0\n\
+               a.length\n\
              >"
         ),
-        Err(TypeError::TypeMismatch { .. })
+        Err(TypeError::UnresolvedResultPayload { .. })
     ));
 }
 
 #[test]
 fn test_result_parameter_never_called_with_a_bound_payload_is_rejected() {
-    // Nothing calls `classify`, so no caller's argument teaches the checker `text`'s
-    // real type — reported rather than left for codegen to default to `Num`.
+    // Rejected the same way whether `classify` is called or not — nothing about a
+    // caller changes the outcome, only whether the parameter's own body binds it.
     assert!(matches!(
         check_ok(
             "classify = (result :: Result) -> Text => <\n  \
@@ -222,12 +222,12 @@ fn test_result_parameter_never_called_with_a_bound_payload_is_rejected() {
 }
 
 #[test]
-fn test_result_parameter_forwarded_uninformatively_is_rejected_not_crashed() {
-    // `outer` forwards its own still-generic parameter into `inner`, which matches and
-    // binds it directly. `inner` DOES have a direct call site (from `outer`), so it is
-    // not "never called" — but that one call never carries a concrete payload, so the
-    // binding stays genuinely unresolved and must still be rejected, not silently
-    // defaulted (which crashed at runtime before this pinning pass existed).
+fn test_result_parameter_forwarded_is_still_rejected_not_crashed() {
+    // `outer` forwards its own parameter into `inner`, which matches and binds it
+    // directly — `inner`'s OWN parameter is what gets rejected, regardless of how (or
+    // whether) `outer` is itself called. Before this pass existed, this shape crashed
+    // at runtime (a `Text` payload read back as `Num`'s `f64` representation) rather
+    // than failing to compile.
     assert!(matches!(
         check_ok(
             "inner = (result :: Result) -> Text => <\n  \
@@ -241,10 +241,9 @@ fn test_result_parameter_forwarded_uninformatively_is_rejected_not_crashed() {
 }
 
 #[test]
-fn test_result_parameter_of_a_method_is_rejected_not_silently_pinned() {
-    // A method's calls are member calls (`recv.name(...)`), which this pass's plain-call
-    // scan cannot resolve to a receiver-independent argument — so a method's bare
-    // `:: Result` parameter is never pinned, only rejected when bound.
+fn test_result_parameter_of_a_method_is_rejected() {
+    // A method's bare `:: Result` parameter is rejected exactly like a plain
+    // function's — this pass treats every declaration uniformly.
     assert!(matches!(
         check_ok(
             "Box = {\n  \
@@ -263,10 +262,8 @@ fn test_result_parameter_of_a_method_is_rejected_not_silently_pinned() {
 }
 
 #[test]
-fn test_result_parameter_of_an_overloaded_function_is_rejected_not_silently_pinned() {
-    // A bare call to an overloaded name doesn't say which member's parameter the
-    // argument fills, so pinning an overload member's `:: Result` parameter is unsound;
-    // a bound payload there is rejected rather than pinned from the wrong member's calls.
+fn test_result_parameter_of_an_overloaded_function_is_rejected() {
+    // An overload member's bare `:: Result` parameter is rejected the same way too.
     assert!(matches!(
         check_ok(
             "handle = (result :: Result) -> Text => <\n  \
@@ -281,9 +278,8 @@ fn test_result_parameter_of_an_overloaded_function_is_rejected_not_silently_pinn
 
 #[test]
 fn test_result_parameter_only_self_recursive_is_rejected() {
-    // `loopy`'s only call is its own self-recursive one, whose argument is the same
-    // still-generic parameter — that call exists but teaches the pin nothing, so the
-    // binding is exactly as unresolved as a function nothing calls at all.
+    // `loopy`'s only call is its own self-recursive one — irrelevant either way, since
+    // this pass never looks at callers.
     assert!(matches!(
         check_ok(
             "loopy = (result :: Result) -> Text => <\n  \
@@ -296,29 +292,31 @@ fn test_result_parameter_only_self_recursive_is_rejected() {
 }
 
 #[test]
-fn test_result_parameter_referenced_only_as_a_value_is_not_falsely_rejected() {
-    // `classify` is never written as a direct `classify(...)` call, only passed as a
-    // value to `.map` — a shape this pass cannot resolve to an argument type. Rather than
-    // reject working code on a false "called nowhere", an unpinnable-but-referenced name
-    // is left generic (the same risk the historical default always carried here).
+fn test_result_parameter_only_matched_with_a_wildcard_is_accepted() {
+    // Neither variant is ever BOUND (`Ok(_)`/`NotOk(_)`), so there is no payload type to
+    // resolve at all — a function dispatched on the tag alone, every call passing a
+    // different concrete payload, is untouched by this rule.
     assert!(
         check_ok(
-            "classify = (result :: Result) -> Text => <\n  \
-               result ? | Ok(text) => text | NotOk(_) => \"none\"\n\
-             >\n\
-             ^ = () -> Num => < [Ok(\"hi\")].map(classify).size >"
+            "okTag = (r :: Result) -> Num => < r ? | Ok(_) => 1 | NotOk(_) => 0 >\n\
+             ^ = () -> Num => <\n  \
+               a = okTag(Ok(42))\n  \
+               b = okTag(Ok(\"hi\"))\n  \
+               c = okTag(NotOk(7))\n  \
+               a + b + c\n\
+             >"
         )
         .is_ok()
     );
 }
 
 #[test]
-fn test_result_parameter_shadowed_by_a_local_reassignment_is_not_cross_contaminated() {
+fn test_result_parameter_shadowed_by_a_local_reassignment_is_not_falsely_rejected() {
     // `helper`'s own local `result := Ok(x)` reuses `outer`'s parameter name, but is a
     // fresh, already-concrete (`Num`) binding — the checker's own first-pass record of
-    // its scrutinee's real type (not just its name) keeps this site from being
-    // mistaken for a read of `outer`'s still-generic parameter, which would otherwise
-    // stamp `outer`'s pinned type over `helper`'s unrelated match.
+    // its scrutinee's real type (not just its name) keeps this from being mistaken for
+    // a read of `outer`'s own (unused, here) parameter, which would otherwise falsely
+    // reject a program that never actually needs this rule at all.
     assert!(
         check_ok(
             "outer = (result :: Result) -> Num => <\n  \
@@ -335,17 +333,17 @@ fn test_result_parameter_shadowed_by_a_local_reassignment_is_not_cross_contamina
 }
 
 #[test]
-fn test_result_parameter_of_a_bound_lambda_is_pinned_like_a_function() {
-    // A `:=`-bound lambda is called by its binding's name exactly like a
-    // `FunctionDeclaration`, and is never overloaded — so its bare `:: Result`
-    // parameter is pinned from its one caller the same way.
-    assert!(
+fn test_result_parameter_of_a_bound_lambda_is_rejected_too() {
+    // A `:=`-bound lambda's bare `:: Result` parameter is checked exactly like a
+    // `FunctionDeclaration`'s — this pass visits every function-shaped declaration in
+    // the program uniformly, including one bound this way.
+    assert!(matches!(
         check_ok(
             "judge := (act :: Result) => < act ? | Ok(text) => text | NotOk(_) => \"n\" >\n\
              ^ = () -> Num => < judge(Ok(\"hi\")).length >"
-        )
-        .is_ok()
-    );
+        ),
+        Err(TypeError::UnresolvedResultPayload { .. })
+    ));
 }
 
 #[test]
@@ -373,6 +371,25 @@ fn test_result_parameter_never_matched_is_not_falsely_rejected_by_a_nested_shado
         )
         .is_ok()
     );
+}
+
+#[test]
+fn test_result_parameter_of_a_nested_function_is_rejected_too() {
+    // `classify` is declared INSIDE `outer`'s body, not at the top level — this pass
+    // still visits it, at whatever depth, and rejects its own bound `:: Result`
+    // parameter exactly like a top-level function's.
+    assert!(matches!(
+        check_ok(
+            "outer = () -> Num => <\n  \
+               classify = (result :: Result) -> Text => <\n    \
+                 result ? | Ok(text) => text | NotOk(_) => \"none\"\n  \
+               >\n  \
+               classify(Ok(\"hello world\")).length\n\
+             >\n\
+             ^ = () -> Num => < outer() >"
+        ),
+        Err(TypeError::UnresolvedResultPayload { .. })
+    ));
 }
 
 #[test]

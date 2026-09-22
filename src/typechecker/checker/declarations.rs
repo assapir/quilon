@@ -86,10 +86,12 @@ impl TypeChecker {
         // return annotation is one nothing calls — reported at its definition.
         self.report_unannotated_overload_member()?;
 
-        // Every call site is known now too, so a bare `:: Result` parameter matched
-        // directly in its own function's body can be pinned from what callers actually
-        // pass it — see `sums::pin_result_parameters`.
-        self.pin_result_parameters(program)?;
+        // A bare `:: Result` parameter matched directly and bound is rejected rather
+        // than pinned from its callers — see `reject_unresolved_result_parameters`'s own
+        // doc comment for why. Runs after every declaration is checked, so it does not
+        // need to (indeed, since it never reads a caller at all, need not) wait for any
+        // particular ordering.
+        self.reject_unresolved_result_parameters(program)?;
 
         // Validate the `^` entry point's parameter signature up front, so `quilon check`
         // and `quilon run`/`build` all reject an unsupported form with the SAME clear

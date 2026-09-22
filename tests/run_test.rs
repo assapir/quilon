@@ -2,6 +2,7 @@
 // codegen -> JIT) and assert the program's real exit code. This is the backbone
 // that makes documented example behavior ("factorial(5) -> 120") actually verified.
 
+use quilon::diagnostic::codes::Code;
 use quilon::jit;
 use quilon::lexer::Lexer;
 use quilon::parser;
@@ -12,8 +13,8 @@ use std::process::Command;
 mod common;
 use common::{
     JIT_LOCK, assert_exit, assert_exit_linked, assert_exit_linked_from, assert_type_error,
-    build_and_run_native, build_and_run_native_with_stderr, ensure_runtime_lib, run_program,
-    tool_available,
+    assert_type_error_code, build_and_run_native, build_and_run_native_with_stderr,
+    ensure_runtime_lib, run_program, tool_available,
 };
 
 #[test]
@@ -1452,11 +1453,13 @@ fn aot_array_of_results_unifies_variant_payloads() {
     assert_eq!(code, 3, "a native build must exit 3 on the same program");
 }
 
-/// A bare `:: Result` parameter's payload is pinned from what its one caller passes:
-/// `classify` matches `result` directly and binds `Ok(text)`, and the checker recovers
-/// `Text` from `classify(Ok("hi"))` rather than leaving it generic. "hi".length = 2.
+/// A bare `:: Result` parameter matched directly and bound (`Ok(text)`) is rejected —
+/// every bare `:: Result` annotation is the same unspecialized shape, so nothing about
+/// `classify`'s own declaration says what `text`'s real type is, however it is called.
+/// `quilon run` and `quilon build` share this same front end, so a program the checker
+/// rejects never reaches either backend — one check here covers both.
 #[test]
-fn run_result_parameter_payload_pinned_from_a_call_site() {
+fn reject_result_parameter_matched_and_bound_directly() {
     let src = r#"
         Progress = Done(Text) / Broken(Text)
 
@@ -1471,32 +1474,7 @@ fn run_result_parameter_payload_pinned_from_a_call_site() {
             | Broken(text) => text.length
         >
     "#;
-    assert_exit(src, 2);
-}
-
-/// AOT: the same pinning holds through a native build, not just the JIT.
-#[test]
-fn aot_result_parameter_payload_pinned_from_a_call_site() {
-    if !tool_available("clang") {
-        eprintln!("skipping the native Result-parameter-pinning check: clang is not on PATH");
-        return;
-    }
-    let src = r#"
-        Progress = Done(Text) / Broken(Text)
-
-        classify = (result :: Result) -> Progress => <
-          result ?
-            | Ok(text) => Done(text)
-            | NotOk(_) => Broken("stop")
-        >
-        ^ = () -> Num => <
-          classify(Ok("hi")) ?
-            | Done(text)   => text.length
-            | Broken(text) => text.length
-        >
-    "#;
-    let (code, _) = build_and_run_native("result_parameter_payload_pinning", src);
-    assert_eq!(code, 2, "a native build must exit 2 on the same program");
+    assert_type_error_code(src, Code::UnresolvedResultPayload);
 }
 
 /// A `Result`'s payload also crosses an OVERLOADED callee: the one-argument `make`'s
@@ -1547,24 +1525,6 @@ fn aot_result_payload_pinned_through_an_overloaded_callee() {
     "#;
     let (code, _) = build_and_run_native("result_payload_overloaded_callee", src);
     assert_eq!(code, 2, "a native build must exit 2 on the same program");
-}
-
-/// A nested function reusing its enclosing function's `:: Result` parameter NAME for its
-/// own, unrelated `:: Result` parameter must not have the outer's pinned payload type
-/// applied to it (or vice versa): `outer`'s own `result` is pinned `Text` from its
-/// caller, `inner`'s own (differently-scoped) `result` is pinned `Num` from ITS caller,
-/// and each must keep its own binding's real type. "hi".length = 2.
-#[test]
-fn run_nested_function_reusing_a_result_parameter_name_is_not_cross_contaminated() {
-    let src = r#"
-        outer = (result :: Result) -> Text => <
-          inner = (result :: Result) -> Num => < result ? | Ok(n) => n | NotOk(_) => 0 >
-          inner(Ok(5))
-          result ? | Ok(text) => text | NotOk(_) => "none"
-        >
-        ^ = () -> Num => < outer(Ok("hi")).length >
-    "#;
-    assert_exit(src, 2);
 }
 
 /// A LOCAL reassignment inside a nested function, reusing the outer parameter's exact

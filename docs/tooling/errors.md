@@ -1202,12 +1202,10 @@ Bind it atomically:
 
 ### QN351 — unresolved `Result` payload
 
-A bare `:: Result` parameter is matched with a payload binding (`Ok(x)`, not `Ok(_)`), and
-nothing tells the checker what `x`'s real type is: a `Result`'s payload type comes from the
-concrete arguments a plain function's DIRECT callers actually pass, and none did — the
-function is called nowhere, every call only forwards an equally unpinned `Result` one hop
-further, or the parameter belongs to a method or an overloaded function, neither of which
-has a bare-name call site to read an argument's type from.
+A bare `:: Result` parameter — of a function, a method, or a `:=`/`=`-bound lambda — is
+matched directly and its payload is bound (`Ok(x)`, not `Ok(_)`). The parameter's own
+declaration carries no payload type of its own (every bare `:: Result` is the same
+unspecialized `Ok(T)`/`NotOk(E)` shape), and the checker does not infer one from callers.
 
 ```quilon ignore
 describe = (result :: Result) -> Text => <
@@ -1216,9 +1214,18 @@ describe = (result :: Result) -> Text => <
 ^ = () -> Num => < 0 >
 ```
 
-Call it somewhere with a concrete `Ok(...)`/`NotOk(...)` argument, so its payload has a real
-type to bind, or match the producing call directly instead of forwarding it through a
-parameter.
+Match the call that produces the `Result` directly instead, and pass the extracted
+payload — not the whole `Result` — to a helper:
+
+```quilon
+describe = (text :: Text) -> Text => < "it says: " + text >
+^ = () -> $ => <
+  message = Ok("home") ?
+    | Ok(text) => describe(text)
+    | NotOk(_) => "?"
+  assert(message, equals("it says: home"))
+>
+```
 
 ## Code generation and build
 

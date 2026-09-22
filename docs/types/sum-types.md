@@ -75,11 +75,10 @@ Result = Ok(...) / NotOk(...)    ~ predefined; `Ok` = success, `NotOk` = failure
 ```
 Use it exactly like any other sum type:
 ```quilon
-classify = (v :: Result) => <
-  v ?
-    | Ok(x)    => x * 2
-    | NotOk(e) => 0
->
+v = Ok(21)
+doubled = v ?
+  | Ok(x)    => x * 2
+  | NotOk(e) => 0
 ```
 Payloads work end-to-end for `Num`, `Bool`, and `Text` (e.g. `Ok("done")` /
 `NotOk("error")`). A **pattern-bound payload carries its concrete type**, so it is
@@ -99,11 +98,13 @@ And a `-> Result` whose branches are `Ok(Text)` / `NotOk(Text)` — the `getEnv`
 shape — carries **both** arms' payloads. (See `examples/result.qn` and
 `examples/result_payload.qn`.)
 
-A plain function's bare `:: Result` **parameter** works the same way in the other
-direction: matching it directly and binding a payload (`Ok(text) => …`) pins that
-payload's type from every direct call site passing the parameter a concrete argument, so
-passing `text` on as a constructor argument (`Done(text)`) carries its real type across.
-(See `examples/result_helper.qn`.)
+A bare `:: Result` **parameter** does not carry this the other way: every bare `:: Result`
+annotation is the same unspecialized `Ok(T)`/`NotOk(E)` shape, so matching such a
+parameter directly and binding its payload (`Ok(x) => …`) is
+[QN351](../tooling/errors.md#qn351--unresolved-result-payload) — nothing about the
+parameter's own declaration says what `x`'s real type is. Match the call that produces
+the `Result` directly instead, and pass the extracted payload on to a helper. (See
+`examples/result_helper.qn`.)
 
 Every `Result` shares **one uniform layout** regardless of its payload, so a `Result`
 carrying *any* payload — `Num`, `Text`, `[]Text`, a composite — passes through a generic

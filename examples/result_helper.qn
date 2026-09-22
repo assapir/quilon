@@ -1,23 +1,25 @@
-~ Passing a `Result` into a helper that matches it. `judge`'s parameter is a bare
-~ `:: Result` — the annotation alone carries no payload type — so the checker pins
-~ `act`'s payload from what the one call below actually passes: `Ok(Text)`. The bound
-~ `text` then carries that real `Text` into `Cheer`'s own field, where the caller reads
-~ it back at its real type.
+~ A `Result` matched where it is produced, not forwarded into a helper's own bare
+~ `:: Result` parameter for the helper to match: such a parameter carries no payload
+~ type of its own, so a match that binds it there is rejected (QN351) rather than
+~ guessed at. `judge` returns a `Result`; `^` matches that call directly and hands
+~ `announce` the ALREADY-EXTRACTED, concrete `Text` — never the raw `Result` itself.
 ~ Run: cargo run -- run examples/result_helper.qn   (exits 0; assertions abort)
 
-Reaction = Cheer(Text) / Boo(Text)
-
-judge = (act :: Result) -> Reaction => <
-  act ?
-    | Ok(text) => Cheer(text)
-    | NotOk(_) => Boo("come back next season")
+judge = (act :: Text) -> Result => <
+  act == "" ? NotOk("nobody to judge") : Ok(act + " wins!")
 >
 
-^ = () -> $ => <
-  verdict = judge(Ok("a flamingo on a unicycle")) ?
-    | Cheer(text) => text
-    | Boo(text)   => text
+announce = (verdict :: Text) -> Text => < "Ladies and gentlemen: " + verdict >
 
-  assert(verdict, equals("a flamingo on a unicycle"))
-  assert(verdict.length, equals(24))
+^ = () -> $ => <
+  message = judge("a flamingo on a unicycle") ?
+    | Ok(verdict) => announce(verdict)
+    | NotOk(reason) => reason
+
+  assert(message, equals("Ladies and gentlemen: a flamingo on a unicycle wins!"))
+
+  silence = judge("") ?
+    | Ok(verdict) => announce(verdict)
+    | NotOk(reason) => reason
+  assert(silence, equals("nobody to judge"))
 >

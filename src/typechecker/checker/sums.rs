@@ -6,7 +6,6 @@
 
 use crate::ast::Statement;
 use crate::ast::walk::try_for_each_subexpression;
-use std::collections::HashSet;
 use std::ops::ControlFlow;
 
 use super::*;
@@ -256,244 +255,116 @@ impl TypeChecker {
         }
     }
 
-    /// After the whole program is checked, pin the payload type of a `Result`-typed
-    /// PARAMETER — of a plain top-level function, or of a record/sum's method — that
-    /// stays the raw, unspecialized built-in type through its own declaration
-    /// (`resolve_type` gives every bare `:: Result` the same generic `Ok(T)`/`NotOk(E)`
-    /// shape) but is matched directly in its body, binding a payload.
+    /// After the whole program is checked, reject a bare `:: Result` PARAMETER — of a
+    /// top-level function, a `:=`/`=`-bound lambda, a method, or a function/lambda
+    /// declared inside any of those bodies, at any nesting depth — that stays the raw,
+    /// unspecialized built-in type through its own declaration (`resolve_type` gives
+    /// every bare `:: Result` the same generic `Ok(T)`/`NotOk(E)` shape) but is matched
+    /// directly in its OWN body, binding a payload (`Ok(x)`, not `Ok(_)`).
     ///
-    /// Only a PLAIN (non-overloaded) top-level function's parameter is actually pinned:
-    /// its callers are DIRECT calls to one bare name, so an argument's already-checked
-    /// oracle type is the same source [`Self::check_constructor_call`] draws from for a
-    /// constructor's own result. An overload set's members share that one bare name — a
-    /// call to it doesn't say which member's parameter the argument fills — and a
-    /// method's calls are member calls (`recv.name(...)`), which carry no
-    /// receiver-type-independent call site to scan; pinning either soundly would need
-    /// resolving which member/receiver a call reaches, which this whole-program,
-    /// name-keyed pass does not attempt. For both, a bound payload is
-    /// `UnresolvedResultPayload` unconditionally, never silently defaulted — the
-    /// overloaded-RETURN equivalent of this gap is closed instead by
-    /// [`Self::refine_overload_return_type`], which runs per member as its own body is
-    /// checked and needs no cross-call scan.
+    /// Pinning such a parameter's payload from its callers — inferring it, rather than
+    /// rejecting it — was this pass's first design and went through three review
+    /// rounds, each of which found a NEW way a whole-program, name-keyed scan of call
+    /// sites mis-attributes a match to the wrong declaration: a forwarding wrapper, a
+    /// method or overload member (whose calls carry no receiver/member-independent
+    /// argument to read), a nested function or `:=`-bound lambda the scan never visited,
+    /// and a local rebinding that shadows the outer name. Closing each hole added a new
+    /// one; the general fix — resolving a match's scrutinee through the checker's own
+    /// scope-aware call resolution instead of a syntactic name scan — is sound in
+    /// principle but is not a bug-fix-sized change. So this parameter's payload is
+    /// instead treated as unrecoverable within this pass and rejected outright:
+    /// `UnresolvedResultPayload`, naming the fix (match the producing call directly, or
+    /// annotate). Every check here is purely LOCAL to one declaration's own body —
+    /// nothing reads a caller, another declaration, or the whole program — so nothing
+    /// can mis-attribute a match the way the caller-scanning design did.
     ///
-    /// For a pinnable parameter: two DIRECT callers disagreeing over a position's payload
-    /// is a `TypeMismatch` at the second one. A bound position no direct call ever
-    /// informs is `UnresolvedResultPayload` — UNLESS the function's name is never written
-    /// as a direct call anywhere but IS referenced some other way (passed to `.map`,
-    /// assigned to a binding): a real caller may well reach it through a shape this pass
-    /// cannot see, so the position is left `Generic` rather than rejecting working code
-    /// (the same risk the historical default always carried for such a call, not a new
-    /// one this pass introduces). A position no site ever binds (`Ok(_)`) needs no
-    /// payload type at all, so a function dispatched on the tag alone (`okTag`-style,
-    /// every call passing a different concrete payload) is untouched.
-    pub(super) fn pin_result_parameters(&mut self, program: &Program) -> Result<(), TypeError> {
-        let (calls_by_name, referenced_names) = index_program_calls(program);
-
+    /// A parameter no site ever BINDS (`Ok(_)` / `NotOk(_)`) needs no payload type at
+    /// all, so a function dispatched on the tag alone (`okTag`-style, every call passing
+    /// a different concrete payload) is untouched. A `Result`'s payload type crossing a
+    /// function boundary through its RETURN, including an OVERLOADED function's, is a
+    /// different, already-sound mechanism — see [`Self::refine_overload_return_type`]
+    /// and `check_function_declaration`'s own-`env`-binding refinement — since a
+    /// function's return is pinned from its OWN body, never from a caller.
+    pub(super) fn reject_unresolved_result_parameters(
+        &mut self,
+        program: &Program,
+    ) -> Result<(), TypeError> {
         for item in &program.items {
             match item {
                 Item::FunctionDeclaration(declaration) => {
                     if declaration.is_inert_corelib_placeholder() {
                         continue;
                     }
-                    let pinnable = !self.overloaded_names.contains(&declaration.name);
-                    self.pin_result_parameters_of(
+                    self.reject_if_bound_and_unresolved(
                         &declaration.name,
                         &declaration.parameters,
                         &declaration.body,
-                        pinnable,
-                        &calls_by_name,
-                        &referenced_names,
                     )?;
+                    self.reject_nested_result_parameters(&declaration.body)?;
                 }
                 Item::TypeDeclaration(declaration) => {
                     for method in declaration.type_definition.methods() {
-                        self.pin_result_parameters_of(
+                        self.reject_if_bound_and_unresolved(
                             &method.name,
                             &method.parameters,
                             &method.body,
-                            false,
-                            &calls_by_name,
-                            &referenced_names,
                         )?;
+                        self.reject_nested_result_parameters(&method.body)?;
                     }
                 }
-                // A `:=`/`=`-bound lambda, called by its binding's name exactly like a
-                // `FunctionDeclaration` (`calls.rs`'s plain-call path resolves either the
-                // same way), is just as pinnable — and never overloaded (only a
-                // `FunctionDeclaration`'s name joins `overloaded_names`).
                 Item::VariableDeclaration(declaration) => {
                     if let Expression::Lambda {
                         parameters, body, ..
                     } = &declaration.value
                     {
-                        self.pin_result_parameters_of(
-                            &declaration.name,
-                            parameters,
-                            body,
-                            true,
-                            &calls_by_name,
-                            &referenced_names,
-                        )?;
+                        self.reject_if_bound_and_unresolved(&declaration.name, parameters, body)?;
                     }
+                    self.reject_nested_result_parameters(&declaration.value)?;
                 }
             }
         }
         Ok(())
     }
 
-    /// [`Self::pin_result_parameters`]'s per-declaration work, shared by a top-level
-    /// function and a method: every bare `:: Result` parameter of `parameters` that
-    /// `body` matches directly. `pinnable` is false for a method or an overload member,
-    /// where a bound payload is reported unconditionally rather than pinning attempted
-    /// (see the doc comment above).
-    fn pin_result_parameters_of(
-        &mut self,
+    /// Every `:=`/`=`-bound or nested `FunctionDeclaration` lambda anywhere inside
+    /// `body` — at any nesting depth, since a function or lambda declared inside one of
+    /// those is checked exactly the same way, one level further in — each against its
+    /// OWN parameters and OWN body only (see [`Self::reject_unresolved_result_parameters`]'s
+    /// doc comment: no cross-declaration information is read here at all).
+    fn reject_nested_result_parameters(&mut self, body: &Expression) -> Result<(), TypeError> {
+        for candidate in nested_function_candidates(body) {
+            self.reject_if_bound_and_unresolved(
+                &candidate.name,
+                candidate.parameters,
+                candidate.body,
+            )?;
+        }
+        Ok(())
+    }
+
+    /// [`Self::reject_unresolved_result_parameters`]'s per-declaration work: every bare
+    /// `:: Result` parameter of `parameters` that `body` matches directly and binds a
+    /// payload from is `UnresolvedResultPayload`.
+    fn reject_if_bound_and_unresolved(
+        &self,
         name: &str,
         parameters: &[Parameter],
         body: &Expression,
-        pinnable: bool,
-        calls_by_name: &HashMap<&str, Vec<&Expression>>,
-        referenced_names: &HashSet<&str>,
     ) -> Result<(), TypeError> {
-        for (index, parameter) in parameters.iter().enumerate() {
+        for parameter in parameters {
             let Some(annotation) = &parameter.type_annotation else {
                 continue;
             };
             if !is_unspecialized_result(&self.resolve_type(annotation)) {
                 continue;
             }
-            let sites = result_parameter_matches(&self.type_table, body, &parameter.name);
-            if sites.is_empty() {
-                continue;
+            if let Some(span) = first_bound_span(&self.type_table, body, &parameter.name) {
+                return Err(TypeError::UnresolvedResultPayload {
+                    function: name.to_string(),
+                    parameter: parameter.name.clone(),
+                    span,
+                });
             }
-            if !pinnable {
-                if let Some(span) = first_binding(&sites) {
-                    return Err(TypeError::UnresolvedResultPayload {
-                        function: name.to_string(),
-                        parameter: parameter.name.clone(),
-                        span: span.clone(),
-                    });
-                }
-                continue;
-            }
-            self.pin_one_result_parameter(
-                name,
-                index,
-                &parameter.name,
-                &sites,
-                calls_by_name,
-                referenced_names,
-            )?;
-        }
-        Ok(())
-    }
-
-    /// [`Self::pin_result_parameters_of`]'s pinnable-parameter case: fold every direct
-    /// caller's argument at `index` into a pinned `Ok`/`NotOk` payload, then teach every
-    /// matched site in `sites` that pinned type.
-    fn pin_one_result_parameter(
-        &mut self,
-        name: &str,
-        index: usize,
-        parameter_name: &str,
-        sites: &[ResultParameterMatch],
-        calls_by_name: &HashMap<&str, Vec<&Expression>>,
-        referenced_names: &HashSet<&str>,
-    ) -> Result<(), TypeError> {
-        use crate::ast::{NOT_OK, OK, RESULT_TYPE_NAME, SumVariant};
-
-        // Only a variant some site actually BINDS needs a single, agreed-on payload type —
-        // a discarded payload (`Ok(_)`) never reads its value, so callers may legitimately
-        // pass it different concrete types at every call (`okTag`-style dispatch on the tag
-        // alone). Unifying a position nothing binds would reject that as a false conflict.
-        let needs_ok = sites.iter().any(|site| site.ok_binding.is_some());
-        let needs_not_ok = sites.iter().any(|site| site.not_ok_binding.is_some());
-
-        let no_calls = Vec::new();
-        let calls = calls_by_name.get(name).unwrap_or(&no_calls);
-        let mut ok_pin: Option<Type> = None;
-        let mut not_ok_pin: Option<Type> = None;
-        for call in calls {
-            let Expression::Call { arguments, .. } = call else {
-                unreachable!("calls_by_name only ever indexes Call expressions")
-            };
-            if index >= arguments.len() {
-                continue;
-            }
-            let argument = &arguments[index];
-            let Some(Type::Sum {
-                name: sum_name,
-                variants,
-            }) = self.type_table.get(argument.span()).cloned()
-            else {
-                continue;
-            };
-            if sum_name != RESULT_TYPE_NAME {
-                continue;
-            }
-            if needs_ok && let Some(variant) = variants.iter().find(|v| v.name == OK) {
-                unify_result_pin(&mut ok_pin, &variant.fields[0], argument.span())?;
-            }
-            if needs_not_ok && let Some(variant) = variants.iter().find(|v| v.name == NOT_OK) {
-                unify_result_pin(&mut not_ok_pin, &variant.fields[0], argument.span())?;
-            }
-        }
-
-        // A direct call exists (this position just never saw a concrete argument through
-        // it, e.g. it only ever forwards an equally-unpinned value one hop further) —
-        // genuinely unresolved, reported below. No direct call exists at ALL, but the
-        // name is referenced some other way — leniently leave it generic instead: this
-        // pass cannot rule out a real caller reaching it through a shape it does not scan
-        // (a first-class reference, an alias), and rejecting would be a false positive on
-        // working code.
-        let lenient = !calls_by_name.contains_key(name) && referenced_names.contains(name);
-        if !lenient {
-            for site in sites {
-                if let Some(span) = &site.ok_binding
-                    && ok_pin.is_none()
-                {
-                    return Err(TypeError::UnresolvedResultPayload {
-                        function: name.to_string(),
-                        parameter: parameter_name.to_string(),
-                        span: span.clone(),
-                    });
-                }
-                if let Some(span) = &site.not_ok_binding
-                    && not_ok_pin.is_none()
-                {
-                    return Err(TypeError::UnresolvedResultPayload {
-                        function: name.to_string(),
-                        parameter: parameter_name.to_string(),
-                        span: span.clone(),
-                    });
-                }
-            }
-        }
-
-        if ok_pin.is_none() && not_ok_pin.is_none() {
-            return Ok(());
-        }
-
-        let pinned = Type::Sum {
-            name: RESULT_TYPE_NAME.to_string(),
-            variants: vec![
-                SumVariant {
-                    name: OK.to_string(),
-                    fields: vec![ok_pin.unwrap_or_else(|| Type::Generic {
-                        name: "T".to_string(),
-                    })],
-                },
-                SumVariant {
-                    name: NOT_OK.to_string(),
-                    fields: vec![not_ok_pin.unwrap_or_else(|| Type::Generic {
-                        name: "E".to_string(),
-                    })],
-                },
-            ],
-        };
-        for site in sites {
-            self.type_table
-                .insert(site.scrutinee_span.clone(), pinned.clone());
         }
         Ok(())
     }
@@ -510,59 +381,80 @@ fn is_unspecialized_result(ty: &Type) -> bool {
                 .all(|v| v.fields.iter().all(|f| matches!(f, Type::Generic { .. }))))
 }
 
-/// One `?`/`|` match, within a declaration's body, whose SCRUTINEE is a bare read of one
-/// of its own `Result`-typed parameters — what [`TypeChecker::pin_result_parameters`]
-/// looks for. `ok_binding`/`not_ok_binding` are the payload sub-pattern's own span, when
-/// that arm binds a name (`Ok(text)`) rather than discarding the payload (`Ok(_)`);
-/// matching a DERIVED value (a call, a field, a renamed local) is out of reach for this
-/// pass — matching the producing call directly, or annotating, still works.
-struct ResultParameterMatch {
-    scrutinee_span: Span,
-    ok_binding: Option<Span>,
-    not_ok_binding: Option<Span>,
+/// A function or lambda declared somewhere inside another declaration's body —
+/// [`TypeChecker::reject_nested_result_parameters`]'s own candidate to check next,
+/// against its own parameters and its own body only.
+struct NestedDeclaration<'a> {
+    name: String,
+    parameters: &'a [Parameter],
+    body: &'a Expression,
 }
 
-/// The span of the first payload binding (`ok_binding` or `not_ok_binding`) among
-/// `sites`, if any binds one at all — the span an unpinnable declaration's
-/// `UnresolvedResultPayload` names.
-fn first_binding(sites: &[ResultParameterMatch]) -> Option<&Span> {
-    sites
-        .iter()
-        .find_map(|site| site.ok_binding.as_ref().or(site.not_ok_binding.as_ref()))
+/// Every function/lambda-shaped construct anywhere inside `body`, at ANY nesting depth —
+/// a `?`/`|` match inside one of THESE checks that construct's OWN parameters against
+/// ITS OWN body when [`TypeChecker::reject_nested_result_parameters`] visits it, so a
+/// nested declaration's `:: Result` parameter is covered by this pass exactly like a
+/// top-level one, never by attributing anything found here to the ENCLOSING
+/// declaration. A lambda literal has no name of its own to report; `"a lambda"` names it
+/// in the diagnostic instead. `try_for_each_subexpression` already descends into a
+/// nested `FunctionDeclaration`'s and a `:=`/`=`-bound lambda's own body on its own, so
+/// one walk finds every depth — no recursion needed here.
+fn nested_function_candidates(body: &Expression) -> Vec<NestedDeclaration<'_>> {
+    let mut candidates = Vec::new();
+    let _: ControlFlow<()> = try_for_each_subexpression(body, &mut |expression| {
+        match expression {
+            Expression::Lambda {
+                parameters, body, ..
+            } => candidates.push(NestedDeclaration {
+                name: "a lambda".to_string(),
+                parameters,
+                body,
+            }),
+            Expression::Block { statements, .. } => {
+                for statement in statements {
+                    if let Statement::Item(Item::FunctionDeclaration(nested)) = statement {
+                        candidates.push(NestedDeclaration {
+                            name: nested.name.clone(),
+                            parameters: &nested.parameters,
+                            body: &nested.body,
+                        });
+                    }
+                }
+            }
+            _ => {}
+        }
+        ControlFlow::Continue(())
+    });
+    candidates
 }
 
-/// Every `Match` expression in `body` whose scrutinee is a bare read of `parameter_name`,
-/// EXCLUDING one that sits inside a nested scope that rebinds that same name — a nested
-/// function's or lambda's own same-named parameter, or a local `=`/`:=`/nested-function
-/// declaration reusing the name from partway through the enclosing block onward. Past
-/// that point the name refers to a different value entirely, and treating its match as
-/// this parameter's own would teach the wrong binding a type pinned from someone else's
-/// callers (each shadowing declaration's own region, gathered in the same walk, is
-/// excluded by byte range — cheaper than threading scope state through every expression
-/// variant, since nothing outside a scope can read a name it shadows).
+/// The span of the first payload binding (`Ok(x)`/`NotOk(x)`, not `Ok(_)`) on a direct
+/// match of `parameter_name` anywhere in `body` — [`TypeChecker::reject_if_bound_and_unresolved`]'s
+/// evidence that this parameter's payload is read as something concrete, with nothing in
+/// this pass able to say what.
 ///
-/// A SECOND, independent guard catches what a byte-range region cannot: a shadow whose
-/// own value is not a `Result` at all never reaches here (matching `Ok`/`NotOk` against
-/// it is rejected earlier, at the first checking pass, as a constructor pattern on a
-/// non-sum scrutinee) — but a shadow that reassigns the name to an ALREADY-CONCRETE
-/// `Result` (`result := Ok(aNum)`, say) type-checks fine and reaches this scan looking
-/// identical, by name, to a genuine read of the still-generic parameter. `type_table`,
-/// the checker's own first-pass record, disambiguates: it holds each identifier
-/// occurrence's REAL type from before this pass touches anything, so a site is kept only
-/// when its scrutinee's own recorded type is exactly as unspecialized as the target
-/// parameter's — a reassignment to something already concrete recorded something else
-/// and is dropped. (A reassignment to another value that HAPPENS to still be an
-/// unspecialized `Result`, e.g. forwarded from a different unpinned parameter, is not
-/// caught by this guard — narrower than the byte-range one above, and, like a
-/// same-named nested parameter, a rarer collision this pass leaves to the region guard.)
-fn result_parameter_matches(
+/// This is a PURELY LOCAL check — nothing here reads a caller, another declaration, or
+/// the type any OTHER expression carries — so unlike a whole-program call scan, nothing
+/// here can mis-attribute a match to the wrong declaration. The one thing it still must
+/// get right within this one body is a LOCAL shadow: a nested function's or lambda's own
+/// same-named parameter, or a local `=`/`:=`/nested-function declaration reusing the
+/// name partway through the enclosing block, both make the name refer to a DIFFERENT
+/// value from that point on (each shadowing declaration's own region is excluded by byte
+/// range — cheaper than threading scope state through every expression variant, since
+/// nothing outside a scope can read a name it shadows). A shadow that reassigns the name
+/// to an ALREADY-CONCRETE `Result` (`result := Ok(aNum)`) type-checks fine and would
+/// otherwise look, by name, identical to a genuine read of the still-generic parameter —
+/// `type_table`, the checker's own first-pass record of each identifier occurrence's
+/// REAL type, disambiguates: a site counts only when its scrutinee's own recorded type
+/// is exactly as unspecialized as the target parameter's.
+fn first_bound_span(
     type_table: &TypeTable,
     body: &Expression,
     parameter_name: &str,
-) -> Vec<ResultParameterMatch> {
+) -> Option<Span> {
     use crate::ast::{NOT_OK, OK};
 
-    let mut sites = Vec::new();
+    let mut found: Vec<Span> = Vec::new();
     let mut shadows: Vec<Span> = Vec::new();
     let _: ControlFlow<()> = try_for_each_subexpression(body, &mut |expression| {
         match expression {
@@ -581,11 +473,6 @@ fn result_parameter_matches(
                 if !type_table.get(span).is_some_and(is_unspecialized_result) {
                     return ControlFlow::Continue(());
                 }
-                let mut site = ResultParameterMatch {
-                    scrutinee_span: span.clone(),
-                    ok_binding: None,
-                    not_ok_binding: None,
-                };
                 for arm in arms {
                     if let Pattern::Constructor {
                         name: constructor,
@@ -593,15 +480,11 @@ fn result_parameter_matches(
                         ..
                     } = &arm.pattern
                         && let [Pattern::Identifier { span: binding, .. }] = arguments.as_slice()
+                        && matches!(constructor.as_str(), OK | NOT_OK)
                     {
-                        match constructor.as_str() {
-                            OK => site.ok_binding = Some(binding.clone()),
-                            NOT_OK => site.not_ok_binding = Some(binding.clone()),
-                            _ => {}
-                        }
+                        found.push(binding.clone());
                     }
                 }
-                sites.push(site);
             }
             Expression::Lambda {
                 parameters, span, ..
@@ -650,97 +533,18 @@ fn result_parameter_matches(
         ControlFlow::Continue(())
     });
 
-    sites.retain(|site| {
+    // Every found binding still loses to a shadow that turns out to cover it — the walk
+    // above visits a `Match` before it necessarily knows every shadow in the SAME body
+    // (a shadowing declaration can sit textually after the match that reads the
+    // parameter, e.g. inside a later statement of the same block), so the exclusion is
+    // applied once, after the whole walk, over every candidate — not just the first,
+    // which could be the one a later shadow excludes while an earlier, unshadowed
+    // candidate still stands.
+    found.into_iter().find(|span| {
         !shadows.iter().any(|shadow| {
-            shadow.file == site.scrutinee_span.file
-                && shadow.start <= site.scrutinee_span.start
-                && site.scrutinee_span.end <= shadow.end
+            shadow.file == span.file && shadow.start <= span.start && span.end <= shadow.end
         })
-    });
-    sites
-}
-
-/// A one-time index over the whole program, shared by every candidate parameter
-/// [`TypeChecker::pin_result_parameters`] considers (rather than re-walking the program
-/// once per candidate): `calls_by_name[callee]` is every plain (non-member) call
-/// expression naming `callee`, and `referenced_names` is every name any `Identifier`
-/// expression anywhere reads (a superset of the callees above, since a call's own
-/// function position is itself an `Identifier`) — the signal
-/// [`TypeChecker::pin_one_result_parameter`] uses to tell "no direct call, and nothing
-/// else reaches this name either" (genuinely unresolved) from "no direct call, but the
-/// name is referenced some other way" (leniently left generic — a real caller may reach
-/// it through a shape this pass does not scan).
-fn index_program_calls(program: &Program) -> (HashMap<&str, Vec<&Expression>>, HashSet<&str>) {
-    let mut calls_by_name: HashMap<&str, Vec<&Expression>> = HashMap::new();
-    let mut referenced_names: HashSet<&str> = HashSet::new();
-    for item in &program.items {
-        match item {
-            Item::FunctionDeclaration(declaration) => {
-                index_expression(&declaration.body, &mut calls_by_name, &mut referenced_names)
-            }
-            Item::VariableDeclaration(declaration) => index_expression(
-                &declaration.value,
-                &mut calls_by_name,
-                &mut referenced_names,
-            ),
-            Item::TypeDeclaration(declaration) => {
-                for method in declaration.type_definition.methods() {
-                    index_expression(&method.body, &mut calls_by_name, &mut referenced_names);
-                }
-            }
-        }
-    }
-    (calls_by_name, referenced_names)
-}
-
-/// [`index_program_calls`]'s per-expression work — its own named, explicitly-lifetimed
-/// function rather than a closure, which a plain `impl FnMut` cannot express here: the
-/// borrowed `Expression`s these two maps collect must outlive the call that finds them.
-fn index_expression<'a>(
-    expression: &'a Expression,
-    calls_by_name: &mut HashMap<&'a str, Vec<&'a Expression>>,
-    referenced_names: &mut HashSet<&'a str>,
-) {
-    let _: ControlFlow<()> = try_for_each_subexpression(expression, &mut |e| {
-        match e {
-            Expression::Identifier { name, .. } => {
-                referenced_names.insert(name.as_str());
-            }
-            Expression::Call {
-                function,
-                member_call: false,
-                ..
-            } => {
-                if let Expression::Identifier { name, .. } = function.as_ref() {
-                    calls_by_name.entry(name.as_str()).or_default().push(e);
-                }
-            }
-            _ => {}
-        }
-        ControlFlow::Continue(())
-    });
-}
-
-/// Fold a caller-supplied field type into `pinned`: the first concrete type wins, a later
-/// caller must agree with it exactly (a `TypeMismatch` at ITS argument — the
-/// disagreement's own site), and a still-generic field (a caller forwarding an equally
-/// unpinned value) teaches nothing.
-fn unify_result_pin(pinned: &mut Option<Type>, field: &Type, span: &Span) -> Result<(), TypeError> {
-    if matches!(field, Type::Generic { .. }) {
-        return Ok(());
-    }
-    match pinned {
-        Some(existing) if existing != field => Err(TypeError::TypeMismatch {
-            expected: Box::new(existing.clone()),
-            got: Box::new(field.clone()),
-            span: span.clone(),
-        }),
-        Some(_) => Ok(()),
-        None => {
-            *pinned = Some(field.clone());
-            Ok(())
-        }
-    }
+    })
 }
 
 /// The `Result` type with a CONCRETE `Ok` payload of `elem` (and a `$`/Unit `NotOk`
