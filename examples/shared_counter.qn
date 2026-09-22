@@ -1,0 +1,25 @@
+~ A turnstile server: every connection counts into the atomic global `@visits`. `^`
+~ connects twice, asserts the count, and closes the turnstile.
+<< core.net
+<< core.test
+
+@visits := 0
+
+click = (connection :: net.Connection) -> $ => <
+  ring = connection.@read()
+  visits := visits + 1
+  connection.@write(ring)
+  connection.close()
+>
+
+^ = () -> $ => <
+  turnstile = net.@tcpServe("127.0.0.1:9058", connection => click(connection))
+  net.@tcpRequest("127.0.0.1:9058", "ring") ?
+    | Ok(_) => $
+    | NotOk(error) => test.failAt(error)
+  net.@tcpRequest("127.0.0.1:9058", "ring") ?
+    | Ok(_) => $
+    | NotOk(error) => test.failAt(error)
+  assert(visits, equals(2))
+  turnstile.kill(1)
+>

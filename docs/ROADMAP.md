@@ -27,7 +27,7 @@ evergreen — the durable record that survives across contributors and AI-agent 
 | **M5** | ~~Implicit parallelism (CPU) — parallel array methods from inferred purity~~ | 💤 Deprioritized |
 | **M6** | **Concurrency runtime — colorless implicit futures ([#120]) — THE core deliverable.** Stage 1: single-threaded fibers + reactor; Stage 2: M:N work-stealing + cross-thread GC | 🔨 In progress (Stage 1 ✅) — **core** |
 | **M7** | Polish — formatter/linter, corelib, debug info | 🔨 In progress |
-| **M8** | **Web — a native HTTP server built on the M6 runtime** | ⬜ Planned |
+| **M8** | **Web — a native HTTP server built on the M6 runtime** | 🔨 In progress (server ships; bodies, keep-alive, signal trap remain) |
 
 Legend: ✅ complete · 🔨 in progress · ⬜ planned · 💤 deprioritized.
 
@@ -46,6 +46,10 @@ served an auto-data-parallelism goal the project no longer pursues.
 [#434]: https://github.com/assapir/quilon/issues/434
 [#435]: https://github.com/assapir/quilon/issues/435
 [#445]: https://github.com/assapir/quilon/issues/445
+[#451]: https://github.com/assapir/quilon/issues/451
+[#453]: https://github.com/assapir/quilon/issues/453
+[#457]: https://github.com/assapir/quilon/issues/457
+[#458]: https://github.com/assapir/quilon/issues/458
 
 ### M1 — Diagnostics & small wins ✅
 
@@ -114,7 +118,7 @@ and specified in full in [#120]. Built smallest-first:
 | Item | Status |
 |------|--------|
 | **Stage 1** — single-threaded stackful fibers (`corosensei`) + IO reactor; `@` primitives (`@sleep`, `@readStdin`, `@tcpRequest`), deferred values, force-at-strict-op; a `< >` block joins every launch it made directly before returning (`allSettled`), every fault reported in launch order naming its launch site; the atomic binding syntax `@name := …`, whose reassignment's right side never waits on a deferred value; a deferred value stored in a top-level `:=` binding stays deferred there and forces on read ([#445]); hostname lookups run on the runtime's blocking-call pool ([#434]) | ✅ |
-| **Stage 2** — required for 1.0: work-stealing M:N scheduler running one worker per CPU, Boehm GC across threads, atomic types (`T = @{ … }`); the fiber-sharing check ships with the M8 server, where user code first runs on more than one fiber ([#120]) | ⬜ |
+| **Stage 2** — required for 1.0: work-stealing M:N scheduler running one worker per CPU, Boehm GC across threads, atomic types (`T = @{ … }`); the fiber-sharing check has shipped ([#458]), enforced for `net.@tcpServe` and `http.@serve` handlers — the first code paths where user code runs on more than one fiber ([#120]) | ⬜ |
 | Trace / explain mode | 💤 (deferred past 1.0) |
 
 ### M7 — Polish 🔨
@@ -129,16 +133,18 @@ and specified in full in [#120]. Built smallest-first:
 | Immutability-driven optimization — `=` methods and parameters carry LLVM `memory(read)`/`noalias` attributes; purity as a checker fact for concurrency | ⬜ |
 | Hover docs — show a function's signature/docs on hover in the editor | ⬜ |
 
-### M8 — Web: a native HTTP server on the runtime ⬜
+### M8 — Web: a native HTTP server on the runtime 🔨
 
 The **"then web"** half of the north star: a native HTTP server built on the M6 runtime's
 Stage 1 — one worker, a fiber per connection, one reactor wait covering every connection —
 so many in-flight connections are cheap fibers with their IO overlapped implicitly ([#435]).
-Stage 2 turns that one worker into many without changing server code. Its on-ramps:
+Stage 2 turns that one worker into many without changing server code. What remains on the
+server: request bodies, keep-alive, a signal trap for graceful shutdown ([#453]), and a
+router. Its on-ramps:
 
 | Item | Status |
 |------|--------|
 | Reactor-backed input/IO — reading stdin/files/sockets, not just printing ([#60]) | 🔨 (stdin, one-shot TCP, and the streaming file read `@streamFile` ship; hostname resolution and regular blocking calls run on the runtime's blocking-call pool ([#434]); the whole-file `io.readFile` composition remains) |
 | Statically-linked `libgc` for a self-contained server binary ([#49]) | ✅ (bdwgc built from the submodule and linked statically; a produced binary needs no libgc) |
-| Fiber-sharing check — an unmarked `:=` value reachable from more than one fiber is a compile error naming `@name := …` ([#120]) | ⬜ |
-| Native HTTP server on the runtime ([#435]) | ⬜ |
+| Fiber-sharing check — an unmarked `:=` value reachable from more than one fiber is a compile error naming `@name := …` ([#120]) | ✅ ([#458]; enforced for `net.@tcpServe` and `http.@serve` handlers) |
+| Native HTTP server on the runtime ([#435]) | ✅ (raw layer — `net.@tcpServe`, `Connection`, `Server.kill` ([#451]); HTTP layer — `http.@serve`, `Request.parse`, `Status` (one variant per registered code), `Response.reply` ([#457]); one response per connection) |

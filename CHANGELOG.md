@@ -14,6 +14,19 @@ All notable changes to Quilon are documented here.
   against a `Text`. `info.platform()`, `info.os()`, and `Method.parse` in `core.http` are
   now matches over their token, replacing their `==` ternary chains. See
   `docs/expressions/pattern-matching.md` and `examples/text_match.qn`. Closes #461.
+- **The fiber-sharing check: a non-atomic `:=` value reachable from more than one fiber is
+  a compile error.** `net.@tcpServe`'s `handler` argument runs on its own fiber per
+  connection — the first Quilon code that does — so the checker now rejects a top-level
+  `:=` binding `handler` reaches, directly or through a call it makes transitively, and a
+  `:=` local of the block the `net.@tcpServe(...)` call sits in, captured by an inline
+  lambda `handler`. The error is reported at the `net.@tcpServe(...)` call, names the
+  binding and where inside `handler`'s reach it is touched, and its help names the fix:
+  `@name := …`. An atomic binding passes, as does a `=`-bound value (deep immutability
+  already proves it carries no mutable path) and a `:=` local the handler declares itself.
+  Raises the new
+  [QN350](docs/tooling/errors.md#qn350---value-shared-across-fibers). See
+  `docs/concurrency/README.md#sharing-state-across-fibers` and
+  `examples/shared_counter.qn`. Part of #435.
 - **`http.@serve(address, handler)` is the HTTP server layer, built on `net.@tcpServe`:
   its lowering calls that same runtime entry with `core.http`'s own connection handler
   filled in, so each accepted connection reads its request head, calls `handler` once,
