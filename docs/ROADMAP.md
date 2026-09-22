@@ -51,6 +51,7 @@ served an auto-data-parallelism goal the project no longer pursues.
 [#457]: https://github.com/assapir/quilon/issues/457
 [#458]: https://github.com/assapir/quilon/issues/458
 [#466]: https://github.com/assapir/quilon/issues/466
+[#471]: https://github.com/assapir/quilon/issues/471
 
 ### M1 — Diagnostics & small wins ✅
 
@@ -147,4 +148,4 @@ server: a signal trap for graceful shutdown ([#453]), and a router. Its on-ramps
 | Reactor-backed input/IO — reading stdin/files/sockets, not just printing ([#60]) | 🔨 (stdin, one-shot TCP, and the streaming file read `@streamFile` ship; hostname resolution and regular blocking calls run on the runtime's blocking-call pool ([#434]); the whole-file `io.readFile` composition remains) |
 | Statically-linked `libgc` for a self-contained server binary ([#49]) | ✅ (bdwgc built from the submodule and linked statically; a produced binary needs no libgc) |
 | Fiber-sharing check — an unmarked `:=` value reachable from more than one fiber is a compile error naming `@name := …` ([#120]) | ✅ ([#458]; enforced for `net.@tcpServe` and `http.@serve` handlers) |
-| Native HTTP server on the runtime ([#435]) | ✅ (raw layer — `net.@tcpServe`, `Connection`, `Server.kill` ([#451]); HTTP layer — `http.@serve`, `Request.parse`, `Status` (one variant per registered code), `Response.reply` ([#457]); one response per connection; request bodies per Content-Length or chunked framing with a per-server cap ([#466])) |
+| Native HTTP server on the runtime ([#435]) | ✅ (raw layer — `net.@tcpServe`, `Connection`, `Server.kill` ([#451]); HTTP layer — `http.@serve`, `Request.parse`, `Status` (one variant per registered code), `Response.reply` ([#457]); request bodies per Content-Length or chunked framing with a per-server cap ([#466]); keep-alive with an idle timeout ([#471])) |
