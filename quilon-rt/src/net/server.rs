@@ -296,7 +296,10 @@ fn read_connection_once(id: u64) -> QlSlice {
 /// parking on the same deadline mechanism [`crate::scheduler::sleep`] uses, alongside
 /// readiness rather than instead of it (see [`super::TcpStream::read_with_deadline`]).
 #[unsafe(no_mangle)]
-pub extern "C" fn __connection_read_with_timeout_launch(connection_id: f64, seconds: f64) -> QlSlice {
+pub extern "C" fn __connection_read_with_timeout_launch(
+    connection_id: f64,
+    seconds: f64,
+) -> QlSlice {
     let id = connection_id as u64;
     // A negative or NaN `seconds` (a program's own bug) reads as "already due" rather than
     // parking forever or underflowing the deadline arithmetic.
@@ -896,7 +899,10 @@ mod tests {
             });
         });
 
-        assert!(FINISHED.load(Ordering::SeqCst), "the timed-out read closed the connection");
+        assert!(
+            FINISHED.load(Ordering::SeqCst),
+            "the timed-out read closed the connection"
+        );
     }
 
     #[test]

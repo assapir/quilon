@@ -1128,26 +1128,45 @@ impl<'ctx> CodeGenerator<'ctx> {
             return Err("core.http.ServerOptions_default must return a record".to_string());
         };
         let field_ty = self.context.struct_type(
-            &[self.context.f64_type().into(), self.context.f64_type().into()],
+            &[
+                self.context.f64_type().into(),
+                self.context.f64_type().into(),
+            ],
             false,
         );
         let max_body_size_ptr = self
             .builder
             .build_struct_gep(field_ty, default_options, 0, "default_max_body_size_field")
-            .map_err(ctx("Failed to GEP ServerOptions.default()'s maxBodySize field"))?;
+            .map_err(ctx(
+                "Failed to GEP ServerOptions.default()'s maxBodySize field",
+            ))?;
         let max_body_size = self
             .builder
-            .build_load(self.context.f64_type(), max_body_size_ptr, "default_max_body_size")
-            .map_err(ctx("Failed to load ServerOptions.default()'s maxBodySize field"))?
+            .build_load(
+                self.context.f64_type(),
+                max_body_size_ptr,
+                "default_max_body_size",
+            )
+            .map_err(ctx(
+                "Failed to load ServerOptions.default()'s maxBodySize field",
+            ))?
             .into_float_value();
         let idle_timeout_ptr = self
             .builder
             .build_struct_gep(field_ty, default_options, 1, "default_idle_timeout_field")
-            .map_err(ctx("Failed to GEP ServerOptions.default()'s idleTimeout field"))?;
+            .map_err(ctx(
+                "Failed to GEP ServerOptions.default()'s idleTimeout field",
+            ))?;
         let idle_timeout = self
             .builder
-            .build_load(self.context.f64_type(), idle_timeout_ptr, "default_idle_timeout")
-            .map_err(ctx("Failed to load ServerOptions.default()'s idleTimeout field"))?
+            .build_load(
+                self.context.f64_type(),
+                idle_timeout_ptr,
+                "default_idle_timeout",
+            )
+            .map_err(ctx(
+                "Failed to load ServerOptions.default()'s idleTimeout field",
+            ))?
             .into_float_value();
         Ok((max_body_size, idle_timeout))
     }
@@ -1215,7 +1234,9 @@ impl<'ctx> CodeGenerator<'ctx> {
         let idle_timeout_gep = self
             .builder
             .build_struct_gep(bundle_ty, bundle, 3, "http_serve_bundle_idle_timeout")
-            .map_err(ctx("Failed to build GEP for the http serve bundle's idle timeout"))?;
+            .map_err(ctx(
+                "Failed to build GEP for the http serve bundle's idle timeout",
+            ))?;
         self.builder
             .build_store(idle_timeout_gep, idle_timeout)
             .map_err(ctx("Failed to store the http serve bundle's idle timeout"))?;
@@ -1276,12 +1297,16 @@ impl<'ctx> CodeGenerator<'ctx> {
         idle_timeout: inkwell::values::FloatValue<'ctx>,
     ) -> Result<BasicValueEnum<'ctx>, String> {
         use inkwell::values::AnyValue;
-        let struct_type = self
-            .context
-            .struct_type(&[max_body_size.get_type().into(), idle_timeout.get_type().into()], false);
-        let size = struct_type
-            .size_of()
-            .ok_or_else(|| "ServerOptions record struct type has no compile-time size".to_string())?;
+        let struct_type = self.context.struct_type(
+            &[
+                max_body_size.get_type().into(),
+                idle_timeout.get_type().into(),
+            ],
+            false,
+        );
+        let size = struct_type.size_of().ok_or_else(|| {
+            "ServerOptions record struct type has no compile-time size".to_string()
+        })?;
         let alloc_fn = self.get_intrinsic("__alloc")?;
         let record_ptr = self
             .builder

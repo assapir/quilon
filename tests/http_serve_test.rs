@@ -131,7 +131,9 @@ fn send_raw(host: &str, port: u16, request: &[u8]) -> String {
 
 /// The earliest index at which `needle` occurs in `haystack`, or `None`.
 fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
-    haystack.windows(needle.len()).position(|window| window == needle)
+    haystack
+        .windows(needle.len())
+        .position(|window| window == needle)
 }
 
 /// Read exactly one HTTP response off `stream` — the keep-alive tests' own counterpart of
@@ -456,7 +458,10 @@ fn jit_http_serve_reads_a_content_length_and_a_chunked_body_under_a_raised_cap()
 fn run_hummus_server(drive: impl FnOnce(&str, u16)) {
     let port = free_port();
     let quilon = env!("CARGO_BIN_EXE_quilon");
-    let file = common::temp_ql("http_serve_keep_alive", &program(&format!("127.0.0.1:{port}")));
+    let file = common::temp_ql(
+        "http_serve_keep_alive",
+        &program(&format!("127.0.0.1:{port}")),
+    );
 
     let child = Command::new(quilon)
         .args(["run", file.to_str().unwrap()])
@@ -492,7 +497,10 @@ fn jit_http_serve_keeps_a_connection_alive_for_a_second_request() {
             .write_all(b"GET /pantry HTTP/1.1\r\nHost: shop\r\n\r\n")
             .expect("write the first request");
         let first = read_one_response(&mut stream);
-        assert!(first.starts_with("HTTP/1.1 200 OK\r\n"), "first reply: {first}");
+        assert!(
+            first.starts_with("HTTP/1.1 200 OK\r\n"),
+            "first reply: {first}"
+        );
         assert!(
             first.contains("connection: keep-alive\r\n"),
             "first reply: {first}"
@@ -503,7 +511,10 @@ fn jit_http_serve_keeps_a_connection_alive_for_a_second_request() {
             .write_all(b"GET /pantry HTTP/1.1\r\nHost: shop\r\n\r\n")
             .expect("write the second request");
         let second = read_one_response(&mut stream);
-        assert!(second.starts_with("HTTP/1.1 200 OK\r\n"), "second reply: {second}");
+        assert!(
+            second.starts_with("HTTP/1.1 200 OK\r\n"),
+            "second reply: {second}"
+        );
     });
 }
 
@@ -549,10 +560,7 @@ fn jit_http_serve_head_reply_carries_no_body_but_the_correct_content_length() {
         assert!(reply.starts_with("HTTP/1.1 200 OK\r\n"), "reply: {reply}");
         // "chickpeas: plenty" is 17 bytes — the same content-length a GET of the same
         // handler would send, even though HEAD's own reply carries none of those bytes.
-        assert!(
-            reply.contains("content-length: 17\r\n"),
-            "reply: {reply}"
-        );
+        assert!(reply.contains("content-length: 17\r\n"), "reply: {reply}");
         assert!(reply.ends_with("\r\n\r\n"), "reply carried a body: {reply}");
     });
 }
@@ -574,9 +582,15 @@ fn jit_http_serve_answers_two_pipelined_requests_in_one_write() {
             .expect("write both requests in one go");
 
         let first = read_one_response(&mut stream);
-        assert!(first.starts_with("HTTP/1.1 200 OK\r\n"), "first reply: {first}");
+        assert!(
+            first.starts_with("HTTP/1.1 200 OK\r\n"),
+            "first reply: {first}"
+        );
         let second = read_one_response(&mut stream);
-        assert!(second.starts_with("HTTP/1.1 200 OK\r\n"), "second reply: {second}");
+        assert!(
+            second.starts_with("HTTP/1.1 200 OK\r\n"),
+            "second reply: {second}"
+        );
     });
 }
 
