@@ -589,13 +589,18 @@ fn importing_core_http_contributes_exactly_this_surface() {
         // importer, reached only through `@serve` (and, for `blankLineIndex`, `Response`'s
         // own `blankLine` too).
         "core.http.blankLineIndex",
+        "core.http.blankLineEnd",
+        "core.http.isHttp10Request",
         "core.http.foundOrEnd",
         "core.http.linesAfterFirst",
         "core.http.statusReply",
+        "core.http.closingReply",
+        "core.http.leftoverAfterHead",
+        "core.http.shouldCloseAfter",
         "core.http.classifyBodyProgress",
         "core.http.receiveHead",
         "core.http.readBody",
-        "core.http.answer",
+        "core.http.serveRequests",
         "core.http.serveConnection",
         // The client's own PRIVATE test fixtures: carried with the module (an exported
         // item may lean on them), exported to no importer.
@@ -1545,6 +1550,10 @@ fn the_corelib_http_suite_passes_when_the_module_is_the_file_named() {
         "Status",
         "Response's server-side constructors",
         "Request.parse",
+        "blankLineEnd",
+        "isHttp10Request",
+        "leftoverAfterHead",
+        "shouldCloseAfter",
     ] {
         assert!(
             out.stdout.contains(group),
@@ -1553,7 +1562,7 @@ fn the_corelib_http_suite_passes_when_the_module_is_the_file_named() {
         );
     }
     assert!(
-        out.stdout.contains("132 passed, 0 failed"),
+        out.stdout.contains("146 passed, 0 failed"),
         "unexpected summary:\n{}",
         out.stdout
     );
