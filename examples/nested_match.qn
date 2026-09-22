@@ -1,6 +1,5 @@
 ~ A match arm's binding shadows an outer binding of the same name only within that
-~ arm: a nested match rebinding a name an outer arm already bound must not corrupt
-~ the outer binding once control returns to it.
+~ arm.
 ~
 ~ Two raccoons rummage two separate bins, each either finding `loot` or leaving an
 ~ `excuse`. `tallyRaccoons` checks the second bin from inside the first's `Ok` arm,

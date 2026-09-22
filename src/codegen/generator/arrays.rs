@@ -791,35 +791,13 @@ impl<'ctx> CodeGenerator<'ctx> {
             self.builder
                 .build_store(alloca, *value)
                 .map_err(ctx("Failed to store lambda parameter"))?;
-            saved.push((
-                parameter.name.clone(),
-                self.variables.get(&parameter.name).copied(),
-                self.var_types.get(&parameter.name).cloned(),
-            ));
+            saved.push(self.save_binding(&parameter.name));
             self.variables
                 .insert(parameter.name.clone(), (alloca, value.get_type()));
             self.var_types.insert(parameter.name.clone(), qty.clone());
         }
         let result = self.generate_expression(body);
-        // Restore shadowed bindings.
-        for (name, prev_var, prev_ty) in saved {
-            match prev_var {
-                Some(v) => {
-                    self.variables.insert(name.clone(), v);
-                }
-                None => {
-                    self.variables.remove(&name);
-                }
-            }
-            match prev_ty {
-                Some(t) => {
-                    self.var_types.insert(name, t);
-                }
-                None => {
-                    self.var_types.remove(&name);
-                }
-            }
-        }
+        self.restore_bindings(saved);
         result
     }
 
