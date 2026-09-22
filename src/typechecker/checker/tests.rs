@@ -393,6 +393,60 @@ fn test_result_parameter_of_a_nested_function_is_rejected_too() {
 }
 
 #[test]
+fn test_result_parameter_via_a_whole_signature_annotation_is_rejected() {
+    // `classify`'s parameter has no annotation of its OWN — its type comes from the
+    // binding's whole-signature `:: (Result) -> Text` form instead
+    // (`FunctionDeclaration::declared_parameters`). This pass must resolve a
+    // parameter's type the same way the checker's own `resolve_parameter_types` does,
+    // not just read `type_annotation` directly, or this form's bound payload slips
+    // through unchecked.
+    assert!(matches!(
+        check_ok(
+            "classify :: (Result) -> Text = (result) => <\n  \
+               result ? | Ok(text) => text | NotOk(_) => \"none\"\n\
+             >\n\
+             ^ = () -> Num => < classify(Ok(\"hi\")).length >"
+        ),
+        Err(TypeError::UnresolvedResultPayload { .. })
+    ));
+}
+
+#[test]
+fn test_result_parameter_renamed_before_matching_is_still_rejected() {
+    // `renamed` is a direct copy of `result` (`renamed = result`, no transformation) —
+    // matching it must still be attributed back to `result`'s own unresolved payload,
+    // not missed because the match reads a different identifier.
+    assert!(matches!(
+        check_ok(
+            "classify = (result :: Result) -> Text => <\n  \
+               renamed = result\n  \
+               renamed ? | Ok(text) => text | NotOk(_) => \"none\"\n\
+             >\n\
+             ^ = () -> Num => < classify(Ok(\"hi\")).length >"
+        ),
+        Err(TypeError::UnresolvedResultPayload { .. })
+    ));
+}
+
+#[test]
+fn test_result_parameter_of_a_nested_bound_lambda_is_named_correctly() {
+    // `helper` is a `:=`-bound lambda declared INSIDE `outer`'s body, not a
+    // `FunctionDeclaration` — the diagnostic must still name it `helper`, not the
+    // generic "a lambda" an anonymous callback would get.
+    assert!(matches!(
+        check_ok(
+            "outer = () -> Num => <\n  \
+               helper := (result :: Result) => < result ? | Ok(x) => 1 | NotOk(_) => 0 >\n  \
+               helper(Ok(1))\n\
+             >\n\
+             ^ = () -> Num => < outer() >"
+        ),
+        Err(TypeError::UnresolvedResultPayload { function, .. })
+            if function == "helper"
+    ));
+}
+
+#[test]
 fn test_constructor_pattern_on_a_non_sum_scrutinee_is_rejected() {
     // A constructor pattern dispatches on a variant tag, which a `Num` has none of.
     assert!(matches!(
