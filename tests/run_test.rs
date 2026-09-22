@@ -1549,6 +1549,24 @@ fn aot_result_payload_pinned_through_an_overloaded_callee() {
     assert_eq!(code, 2, "a native build must exit 2 on the same program");
 }
 
+/// A nested function reusing its enclosing function's `:: Result` parameter NAME for its
+/// own, unrelated `:: Result` parameter must not have the outer's pinned payload type
+/// applied to it (or vice versa): `outer`'s own `result` is pinned `Text` from its
+/// caller, `inner`'s own (differently-scoped) `result` is pinned `Num` from ITS caller,
+/// and each must keep its own binding's real type. "hi".length = 2.
+#[test]
+fn run_nested_function_reusing_a_result_parameter_name_is_not_cross_contaminated() {
+    let src = r#"
+        outer = (result :: Result) -> Text => <
+          inner = (result :: Result) -> Num => < result ? | Ok(n) => n | NotOk(_) => 0 >
+          inner(Ok(5))
+          result ? | Ok(text) => text | NotOk(_) => "none"
+        >
+        ^ = () -> Num => < outer(Ok("hi")).length >
+    "#;
+    assert_exit(src, 2);
+}
+
 #[test]
 fn nested_sum_as_sum_payload_is_accepted() {
     // A declared sum may be another sum's payload, embedded by value (it is declared

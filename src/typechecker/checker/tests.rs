@@ -222,6 +222,97 @@ fn test_result_parameter_never_called_with_a_bound_payload_is_rejected() {
 }
 
 #[test]
+fn test_result_parameter_forwarded_uninformatively_is_rejected_not_crashed() {
+    // `outer` forwards its own still-generic parameter into `inner`, which matches and
+    // binds it directly. `inner` DOES have a direct call site (from `outer`), so it is
+    // not "never called" — but that one call never carries a concrete payload, so the
+    // binding stays genuinely unresolved and must still be rejected, not silently
+    // defaulted (which crashed at runtime before this pinning pass existed).
+    assert!(matches!(
+        check_ok(
+            "inner = (result :: Result) -> Text => <\n  \
+               result ? | Ok(text) => text | NotOk(_) => \"none\"\n\
+             >\n\
+             outer = (result :: Result) -> Text => < inner(result) >\n\
+             ^ = () -> Num => < outer(Ok(\"hi\")).length >"
+        ),
+        Err(TypeError::UnresolvedResultPayload { .. })
+    ));
+}
+
+#[test]
+fn test_result_parameter_of_a_method_is_rejected_not_silently_pinned() {
+    // A method's calls are member calls (`recv.name(...)`), which this pass's plain-call
+    // scan cannot resolve to a receiver-independent argument — so a method's bare
+    // `:: Result` parameter is never pinned, only rejected when bound.
+    assert!(matches!(
+        check_ok(
+            "Box = {\n  \
+               value :: Num,\n  \
+               unwrap = (result :: Result) -> Text => <\n    \
+                 result ? | Ok(text) => text | NotOk(_) => \"none\"\n  \
+               >\n\
+             }\n\
+             ^ = () -> Num => <\n  \
+               b = Box { value = 1 }\n  \
+               b.unwrap(Ok(\"hi\")).length\n\
+             >"
+        ),
+        Err(TypeError::UnresolvedResultPayload { .. })
+    ));
+}
+
+#[test]
+fn test_result_parameter_of_an_overloaded_function_is_rejected_not_silently_pinned() {
+    // A bare call to an overloaded name doesn't say which member's parameter the
+    // argument fills, so pinning an overload member's `:: Result` parameter is unsound;
+    // a bound payload there is rejected rather than pinned from the wrong member's calls.
+    assert!(matches!(
+        check_ok(
+            "handle = (result :: Result) -> Text => <\n  \
+               result ? | Ok(text) => text | NotOk(_) => \"none\"\n\
+             >\n\
+             handle = (result :: Result, prefix :: Text) -> Text => < prefix + handle(result) >\n\
+             ^ = () -> Num => < handle(Ok(\"hi\"), \">\").length >"
+        ),
+        Err(TypeError::UnresolvedResultPayload { .. })
+    ));
+}
+
+#[test]
+fn test_result_parameter_only_self_recursive_is_rejected() {
+    // `loopy`'s only call is its own self-recursive one, whose argument is the same
+    // still-generic parameter — that call exists but teaches the pin nothing, so the
+    // binding is exactly as unresolved as a function nothing calls at all.
+    assert!(matches!(
+        check_ok(
+            "loopy = (result :: Result) -> Text => <\n  \
+               result ? | Ok(t) => t | NotOk(_) => loopy(result)\n\
+             >\n\
+             ^ = () -> Num => < 0 >"
+        ),
+        Err(TypeError::UnresolvedResultPayload { .. })
+    ));
+}
+
+#[test]
+fn test_result_parameter_referenced_only_as_a_value_is_not_falsely_rejected() {
+    // `classify` is never written as a direct `classify(...)` call, only passed as a
+    // value to `.map` — a shape this pass cannot resolve to an argument type. Rather than
+    // reject working code on a false "called nowhere", an unpinnable-but-referenced name
+    // is left generic (the same risk the historical default always carried here).
+    assert!(
+        check_ok(
+            "classify = (result :: Result) -> Text => <\n  \
+               result ? | Ok(text) => text | NotOk(_) => \"none\"\n\
+             >\n\
+             ^ = () -> Num => < [Ok(\"hi\")].map(classify).size >"
+        )
+        .is_ok()
+    );
+}
+
+#[test]
 fn test_constructor_pattern_on_a_non_sum_scrutinee_is_rejected() {
     // A constructor pattern dispatches on a variant tag, which a `Num` has none of.
     assert!(matches!(

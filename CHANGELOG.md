@@ -257,19 +257,24 @@ All notable changes to Quilon are documented here.
   a read of one exactly like a read of a deferred local. A store into such a global still
   never forces — `@testimony := io.@readStdin()` stays accepted. See
   `docs/concurrency/README.md` and `examples/deferred_global.qn`. Closes #445.
-- **A `Result`'s payload type now crosses a function boundary through a bare `:: Result`
-  parameter, not just a return.** Matching such a parameter directly and binding its
-  payload (`Ok(text) => …`) used to leave the binding's type unresolved — nothing pinned
-  it — so codegen defaulted it to `Num`'s representation regardless of the real payload,
-  failing with an internal error the moment it was stored anywhere sized for that real
-  type. The checker now pins the payload from every call site's concrete argument at that
-  position (two callers disagreeing is a `TypeMismatch` at the second one; a parameter
-  called nowhere, with a body that still binds a payload, is the new
+- **A `Result`'s payload type now crosses a function boundary through a plain top-level
+  function's bare `:: Result` parameter, not just a return.** Matching such a parameter
+  directly and binding its payload (`Ok(text) => …`) used to leave the binding's type
+  unresolved — nothing pinned it — so codegen defaulted it to `Num`'s representation
+  regardless of the real payload, failing with an internal error (or, one call hop away
+  from the direct case, a runtime crash) the moment it was stored or read anywhere sized
+  for that real type. The checker now pins the payload from every direct call site's
+  concrete argument at that position: two callers disagreeing is a `TypeMismatch` at the
+  second one; a bound payload no direct call informs — including a function called
+  nowhere, or only through a forwarding wrapper or itself — is the new
   [QN351](docs/tooling/errors.md#qn351--unresolved-result-payload) instead of a silent
-  default), and the same gap in a call through an OVERLOADED function is closed by
-  refining that member's own registered return type from its body, the way a plain
-  function's already was. See `docs/types/sum-types.md` and `examples/result_helper.qn`.
-  Closes #469. Closes #468.
+  default; a name never written as a direct call but referenced some other way (passed to
+  `.map`, aliased) is left as before rather than falsely rejected. A method's or an
+  overloaded function's own bound `:: Result` parameter carries no such direct call site
+  to pin from and is QN351 unconditionally; the overloaded-RETURN equivalent of this gap
+  is closed separately, by refining that member's own registered return type from its
+  body, the way a plain function's already was. See `docs/types/sum-types.md` and
+  `examples/result_helper.qn`. Closes #469. Closes #468.
 
 ## 0.11.0 "Rackham" — 2026-09-08
 

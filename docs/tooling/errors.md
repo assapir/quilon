@@ -1202,10 +1202,12 @@ Bind it atomically:
 
 ### QN351 — unresolved `Result` payload
 
-A function's bare `:: Result` parameter is matched with a payload binding (`Ok(x)`, not
-`Ok(_)`), and the function is called nowhere — so nothing tells the checker what `x`'s real
-type is. A `Result`'s payload type comes from the arguments callers actually pass; with no
-caller, it is unconstrained.
+A bare `:: Result` parameter is matched with a payload binding (`Ok(x)`, not `Ok(_)`), and
+nothing tells the checker what `x`'s real type is: a `Result`'s payload type comes from the
+concrete arguments a plain function's DIRECT callers actually pass, and none did — the
+function is called nowhere, every call only forwards an equally unpinned `Result` one hop
+further, or the parameter belongs to a method or an overloaded function, neither of which
+has a bare-name call site to read an argument's type from.
 
 ```quilon ignore
 describe = (result :: Result) -> Text => <

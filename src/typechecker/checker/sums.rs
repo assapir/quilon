@@ -4,7 +4,9 @@
 //! Part of the type checker; see `super` for the `TypeChecker` state these methods
 //! run against.
 
+use crate::ast::Statement;
 use crate::ast::walk::try_for_each_subexpression;
+use std::collections::HashSet;
 use std::ops::ControlFlow;
 
 use super::*;
@@ -255,74 +257,130 @@ impl TypeChecker {
     }
 
     /// After the whole program is checked, pin the payload type of a `Result`-typed
-    /// PARAMETER that stays the raw, unspecialized built-in type through its own
-    /// declaration (`resolve_type` gives every bare `:: Result` the same generic
-    /// `Ok(T)`/`NotOk(E)` shape) but is matched directly in its function's body. The
-    /// source is the same one [`Self::check_constructor_call`] draws from for a
-    /// constructor's own result — every caller's argument at that position, already
-    /// type-checked and sitting in the oracle by now, since a plain function's callers
-    /// (there is no hoisting) are always checked at or after its own declaration.
+    /// PARAMETER — of a plain top-level function, or of a record/sum's method — that
+    /// stays the raw, unspecialized built-in type through its own declaration
+    /// (`resolve_type` gives every bare `:: Result` the same generic `Ok(T)`/`NotOk(E)`
+    /// shape) but is matched directly in its body, binding a payload.
     ///
-    /// Two callers disagreeing over a position's payload is a `TypeMismatch` at the
-    /// second one. A parameter whose function is called nowhere, with a body that still
-    /// binds a payload identifier, is `UnresolvedResultPayload` — reported rather than
-    /// left for codegen to default. A parameter that IS called, but never with a
-    /// concrete payload at some position (only the OTHER variant is ever passed), keeps
-    /// that position `Generic` — exactly the existing, sound "unconstructed variant"
-    /// case a local binding's own construction sites already leave generic.
+    /// Only a PLAIN (non-overloaded) top-level function's parameter is actually pinned:
+    /// its callers are DIRECT calls to one bare name, so an argument's already-checked
+    /// oracle type is the same source [`Self::check_constructor_call`] draws from for a
+    /// constructor's own result. An overload set's members share that one bare name — a
+    /// call to it doesn't say which member's parameter the argument fills — and a
+    /// method's calls are member calls (`recv.name(...)`), which carry no
+    /// receiver-type-independent call site to scan; pinning either soundly would need
+    /// resolving which member/receiver a call reaches, which this whole-program,
+    /// name-keyed pass does not attempt. For both, a bound payload is
+    /// `UnresolvedResultPayload` unconditionally, never silently defaulted — the
+    /// overloaded-RETURN equivalent of this gap is closed instead by
+    /// [`Self::refine_overload_return_type`], which runs per member as its own body is
+    /// checked and needs no cross-call scan.
     ///
-    /// Overloaded functions are skipped: their return-type equivalent of this gap is
-    /// closed instead by [`Self::refine_overload_return_type`], which runs per member as
-    /// its own body is checked — a parameter has no analogous per-member registration to
-    /// refine, so it is pinned here, once, after every call site is known.
-    ///
-    /// This teaches the ORACLE (what codegen reads) the bound payload's real type; it does
-    /// not re-run the checker's own first pass over the body, which already resolved
-    /// every call/operator inside it against the STILL-generic parameter. So the payload
-    /// binding itself must stay in a position `Generic` already tolerates at that first
-    /// pass — a sum constructor argument (`Done(text)`, checked for compatibility, which a
-    /// `Generic` always satisfies) — not one requiring an EXACT overload match against it
-    /// (`text + "!"`, a `Text` method call): those fail at the first pass before this ever
-    /// runs, with the ordinary `NoMatchingOverload`/`UnknownMember` a `Generic` operand
-    /// gets anywhere else. A caller that needs the payload for more than that passes it to
-    /// a match on the producing call directly, or extracts it again from an already-pinned
-    /// return value (see `examples/result_helper.qn`).
+    /// For a pinnable parameter: two DIRECT callers disagreeing over a position's payload
+    /// is a `TypeMismatch` at the second one. A bound position no direct call ever
+    /// informs is `UnresolvedResultPayload` — UNLESS the function's name is never written
+    /// as a direct call anywhere but IS referenced some other way (passed to `.map`,
+    /// assigned to a binding): a real caller may well reach it through a shape this pass
+    /// cannot see, so the position is left `Generic` rather than rejecting working code
+    /// (the same risk the historical default always carried for such a call, not a new
+    /// one this pass introduces). A position no site ever binds (`Ok(_)`) needs no
+    /// payload type at all, so a function dispatched on the tag alone (`okTag`-style,
+    /// every call passing a different concrete payload) is untouched.
     pub(super) fn pin_result_parameters(&mut self, program: &Program) -> Result<(), TypeError> {
+        let (calls_by_name, referenced_names) = index_program_calls(program);
+
         for item in &program.items {
-            let Item::FunctionDeclaration(declaration) = item else {
-                continue;
-            };
-            if declaration.is_inert_corelib_placeholder()
-                || self.overloaded_names.contains(&declaration.name)
-            {
-                continue;
-            }
-            for (index, parameter) in declaration.parameters.iter().enumerate() {
-                let Some(annotation) = &parameter.type_annotation else {
-                    continue;
-                };
-                if !is_unspecialized_result(&self.resolve_type(annotation)) {
-                    continue;
+            match item {
+                Item::FunctionDeclaration(declaration) => {
+                    if declaration.is_inert_corelib_placeholder() {
+                        continue;
+                    }
+                    let pinnable = !self.overloaded_names.contains(&declaration.name);
+                    self.pin_result_parameters_of(
+                        &declaration.name,
+                        &declaration.parameters,
+                        &declaration.body,
+                        pinnable,
+                        &calls_by_name,
+                        &referenced_names,
+                    )?;
                 }
-                let sites = result_parameter_matches(&declaration.body, &parameter.name);
-                if sites.is_empty() {
-                    continue;
+                Item::TypeDeclaration(declaration) => {
+                    for method in declaration.type_definition.methods() {
+                        self.pin_result_parameters_of(
+                            &method.name,
+                            &method.parameters,
+                            &method.body,
+                            false,
+                            &calls_by_name,
+                            &referenced_names,
+                        )?;
+                    }
                 }
-                self.pin_one_result_parameter(program, declaration, index, &sites)?;
+                Item::VariableDeclaration(_) => {}
             }
         }
         Ok(())
     }
 
-    /// [`Self::pin_result_parameters`]'s per-parameter work: fold every caller's argument
-    /// at `index` into a pinned `Ok`/`NotOk` payload, then teach every matched site in
-    /// `sites` that pinned type.
+    /// [`Self::pin_result_parameters`]'s per-declaration work, shared by a top-level
+    /// function and a method: every bare `:: Result` parameter of `parameters` that
+    /// `body` matches directly. `pinnable` is false for a method or an overload member,
+    /// where a bound payload is reported unconditionally rather than pinning attempted
+    /// (see the doc comment above).
+    fn pin_result_parameters_of(
+        &mut self,
+        name: &str,
+        parameters: &[Parameter],
+        body: &Expression,
+        pinnable: bool,
+        calls_by_name: &HashMap<&str, Vec<&Expression>>,
+        referenced_names: &HashSet<&str>,
+    ) -> Result<(), TypeError> {
+        for (index, parameter) in parameters.iter().enumerate() {
+            let Some(annotation) = &parameter.type_annotation else {
+                continue;
+            };
+            if !is_unspecialized_result(&self.resolve_type(annotation)) {
+                continue;
+            }
+            let sites = result_parameter_matches(body, &parameter.name);
+            if sites.is_empty() {
+                continue;
+            }
+            if !pinnable {
+                if let Some(span) = first_binding(&sites) {
+                    return Err(TypeError::UnresolvedResultPayload {
+                        function: name.to_string(),
+                        parameter: parameter.name.clone(),
+                        span: span.clone(),
+                    });
+                }
+                continue;
+            }
+            self.pin_one_result_parameter(
+                name,
+                index,
+                &parameter.name,
+                &sites,
+                calls_by_name,
+                referenced_names,
+            )?;
+        }
+        Ok(())
+    }
+
+    /// [`Self::pin_result_parameters_of`]'s pinnable-parameter case: fold every direct
+    /// caller's argument at `index` into a pinned `Ok`/`NotOk` payload, then teach every
+    /// matched site in `sites` that pinned type.
     fn pin_one_result_parameter(
         &mut self,
-        program: &Program,
-        declaration: &FunctionDeclaration,
+        name: &str,
         index: usize,
+        parameter_name: &str,
         sites: &[ResultParameterMatch],
+        calls_by_name: &HashMap<&str, Vec<&Expression>>,
+        referenced_names: &HashSet<&str>,
     ) -> Result<(), TypeError> {
         use crate::ast::{NOT_OK, OK, RESULT_TYPE_NAME, SumVariant};
 
@@ -333,23 +391,26 @@ impl TypeChecker {
         let needs_ok = sites.iter().any(|site| site.ok_binding.is_some());
         let needs_not_ok = sites.iter().any(|site| site.not_ok_binding.is_some());
 
+        let no_calls = Vec::new();
+        let calls = calls_by_name.get(name).unwrap_or(&no_calls);
         let mut ok_pin: Option<Type> = None;
         let mut not_ok_pin: Option<Type> = None;
-        let mut called = false;
-        for call in calls_to(program, &declaration.name) {
+        for call in calls {
             let Expression::Call { arguments, .. } = call else {
-                unreachable!("calls_to only ever returns Call expressions")
+                unreachable!("calls_by_name only ever indexes Call expressions")
             };
             if index >= arguments.len() {
                 continue;
             }
-            called = true;
             let argument = &arguments[index];
-            let Some(Type::Sum { name, variants }) = self.type_table.get(argument.span()).cloned()
+            let Some(Type::Sum {
+                name: sum_name,
+                variants,
+            }) = self.type_table.get(argument.span()).cloned()
             else {
                 continue;
             };
-            if name != RESULT_TYPE_NAME {
+            if sum_name != RESULT_TYPE_NAME {
                 continue;
             }
             if needs_ok && let Some(variant) = variants.iter().find(|v| v.name == OK) {
@@ -360,18 +421,35 @@ impl TypeChecker {
             }
         }
 
-        if !called {
-            let unbound = sites
-                .iter()
-                .find_map(|site| site.ok_binding.as_ref().or(site.not_ok_binding.as_ref()));
-            return match unbound {
-                Some(span) => Err(TypeError::UnresolvedResultPayload {
-                    function: declaration.name.clone(),
-                    parameter: declaration.parameters[index].name.clone(),
-                    span: span.clone(),
-                }),
-                None => Ok(()),
-            };
+        // A direct call exists (this position just never saw a concrete argument through
+        // it, e.g. it only ever forwards an equally-unpinned value one hop further) —
+        // genuinely unresolved, reported below. No direct call exists at ALL, but the
+        // name is referenced some other way — leniently leave it generic instead: this
+        // pass cannot rule out a real caller reaching it through a shape it does not scan
+        // (a first-class reference, an alias), and rejecting would be a false positive on
+        // working code.
+        let lenient = !calls_by_name.contains_key(name) && referenced_names.contains(name);
+        if !lenient {
+            for site in sites {
+                if let Some(span) = &site.ok_binding
+                    && ok_pin.is_none()
+                {
+                    return Err(TypeError::UnresolvedResultPayload {
+                        function: name.to_string(),
+                        parameter: parameter_name.to_string(),
+                        span: span.clone(),
+                    });
+                }
+                if let Some(span) = &site.not_ok_binding
+                    && not_ok_pin.is_none()
+                {
+                    return Err(TypeError::UnresolvedResultPayload {
+                        function: name.to_string(),
+                        parameter: parameter_name.to_string(),
+                        span: span.clone(),
+                    });
+                }
+            }
         }
 
         if ok_pin.is_none() && not_ok_pin.is_none() {
@@ -414,91 +492,164 @@ fn is_unspecialized_result(ty: &Type) -> bool {
                 .all(|v| v.fields.iter().all(|f| matches!(f, Type::Generic { .. }))))
 }
 
-/// One `?`/`|` match, within a function's body, whose SCRUTINEE is a bare read of one of
-/// the function's own `Result`-typed parameters — what [`pin_result_parameters`] looks
-/// for. `ok_binding`/`not_ok_binding` are the payload sub-pattern's own span, when that
-/// arm binds a name (`Ok(text)`) rather than discarding the payload (`Ok(_)`); matching a
-/// DERIVED value (a call, a field, a renamed local) is out of reach for this pass —
-/// matching the producing call directly, or annotating, still works.
+/// One `?`/`|` match, within a declaration's body, whose SCRUTINEE is a bare read of one
+/// of its own `Result`-typed parameters — what [`TypeChecker::pin_result_parameters`]
+/// looks for. `ok_binding`/`not_ok_binding` are the payload sub-pattern's own span, when
+/// that arm binds a name (`Ok(text)`) rather than discarding the payload (`Ok(_)`);
+/// matching a DERIVED value (a call, a field, a renamed local) is out of reach for this
+/// pass — matching the producing call directly, or annotating, still works.
 struct ResultParameterMatch {
     scrutinee_span: Span,
     ok_binding: Option<Span>,
     not_ok_binding: Option<Span>,
 }
 
-/// Every `Match` expression in `body` whose scrutinee is a bare read of `parameter_name`.
+/// The span of the first payload binding (`ok_binding` or `not_ok_binding`) among
+/// `sites`, if any binds one at all — the span an unpinnable declaration's
+/// `UnresolvedResultPayload` names.
+fn first_binding(sites: &[ResultParameterMatch]) -> Option<&Span> {
+    sites
+        .iter()
+        .find_map(|site| site.ok_binding.as_ref().or(site.not_ok_binding.as_ref()))
+}
+
+/// Every `Match` expression in `body` whose scrutinee is a bare read of `parameter_name`,
+/// EXCLUDING one that sits inside a nested scope that rebinds that same name — a nested
+/// function's or lambda's own same-named parameter. Past that point the name refers to a
+/// different value entirely, and treating its match as this parameter's own would teach
+/// the wrong declaration's binding a type pinned from someone else's callers (each
+/// shadowing declaration's own span, gathered in the same walk, marks the region to
+/// exclude by byte range — cheaper than threading scope state through every expression
+/// variant, since nothing outside a scope can read a name it shadows).
 fn result_parameter_matches(body: &Expression, parameter_name: &str) -> Vec<ResultParameterMatch> {
     use crate::ast::{NOT_OK, OK};
 
     let mut sites = Vec::new();
+    let mut shadows: Vec<Span> = Vec::new();
     let _: ControlFlow<()> = try_for_each_subexpression(body, &mut |expression| {
-        if let Expression::Match {
-            expression: scrutinee,
-            arms,
-            ..
-        } = expression
-            && let Expression::Identifier { name, span } = scrutinee.as_ref()
-            && name == parameter_name
-        {
-            let mut site = ResultParameterMatch {
-                scrutinee_span: span.clone(),
-                ok_binding: None,
-                not_ok_binding: None,
-            };
-            for arm in arms {
-                if let Pattern::Constructor {
-                    name: constructor,
-                    arguments,
-                    ..
-                } = &arm.pattern
-                    && let [Pattern::Identifier { span: binding, .. }] = arguments.as_slice()
-                {
-                    match constructor.as_str() {
-                        OK => site.ok_binding = Some(binding.clone()),
-                        NOT_OK => site.not_ok_binding = Some(binding.clone()),
-                        _ => {}
+        match expression {
+            Expression::Match {
+                expression: scrutinee,
+                arms,
+                ..
+            } if matches!(
+                scrutinee.as_ref(),
+                Expression::Identifier { name, .. } if name == parameter_name
+            ) =>
+            {
+                let Expression::Identifier { span, .. } = scrutinee.as_ref() else {
+                    unreachable!("matched above")
+                };
+                let mut site = ResultParameterMatch {
+                    scrutinee_span: span.clone(),
+                    ok_binding: None,
+                    not_ok_binding: None,
+                };
+                for arm in arms {
+                    if let Pattern::Constructor {
+                        name: constructor,
+                        arguments,
+                        ..
+                    } = &arm.pattern
+                        && let [Pattern::Identifier { span: binding, .. }] = arguments.as_slice()
+                    {
+                        match constructor.as_str() {
+                            OK => site.ok_binding = Some(binding.clone()),
+                            NOT_OK => site.not_ok_binding = Some(binding.clone()),
+                            _ => {}
+                        }
+                    }
+                }
+                sites.push(site);
+            }
+            Expression::Lambda {
+                parameters, span, ..
+            } if parameters.iter().any(|p| p.name == parameter_name) => {
+                shadows.push(span.clone());
+            }
+            Expression::Block { statements, .. } => {
+                for statement in statements {
+                    if let Statement::Item(Item::FunctionDeclaration(nested)) = statement
+                        && nested.parameters.iter().any(|p| p.name == parameter_name)
+                    {
+                        shadows.push(nested.span.clone());
                     }
                 }
             }
-            sites.push(site);
+            _ => {}
         }
         ControlFlow::Continue(())
+    });
+
+    sites.retain(|site| {
+        !shadows.iter().any(|shadow| {
+            shadow.file == site.scrutinee_span.file
+                && shadow.start <= site.scrutinee_span.start
+                && site.scrutinee_span.end <= shadow.end
+        })
     });
     sites
 }
 
-/// Every plain (non-member) call to `name` anywhere in `program` — a top-level function
-/// body, a global's initializer, or a type's method body — as the call expression itself,
-/// so its arguments' spans are ready-made oracle keys.
-fn calls_to<'a>(program: &'a Program, name: &str) -> Vec<&'a Expression> {
-    let mut calls = Vec::new();
-    let mut visit = |expression: &'a Expression| {
-        let _: ControlFlow<()> = try_for_each_subexpression(expression, &mut |e| {
-            if let Expression::Call {
-                function,
-                member_call: false,
-                ..
-            } = e
-                && let Expression::Identifier { name: callee, .. } = function.as_ref()
-                && callee == name
-            {
-                calls.push(e);
-            }
-            ControlFlow::Continue(())
-        });
-    };
+/// A one-time index over the whole program, shared by every candidate parameter
+/// [`TypeChecker::pin_result_parameters`] considers (rather than re-walking the program
+/// once per candidate): `calls_by_name[callee]` is every plain (non-member) call
+/// expression naming `callee`, and `referenced_names` is every name any `Identifier`
+/// expression anywhere reads (a superset of the callees above, since a call's own
+/// function position is itself an `Identifier`) — the signal
+/// [`TypeChecker::pin_one_result_parameter`] uses to tell "no direct call, and nothing
+/// else reaches this name either" (genuinely unresolved) from "no direct call, but the
+/// name is referenced some other way" (leniently left generic — a real caller may reach
+/// it through a shape this pass does not scan).
+fn index_program_calls(program: &Program) -> (HashMap<&str, Vec<&Expression>>, HashSet<&str>) {
+    let mut calls_by_name: HashMap<&str, Vec<&Expression>> = HashMap::new();
+    let mut referenced_names: HashSet<&str> = HashSet::new();
     for item in &program.items {
         match item {
-            Item::FunctionDeclaration(declaration) => visit(&declaration.body),
-            Item::VariableDeclaration(declaration) => visit(&declaration.value),
+            Item::FunctionDeclaration(declaration) => {
+                index_expression(&declaration.body, &mut calls_by_name, &mut referenced_names)
+            }
+            Item::VariableDeclaration(declaration) => index_expression(
+                &declaration.value,
+                &mut calls_by_name,
+                &mut referenced_names,
+            ),
             Item::TypeDeclaration(declaration) => {
                 for method in declaration.type_definition.methods() {
-                    visit(&method.body);
+                    index_expression(&method.body, &mut calls_by_name, &mut referenced_names);
                 }
             }
         }
     }
-    calls
+    (calls_by_name, referenced_names)
+}
+
+/// [`index_program_calls`]'s per-expression work — its own named, explicitly-lifetimed
+/// function rather than a closure, which a plain `impl FnMut` cannot express here: the
+/// borrowed `Expression`s these two maps collect must outlive the call that finds them.
+fn index_expression<'a>(
+    expression: &'a Expression,
+    calls_by_name: &mut HashMap<&'a str, Vec<&'a Expression>>,
+    referenced_names: &mut HashSet<&'a str>,
+) {
+    let _: ControlFlow<()> = try_for_each_subexpression(expression, &mut |e| {
+        match e {
+            Expression::Identifier { name, .. } => {
+                referenced_names.insert(name.as_str());
+            }
+            Expression::Call {
+                function,
+                member_call: false,
+                ..
+            } => {
+                if let Expression::Identifier { name, .. } = function.as_ref() {
+                    calls_by_name.entry(name.as_str()).or_default().push(e);
+                }
+            }
+            _ => {}
+        }
+        ControlFlow::Continue(())
+    });
 }
 
 /// Fold a caller-supplied field type into `pinned`: the first concrete type wins, a later
