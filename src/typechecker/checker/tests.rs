@@ -244,6 +244,57 @@ fn test_result_parameter_never_referenced_with_a_bound_payload_is_rejected() {
 }
 
 #[test]
+fn test_result_parameter_bound_but_uninformed_and_fed_into_a_concrete_constructor_is_rejected() {
+    // `judge` is called only with `Ok(...)`, so its `NotOk` position is never informed
+    // by a direct caller — but its own binding is passed straight into `Boo`, whose
+    // field is a concrete `Text`, not `Num`. Left `Generic`, this would reach codegen
+    // as an `f64` stored into a `Text` slot (`coerce_payload`'s own internal error) —
+    // caught here instead, at check time, naming the binding.
+    assert!(matches!(
+        check_ok(
+            "Verdict = Cheer(Text) / Boo(Text)\n\
+             judge = (result :: Result) -> Verdict => <\n  \
+               result ?\n    \
+                 | Ok(text)    => Cheer(text)\n    \
+                 | NotOk(text2) => Boo(text2)\n\
+             >\n\
+             ^ = () -> Num => <\n  \
+               judge(Ok(\"hi\")) ? | Cheer(t) => t.length | Boo(t) => t.length\n\
+             >"
+        ),
+        Err(TypeError::UnresolvedResultPayload { .. })
+    ));
+}
+
+#[test]
+fn test_result_parameter_shadow_of_an_unrelated_sibling_local_does_not_hide_a_real_match() {
+    // Regression: two SIBLING nested functions each declare their own, unrelated local
+    // named `copy`; one of them happens to copy the outer `result` alias into its OWN
+    // `copy`, the other rebinds ITS OWN `copy` to something else entirely. A shadow
+    // keyed only by BYTE RANGE (not by name) would wrongly treat the second's rebind as
+    // shadowing the first's alias, hiding a genuine match on `result` inside the
+    // SECOND function and letting an unresolved payload through uncaught.
+    assert!(matches!(
+        check_ok(
+            "outer = (result :: Result) -> Text => <\n  \
+               branchA = () -> Num => <\n    \
+                 copy = result\n    \
+                 0\n  \
+               >\n  \
+               branchA()\n  \
+               branchB = () -> Text => <\n    \
+                 copy = Ok(5)\n    \
+                 result ? | Ok(text) => text | NotOk(_) => \"none\"\n  \
+               >\n  \
+               branchB()\n\
+             >\n\
+             ^ = () -> Num => < 0 >"
+        ),
+        Err(TypeError::UnresolvedResultPayload { .. })
+    ));
+}
+
+#[test]
 fn test_result_parameter_of_a_method_is_rejected() {
     // A method's calls are member calls (`recv.name(...)`), which carry no
     // receiver-independent argument to pin from — so a method's bare `:: Result`

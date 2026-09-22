@@ -288,12 +288,16 @@ All notable changes to Quilon are documented here.
   (`Ok("x")`) specializes its own payload — two callers disagreeing over a position's
   payload is a type mismatch at the second one, and a bound position no direct call informs
   is left generic (the historical, sound-for-`Num` default an unconstructed local variant's
-  own slot already gets), rather than rejected. This covers a top-level function's, a
-  `:=`/`=`-bound lambda's, and a nested function or lambda's parameter, at any nesting
-  depth. A method's or an overloaded function's own parameter has no such call site to pin
-  from at all — a member call's argument can't be attributed to one receiver-independent
-  signature, and a bare call to an overloaded name doesn't say which member it fills — so
-  those, and any declaration referenced nowhere in the whole program, still raise the new
+  own slot already gets), rather than rejected — UNLESS that binding is itself passed
+  straight into a sum-variant constructor whose field there is concrete and isn't `Num`,
+  which would reach codegen as `Num`'s own representation stored into a differently-shaped
+  slot; that specific shape is still reported rather than left to crash. This covers a
+  top-level function's, a `:=`/`=`-bound lambda's, and a nested function or lambda's
+  parameter, at any nesting depth. A method's or an overloaded function's own parameter has
+  no such call site to pin from at all — a member call's argument can't be attributed to one
+  receiver-independent signature, and a bare call to an overloaded name doesn't say which
+  member it fills — so those, and any declaration referenced nowhere in the whole program,
+  still raise the new
   [QN351](docs/tooling/errors.md#qn351--unresolved-result-payload), naming the fix: match
   the call that produces the `Result` directly, or annotate the payload instead of matching
   the whole `Result` inside an unreachable helper. A `Result`'s payload type crossing a

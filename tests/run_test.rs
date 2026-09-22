@@ -1596,6 +1596,29 @@ fn reject_result_parameter_never_referenced_with_a_bound_payload() {
     assert_type_error_code(src, Code::UnresolvedResultPayload);
 }
 
+/// A bare `:: Result` parameter called with only ONE variant (here, only `Ok`) still
+/// binds the OTHER variant's payload and passes it straight into a sum-variant
+/// constructor whose field is a concrete, non-`Num` type: left `Generic`, that binding
+/// would reach codegen as `Num`'s `f64` stored into a `Text` slot — an internal error
+/// (`coerce_payload`) that a clean compile should never let through. Caught here
+/// instead, at check time.
+#[test]
+fn reject_result_parameter_bound_but_uninformed_variant_fed_into_a_concrete_constructor() {
+    let src = r#"
+        Verdict = Cheer(Text) / Boo(Text)
+
+        judge = (result :: Result) -> Verdict => <
+          result ?
+            | Ok(text)     => Cheer(text)
+            | NotOk(text2) => Boo(text2)
+        >
+        ^ = () -> Num => <
+          judge(Ok("hi")) ? | Cheer(t) => t.length | Boo(t) => t.length
+        >
+    "#;
+    assert_type_error_code(src, Code::UnresolvedResultPayload);
+}
+
 /// A `Result`'s payload also crosses an OVERLOADED callee: the one-argument `make`'s
 /// return type is refined from its own body (`Ok(Thing)`), so a call to it through the
 /// two-argument overload sees the real payload instead of the opaque annotation.
