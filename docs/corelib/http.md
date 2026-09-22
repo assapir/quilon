@@ -203,12 +203,12 @@ quilon test corelib/http.qn
 `http.@serve(address :: Text, handler :: (Request) -> Response) -> net.Server` is a
 compiler-lowered primitive, like `net.@tcpServe`: its lowering calls that very same runtime
 entry, with `core.http`'s own connection handler filled in. Each accepted connection reads
-its request head, calls `handler` once, writes the reply carrying `connection: close`, and
-is closed — one response per connection. A handler fault (a failing `assert`, an invalid
-index, …) is fatal, exactly as everywhere else in the language, and takes the server with
-it. `kill` is `net.Server`'s own method (see
-[`core.net`'s server layer](net.md#the-raw-tcp-server-layer)): `server.kill(seconds)` or
-`server.kill()` for its 5-second default.
+its request head, reads a body-carrying method's own body (below), calls `handler` once,
+writes the reply carrying `connection: close`, and is closed — one response per connection.
+A handler fault (a failing `assert`, an invalid index, …) is fatal, exactly as everywhere
+else in the language, and takes the server with it. `kill` is `net.Server`'s own method
+(see [`core.net`'s server layer](net.md#the-raw-tcp-server-layer)): `server.kill(seconds)`
+or `server.kill()` for its 5-second default.
 
 ```quilon
 << core.http
@@ -232,11 +232,56 @@ hummus = (request :: http.Request) -> http.Response => <
 
 | Method | Result |
 |--------|--------|
-| `Request.parse(head :: Text) -> Result` | Parse a raw request head — everything up to, but not including, the blank line — into `Ok(Request)`: the request line's token to `Method` (a body-bearing method's `Body` is always `{ content = "", contentType = "" }`), its target to `url`, and the remaining lines through `Headers.parse`. `NotOk(reason)` when the request line carries fewer than two space-separated fields or names a method this module does not recognize — `serveConnection`'s own signal to answer 400 and close. |
+| `Request.parse(head :: Text, body :: Text) -> Result` | Parse a raw request head — everything up to, but not including, the blank line — into `Ok(Request)`: the request line's token to `Method`, its target to `url`, and the remaining lines through `Headers.parse`. `body` (`""` when the method carries none, or a caller has none to give) and the request's own `content-type` header (`""` when absent) are attached to a body-carrying method's own `Body`; a nullary method ignores both. `NotOk(reason)` when the request line carries fewer than two space-separated fields or names a method this module does not recognize — `serveConnection`'s own signal to answer 400 and close. |
 
 `Request.path()` and `Request.params()` read a bare target the same way they read a full URL:
 a target with no scheme or host (`/pantry?x=1`) has an authority of zero length, so the path
 starts at its very first character.
+
+### Request bodies
+
+A body-carrying method (`Post`, `Put`, `Query`, `Patch`) whose request declares
+`Content-Length` or `Transfer-Encoding: chunked` has its body read before `handler` runs:
+`Content-Length: N` means exactly `N` more bytes past the head's blank line; `chunked` means
+read until the zero-size chunk terminator, dechunked the same way the client's own
+`Response.body()` dechunks a reply. A method that carries a body but whose request gives
+neither header is called with an empty one — nothing is read.
+
+The most bytes a body may carry is `ServerOptions.maxBodySize`, 16 MiB by default (the same
+cap `net.@tcpRequest` already applies to a response). A declared `Content-Length` over the
+cap is rejected the moment the head arrives, before any of the body itself has to; a
+`chunked` body is rejected as soon as decoding it would cross the cap. Either way the
+connection gets `413 Content Too Large` and closes, `handler` never called. Malformed
+chunked framing (a non-hex chunk size, a missing chunk terminator, a chunk shorter than its
+declared size) gets `400 Bad Request` instead — the same distinction `Request.parse`'s own
+malformed-request-line case draws.
+
+```quilon
+<< core.http
+
+hummus = (request :: http.Request) -> http.Response => <
+  request.method ?
+    | http.Post(body) => http.Response.reply(http.Created, "stocked " + body.content)
+    | _               => http.Response.reply(http.MethodNotAllowed)
+>
+
+^ = () -> Num => <
+  options = http.ServerOptions { maxBodySize = 1 * 1024 * 1024 }   ~ 1 MiB, down from 16
+  shop = http.@serve("127.0.0.1:8080", request => hummus(request), options)
+  ~ …
+  shop.kill(5)
+  0
+>
+```
+
+| Type | Shape |
+|------|-------|
+| `ServerOptions` | `{ maxBodySize :: Num }` — the request body cap, in bytes. |
+
+| Method | Result |
+|--------|--------|
+| `ServerOptions.default() -> ServerOptions` | `{ maxBodySize = 16 * 1024 * 1024 }` (static). |
+| `http.@serve(address, handler, options :: ServerOptions) -> net.Server` | As the two-argument form, with `options.maxBodySize` in place of the default. |
 
 `Response` gains one constructor, `reply`, over six overloads, plus `wire()`:
 

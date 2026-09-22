@@ -109,14 +109,18 @@ fn all_type_declarations<'a>(program: &'a Program) -> Vec<&'a TypeDeclaration> {
     found
 }
 
-/// A saved (possibly-absent) binding for one name, captured so `inline_lambda` can
-/// restore whatever a lambda parameter shadowed: its `variables` entry (alloca + LLVM
-/// type) and its `var_types` entry (Quilon type for overload mangling).
-type SavedBinding<'ctx> = (
-    String,
-    Option<(PointerValue<'ctx>, BasicTypeEnum<'ctx>)>,
-    Option<Type>,
-);
+/// One name's entry (if any) in every per-variable map the generator tracks, captured so
+/// a shadowing binding can restore exactly what it shadowed once its own scope ends.
+/// Shared by `inline_lambda`'s lambda-parameter shadowing (`arrays.rs`) and
+/// `bind_pattern`'s match-arm shadowing (`matching.rs`) — see [`CodeGenerator::save_binding`]
+/// and [`CodeGenerator::restore_bindings`].
+struct SavedBinding<'ctx> {
+    name: String,
+    variable: Option<(PointerValue<'ctx>, BasicTypeEnum<'ctx>)>,
+    var_type: Option<Type>,
+    record_fields: Option<Vec<String>>,
+    named_type: Option<String>,
+}
 
 /// A closure's call ABI: its source-parameter LLVM types and its return type. The
 /// implicit trailing environment pointer is NOT included (every closure call appends it).
@@ -210,12 +214,13 @@ pub struct CodeGenerator<'ctx> {
     // Whether this module is being emitted for an ahead-of-time build rather than the JIT.
     // Backs `core.info`'s `runMode`; only the caller knows which it is.
     aot: bool,
-    // Whether THIS program's own `frameBody` declaration (if any) is `core.http`'s real
-    // one — set from its `from_corelib` flag in `generate`'s first pre-pass. A bare call
-    // to `frameBody` lowers to the native intrinsic only when this is true (checking
-    // `corelib/http.qn` directly, where the link's rename never runs); an unrelated user
-    // program's own bare `frameBody` is never intercepted, the same closed-overload-set
-    // rule `now`/`print` get from `is_inert_corelib_placeholder`.
+    // Whether THIS program's own `frameBody`/`bodyProgress` declarations (if any) are
+    // `core.http`'s real ones — set from their `from_corelib` flag in `generate`'s first
+    // pre-pass. A bare call to either name lowers to its native intrinsic only when this is
+    // true (checking `corelib/http.qn` directly, where the link's rename never runs); an
+    // unrelated user program's own bare `frameBody`/`bodyProgress` is never intercepted,
+    // the same closed-overload-set rule `now`/`print` get from
+    // `is_inert_corelib_placeholder`.
     frame_body_from_corelib: bool,
     // Overload sets, keyed by name (function names AND operator symbols like `"+"`).
     // Each entry is the list of that name's overload parameter-type signatures. A name
@@ -557,11 +562,11 @@ impl<'ctx> CodeGenerator<'ctx> {
         }
 
         for item in &program.items {
-            // `corelib/http.qn` checked directly (its own suite): its bare `frameBody`
-            // declaration is the real one, so calls to the bare name lower to the
-            // intrinsic too (see `frame_body_from_corelib`).
+            // `corelib/http.qn` checked directly (its own suite): its bare `frameBody`/
+            // `bodyProgress` declarations are the real ones, so calls to either bare name
+            // lower to their intrinsic too (see `frame_body_from_corelib`).
             if let Item::FunctionDeclaration(declaration) = item
-                && declaration.name == "frameBody"
+                && (declaration.name == "frameBody" || declaration.name == "bodyProgress")
                 && declaration.from_corelib
             {
                 self.frame_body_from_corelib = true;
@@ -1098,6 +1103,43 @@ impl<'ctx> CodeGenerator<'ctx> {
         self.var_named_types = frame.var_named_types;
         self.var_types = frame.var_types;
         self.boxed_vars = frame.boxed_vars;
+    }
+
+    /// Capture `name`'s current entry (if any) in every per-variable map, before a
+    /// shadowing binding overwrites it — pair with [`Self::restore_bindings`].
+    fn save_binding(&self, name: &str) -> SavedBinding<'ctx> {
+        SavedBinding {
+            name: name.to_string(),
+            variable: self.variables.get(name).copied(),
+            var_type: self.var_types.get(name).cloned(),
+            record_fields: self.record_types.get(name).cloned(),
+            named_type: self.var_named_types.get(name).cloned(),
+        }
+    }
+
+    /// Undo whatever shadowed each saved name: put every map back to what it held
+    /// beforehand (absent, if it was absent there).
+    fn restore_bindings(&mut self, saved: Vec<SavedBinding<'ctx>>) {
+        fn restore<V>(map: &mut HashMap<String, V>, name: String, value: Option<V>) {
+            match value {
+                Some(value) => {
+                    map.insert(name, value);
+                }
+                None => {
+                    map.remove(&name);
+                }
+            }
+        }
+        for entry in saved {
+            restore(&mut self.variables, entry.name.clone(), entry.variable);
+            restore(&mut self.var_types, entry.name.clone(), entry.var_type);
+            restore(
+                &mut self.record_types,
+                entry.name.clone(),
+                entry.record_fields,
+            );
+            restore(&mut self.var_named_types, entry.name, entry.named_type);
+        }
     }
 
     /// Suspend the enclosing function (frame, insert block, current function) to emit a

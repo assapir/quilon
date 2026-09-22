@@ -571,13 +571,20 @@ fn importing_core_http_contributes_exactly_this_surface() {
         "core.http.Headers",
         "core.http.Params",
         "core.http.RequestOptions",
+        // `@serve`'s two-argument and three-argument overloads: one item each.
         "core.http.@serve",
-        // The private base record `Headers`/`Params` compose over: carried with the
-        // module, exported to no importer.
+        "core.http.@serve",
+        // The server's own per-server settings, `@serve`'s three-argument overload takes.
+        "core.http.ServerOptions",
+        // The private base record `Headers`/`Params` compose over, and the private sum
+        // `bodyProgress`'s native `Result` is classified into: carried with the module,
+        // exported to no importer.
         "core.http.Values",
-        // The native body-framing primitive: carried with the module (an exported item
-        // calls it), exported to no importer.
+        "core.http.BodyProgress",
+        // The native body-framing/body-progress primitives: carried with the module (an
+        // exported item calls each), exported to no importer.
         "core.http.frameBody",
+        "core.http.bodyProgress",
         // The server layer's own private helpers: carried with the module, exported to no
         // importer, reached only through `@serve` (and, for `blankLineIndex`, `Response`'s
         // own `blankLine` too).
@@ -585,7 +592,10 @@ fn importing_core_http_contributes_exactly_this_surface() {
         "core.http.foundOrEnd",
         "core.http.linesAfterFirst",
         "core.http.statusReply",
+        "core.http.classifyBodyProgress",
         "core.http.receiveHead",
+        "core.http.readBody",
+        "core.http.answer",
         "core.http.serveConnection",
         // The client's own PRIVATE test fixtures: carried with the module (an exported
         // item may lean on them), exported to no importer.
@@ -594,6 +604,7 @@ fn importing_core_http_contributes_exactly_this_surface() {
         "core.http.headerOr",
         "core.http.parsed",
         "core.http.parsedRequest",
+        "core.http.parsedRequestWithBody",
         // core.text, merged implicitly because the client calls composable Text methods
         // (`.trim`/`.contains`) — the implementations those calls lower to, qualified so
         // they claim no name an importer could write. (`repeat` is pulled in transitively
@@ -1542,7 +1553,7 @@ fn the_corelib_http_suite_passes_when_the_module_is_the_file_named() {
         );
     }
     assert!(
-        out.stdout.contains("128 passed, 0 failed"),
+        out.stdout.contains("132 passed, 0 failed"),
         "unexpected summary:\n{}",
         out.stdout
     );

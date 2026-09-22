@@ -1029,6 +1029,10 @@ pub enum Pattern {
         value: f64,
         span: Span,
     },
+    Text {
+        value: String,
+        span: Span,
+    },
     Constructor {
         name: String,
         arguments: Vec<Pattern>,
@@ -1044,6 +1048,7 @@ impl Pattern {
         match self {
             Pattern::Identifier { span, .. } => span,
             Pattern::Number { span, .. } => span,
+            Pattern::Text { span, .. } => span,
             Pattern::Constructor { span, .. } => span,
             Pattern::Wildcard { span } => span,
         }

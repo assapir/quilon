@@ -27,7 +27,7 @@ evergreen — the durable record that survives across contributors and AI-agent 
 | **M5** | ~~Implicit parallelism (CPU) — parallel array methods from inferred purity~~ | 💤 Deprioritized |
 | **M6** | **Concurrency runtime — colorless implicit futures ([#120]) — THE core deliverable.** Stage 1: single-threaded fibers + reactor; Stage 2: M:N work-stealing + cross-thread GC | 🔨 In progress (Stage 1 ✅) — **core** |
 | **M7** | Polish — formatter/linter, corelib, debug info | 🔨 In progress |
-| **M8** | **Web — a native HTTP server built on the M6 runtime** | 🔨 In progress (server ships; bodies, keep-alive, signal trap remain) |
+| **M8** | **Web — a native HTTP server built on the M6 runtime** | 🔨 In progress (server ships; keep-alive, signal trap remain) |
 
 Legend: ✅ complete · 🔨 in progress · ⬜ planned · 💤 deprioritized.
 
@@ -50,6 +50,7 @@ served an auto-data-parallelism goal the project no longer pursues.
 [#453]: https://github.com/assapir/quilon/issues/453
 [#457]: https://github.com/assapir/quilon/issues/457
 [#458]: https://github.com/assapir/quilon/issues/458
+[#466]: https://github.com/assapir/quilon/issues/466
 
 ### M1 — Diagnostics & small wins ✅
 
@@ -139,12 +140,12 @@ The **"then web"** half of the north star: a native HTTP server built on the M6 
 Stage 1 — one worker, a fiber per connection, one reactor wait covering every connection —
 so many in-flight connections are cheap fibers with their IO overlapped implicitly ([#435]).
 Stage 2 turns that one worker into many without changing server code. What remains on the
-server: request bodies, keep-alive, a signal trap for graceful shutdown ([#453]), and a
-router. Its on-ramps:
+server: keep-alive, a signal trap for graceful shutdown ([#453]), and a router. Its
+on-ramps:
 
 | Item | Status |
 |------|--------|
 | Reactor-backed input/IO — reading stdin/files/sockets, not just printing ([#60]) | 🔨 (stdin, one-shot TCP, and the streaming file read `@streamFile` ship; hostname resolution and regular blocking calls run on the runtime's blocking-call pool ([#434]); the whole-file `io.readFile` composition remains) |
 | Statically-linked `libgc` for a self-contained server binary ([#49]) | ✅ (bdwgc built from the submodule and linked statically; a produced binary needs no libgc) |
 | Fiber-sharing check — an unmarked `:=` value reachable from more than one fiber is a compile error naming `@name := …` ([#120]) | ✅ ([#458]; enforced for `net.@tcpServe` and `http.@serve` handlers) |
-| Native HTTP server on the runtime ([#435]) | ✅ (raw layer — `net.@tcpServe`, `Connection`, `Server.kill` ([#451]); HTTP layer — `http.@serve`, `Request.parse`, `Status` (one variant per registered code), `Response.reply` ([#457]); one response per connection) |
+| Native HTTP server on the runtime ([#435]) | ✅ (raw layer — `net.@tcpServe`, `Connection`, `Server.kill` ([#451]); HTTP layer — `http.@serve`, `Request.parse`, `Status` (one variant per registered code), `Response.reply` ([#457]); one response per connection; request bodies per Content-Length or chunked framing with a per-server cap ([#466])) |

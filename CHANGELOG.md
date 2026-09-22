@@ -6,6 +6,28 @@ All notable changes to Quilon are documented here.
 
 ### Added
 
+- **The HTTP server reads request bodies.** A body-carrying method (`Post`/`Put`/`Query`/
+  `Patch`) whose request declares `Content-Length` or `Transfer-Encoding: chunked` has its
+  body read — exactly `Content-Length` more bytes past the head, or dechunked to the
+  zero-size terminator, the same rules the client's own `Response.body()` applies — before
+  `handler` runs; neither header means no body to read. `Request.parse` takes the body as
+  a second argument (`Request.parse(head, body) -> Result`), attaching it and the
+  request's own `content-type` header to a body-carrying method's `Body`; a nullary method
+  ignores both. A new exported record, **`ServerOptions { maxBodySize :: Num }`**
+  (`ServerOptions.default()`: 16 MiB, the client's own response cap), governs how large a
+  body this server accepts, reached through a new `http.@serve(address, handler, options)`
+  overload — the two-argument form keeps the default. A body over the cap gets `413
+  Content Too Large`, checked against a declared `Content-Length` before any of the body
+  has to arrive; malformed chunked framing gets `400 Bad Request`. See
+  `docs/corelib/http.md#request-bodies` and `examples/http_server.qn`. Part of #435.
+- **A `Text` scrutinee can be matched against literal text, not just a binding or `_`**:
+  `token ? | "GET" => Ok(Get) | "POST" => Ok(Post(noBody)) | _ => NotOk(...)`. A text
+  pattern lowers to the same `Text == Text` comparison a `==` expression on two `Text`
+  values uses; a non-sum scrutinee already needs a catch-all, so totality is unchanged, and
+  a text pattern against a `Num` or a sum is the same type mismatch a number pattern gives
+  against a `Text`. `info.platform()`, `info.os()`, and `Method.parse` in `core.http` are
+  now matches over their token, replacing their `==` ternary chains. See
+  `docs/expressions/pattern-matching.md` and `examples/text_match.qn`. Closes #461.
 - **The fiber-sharing check: a non-atomic `:=` value reachable from more than one fiber is
   a compile error.** `net.@tcpServe`'s `handler` argument runs on its own fiber per
   connection — the first Quilon code that does — so the checker now rejects a top-level
@@ -275,6 +297,16 @@ All notable changes to Quilon are documented here.
   function's `env` binding already was, closing the matching gap where a call through an
   overload set previously lost the payload a direct call already kept. See
   `docs/types/sum-types.md` and `examples/result_helper.qn`. Closes #469. Closes #468.
+- **A match arm's binding is no longer corrupted by a nested match inside it reusing the
+  same name.** `| Ok(body) => (second ? | Ok(body) => body | NotOk(reason) => reason) +
+  body` used to read the outer `body` back as whatever the inner `Ok(body)` arm's own slot
+  held — uninitialized on any run where that inner arm did not execute — because codegen's
+  variable-name map had no per-arm scope: a nested arm's bind overwrote the outer name's
+  slot and nothing restored it once the nested match was done. Each arm's bindings are now
+  restored to what they held before the arm, once its body is emitted, so an outer name
+  keeps reading its own value everywhere in its own arm regardless of what a nested match
+  inside it binds. See `docs/expressions/pattern-matching.md` and
+  `examples/nested_match.qn`. Closes #467.
 
 ## 0.11.0 "Rackham" — 2026-09-08
 
