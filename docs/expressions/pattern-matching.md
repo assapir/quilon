@@ -22,7 +22,7 @@ Every match is **total**; the type checker rejects a match with an uncovered val
 
 - a **sum-typed** scrutinee is covered by listing every variant (`Ok(x)` / `NotOk(e)`), or by a catch-all;
 - **any other** scrutinee — a `Num`, a `Text` — is covered by a catch-all. Both `_` and a binding arm (`| rest => rest * 2`) are catch-alls.
-- a **`Text`** scrutinee may also be matched against literal text arms (`"hi"`), alongside its catch-all.
+- a **`Text`** scrutinee may also be matched against literal text arms (`"hi"`), alongside its catch-all. A pattern is a plain literal ([QN116](../tooling/errors.md#qn116--text-pattern-with-interpolation)); to match against a computed text, bind the value and compare it in the arm.
 
 A constructor pattern must name a variant of the scrutinee's sum type: `Purple` against a `Color` that has none, or `Ok(x)` against a `Num`, is a compile error.
 
