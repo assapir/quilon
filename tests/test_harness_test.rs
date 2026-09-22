@@ -592,7 +592,6 @@ fn importing_core_http_contributes_exactly_this_surface() {
         "core.http.foundOrEnd",
         "core.http.linesAfterFirst",
         "core.http.statusReply",
-        "core.http.reasonIs",
         "core.http.classifyBodyProgress",
         "core.http.receiveHead",
         "core.http.readBody",

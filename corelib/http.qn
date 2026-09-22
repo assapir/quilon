@@ -245,28 +245,22 @@ bodyProgress = (accumulated :: Text, transferEncoding :: Text, contentLength :: 
 ~ carrying the native's own reason.
 BodyProgress = Complete(Text) / Incomplete / TooLarge / Malformed(Text)
 
-~ Whether `reason` equals `expected`, through a plain function call rather than the `==`
-~ operator directly: `reason`, bound off `bodyProgress`'s own `Result` inside
-~ `classifyBodyProgress` below, is a `Text` the operator itself cannot always resolve a
-~ concrete type for, while a call to an already `:: Text`-parameterized function can.
-reasonIs = (reason :: Text, expected :: Text) -> Bool => < reason == expected >
-
 ~ `bodyProgress(accumulated, transferEncoding, contentLength, maxBodySize)`'s own `Result`
 ~ (`Ok(bytes)` / `NotOk(reason)`), classified into `BodyProgress` — the one place the
 ~ native's raw `Result` is read at all; `readBody`/`answer` see only the sum. Calls
 ~ `bodyProgress` directly (rather than taking an already-computed `:: Result` as its own
 ~ parameter) so the match below is on that call's own concrete payload type, not on a
-~ generic `Result` arriving with no such anchor. A `==` chain (through `reasonIs`) rather
-~ than a match on `reason`: the pattern grammar has no `Text` literal pattern yet.
+~ generic `Result` arriving with no such anchor.
 classifyBodyProgress = (
   accumulated :: Text, transferEncoding :: Text, contentLength :: Text, maxBodySize :: Num
 ) -> BodyProgress => <
   bodyProgress(accumulated, transferEncoding, contentLength, maxBodySize) ?
     | Ok(body)      => Complete(body)
     | NotOk(reason) =>
-        reasonIs(reason, "incomplete") ? Incomplete
-          : reasonIs(reason, "too large") ? TooLarge
-          : Malformed(reason)
+        (reason ?
+          | "incomplete" => Incomplete
+          | "too large"  => TooLarge
+          | other        => Malformed(other))
 >
 
 ~ The index of `needle`'s first occurrence in `raw`, or `raw.length` when it never occurs —
