@@ -367,6 +367,25 @@ impl TypeChecker {
         Ok(())
     }
 
+    /// The member of overload set `name` whose parameters EXACTLY match
+    /// `parameter_types`, mutably — the shared lookup [`Self::refine_overload_return_type`]
+    /// and [`Self::set_overload_result_aliasing`] both mutate a different field of once
+    /// they have found their member.
+    fn overload_member_mut(
+        &mut self,
+        name: &str,
+        parameter_types: &[Type],
+    ) -> Option<&mut Overload> {
+        self.overloads.get_mut(name)?.iter_mut().find(|overload| {
+            overload.parameters.len() == parameter_types.len()
+                && overload
+                    .parameters
+                    .iter()
+                    .zip(parameter_types)
+                    .all(|(a, b)| types_match(a, b))
+        })
+    }
+
     /// Refine an overload member's GENERIC return annotation — in practice only
     /// `-> Result`, whose `Ok(T)`/`NotOk(E)` slots are type variables — to `refined`, the
     /// type its own body just proved. Mirrors `check_function_declaration`'s refinement
@@ -381,16 +400,7 @@ impl TypeChecker {
         parameter_types: &[Type],
         refined: Type,
     ) {
-        if let Some(set) = self.overloads.get_mut(name)
-            && let Some(member) = set.iter_mut().find(|overload| {
-                overload.parameters.len() == parameter_types.len()
-                    && overload
-                        .parameters
-                        .iter()
-                        .zip(parameter_types)
-                        .all(|(a, b)| types_match(a, b))
-            })
-        {
+        if let Some(member) = self.overload_member_mut(name, parameter_types) {
             member.ret = Some(refined);
         }
     }
@@ -403,16 +413,7 @@ impl TypeChecker {
         parameter_types: &[Type],
         result_aliasing: ResultAliasing,
     ) {
-        if let Some(set) = self.overloads.get_mut(name)
-            && let Some(member) = set.iter_mut().find(|overload| {
-                overload.parameters.len() == parameter_types.len()
-                    && overload
-                        .parameters
-                        .iter()
-                        .zip(parameter_types)
-                        .all(|(a, b)| types_match(a, b))
-            })
-        {
+        if let Some(member) = self.overload_member_mut(name, parameter_types) {
             member.result_aliasing = Some(result_aliasing);
         }
     }
