@@ -312,15 +312,20 @@ impl TypeChecker {
                         self.reject_nested_result_parameters(&method.body)?;
                     }
                 }
-                Item::VariableDeclaration(declaration) => {
-                    if let Expression::Lambda {
+                Item::VariableDeclaration(declaration) => match &declaration.value {
+                    // Checked directly, by its real binding name, rather than through
+                    // `reject_nested_result_parameters`'s generic walk (which would also
+                    // find this same top-level lambda, unhelpfully labeled "a lambda") —
+                    // its own body is still handed to that walk, for anything nested
+                    // further in.
+                    Expression::Lambda {
                         parameters, body, ..
-                    } = &declaration.value
-                    {
+                    } => {
                         self.reject_if_bound_and_unresolved(&declaration.name, parameters, body)?;
+                        self.reject_nested_result_parameters(body)?;
                     }
-                    self.reject_nested_result_parameters(&declaration.value)?;
-                }
+                    other => self.reject_nested_result_parameters(other)?,
+                },
             }
         }
         Ok(())
