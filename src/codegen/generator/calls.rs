@@ -748,7 +748,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                     )
                     .map_err(ctx(CALL_FAILED))?;
                 let handle = Self::call_result_to_basic(call)?;
-                self.build_handle_record(handle)
+                self.build_plain_record(&[handle])
             }
             // `http.@serve(address, handler)` / `http.@serve(address, handler, options)`:
             // the HTTP server layer. Lowers to the exact same runtime entry `tcpServe`
@@ -825,15 +825,15 @@ impl<'ctx> CodeGenerator<'ctx> {
                     )
                     .map_err(ctx(CALL_FAILED))?;
                 let handle = Self::call_result_to_basic(call)?;
-                self.build_handle_record(handle)
+                self.build_plain_record(&[handle])
             }
-            // `Connection.@read()`: the receiver (`arguments[0]`) is a `Connection` value;
-            // its `handle` field is the id the runtime table keys the connection by.
-            // `Connection.@read()` / `Connection.@read(seconds)`: overloaded like
-            // `Server.kill`, so no single `expect_arity` check applies here. The
-            // timed overload gives up and yields `""` once `seconds` pass with nothing
-            // arriving, exactly as it yields `""` on a peer close — neither carries a
-            // channel a `Text` result could tell them apart through.
+            // `Connection.@read()` / `Connection.@read(seconds)`: the receiver
+            // (`arguments[0]`) is a `Connection` value; its `handle` field is the id the
+            // runtime table keys the connection by. Overloaded like `Server.kill`, so no
+            // single `expect_arity` check applies here. The timed overload gives up and
+            // yields `""` once `seconds` pass with nothing arriving, exactly as it yields
+            // `""` on a peer close — neither carries a channel a `Text` result could tell
+            // them apart through.
             "read" => {
                 const NAME: &str = "core.net.Connection.@read";
                 const CALL_FAILED: &str = "Failed to call core.net.Connection.@read";
@@ -946,36 +946,40 @@ impl<'ctx> CodeGenerator<'ctx> {
         Ok(handle)
     }
 
-    /// Build a `{ handle :: Num }`-shaped record (`Connection`/`Server`, or `http.@serve`'s
-    /// own `ServerOptions`) on the GC heap around `handle` and return a pointer to it — the
-    /// compiler-lowered counterpart of an ordinary record literal, for wherever codegen
-    /// needs to hand Quilon code one of these single-`Num`-field types without going
-    /// through its own constructor. Shape-only: every caller's type has the identical
-    /// one-`Num`-field layout, so this needs no type name to pick between them — the call
-    /// site's own inferred type is what tells Quilon code which one it is.
-    fn build_handle_record(
+    /// Build a plain record on the GC heap over `fields`, in declared order, and return a
+    /// pointer to it — the compiler-lowered counterpart of an ordinary record literal, for
+    /// wherever codegen needs to hand Quilon code one of these shape-only types (a
+    /// `{ handle :: Num }` for `Connection`/`Server`, or a two-`Num`-field `ServerOptions`
+    /// reconstructed inside [`Self::emit_http_serve_handler_thunk`]) without going through
+    /// its own constructor. Shape-only: every caller already knows its field values in
+    /// order, so this needs no type name to pick between them — the call site's own
+    /// inferred type is what tells Quilon code which one it is.
+    fn build_plain_record(
         &mut self,
-        handle: BasicValueEnum<'ctx>,
+        fields: &[BasicValueEnum<'ctx>],
     ) -> Result<BasicValueEnum<'ctx>, String> {
         use inkwell::values::AnyValue;
-        let struct_type = self.context.struct_type(&[handle.get_type()], false);
+        let field_types: Vec<_> = fields.iter().map(BasicValueEnum::get_type).collect();
+        let struct_type = self.context.struct_type(&field_types, false);
         let size = struct_type
             .size_of()
-            .ok_or_else(|| "handle record struct type has no compile-time size".to_string())?;
+            .ok_or_else(|| "record struct type has no compile-time size".to_string())?;
         let alloc_fn = self.get_intrinsic("__alloc")?;
         let record_ptr = self
             .builder
-            .build_call(alloc_fn, &[size.into()], "handle_record")
-            .map_err(ctx("Failed to call __alloc for a handle record"))?
+            .build_call(alloc_fn, &[size.into()], "plain_record")
+            .map_err(ctx("Failed to call __alloc for a record"))?
             .as_any_value_enum()
             .into_pointer_value();
-        let gep = self
-            .builder
-            .build_struct_gep(struct_type, record_ptr, 0, "handle_field")
-            .map_err(ctx("Failed to build GEP for a handle record"))?;
-        self.builder
-            .build_store(gep, handle)
-            .map_err(ctx("Failed to store a handle record's field"))?;
+        for (index, field) in fields.iter().enumerate() {
+            let gep = self
+                .builder
+                .build_struct_gep(struct_type, record_ptr, index as u32, "plain_record_field")
+                .map_err(ctx("Failed to build GEP for a record field"))?;
+            self.builder
+                .build_store(gep, *field)
+                .map_err(ctx("Failed to store a record field"))?;
+        }
         Ok(record_ptr.into())
     }
 
@@ -1080,7 +1084,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         let connection_id = function.get_nth_param(0).unwrap().into_float_value();
         let bundle = function.get_nth_param(1).unwrap().into_pointer_value();
 
-        let connection = self.build_handle_record(connection_id.into())?;
+        let connection = self.build_plain_record(&[connection_id.into()])?;
         let (real_fn, real_env) = self.unpack_closure_bundle(bundle, "tcp_serve_bundle")?;
 
         let call_type = i8_ty.fn_type(&[ptr_ty.into(), ptr_ty.into()], false);
@@ -1287,50 +1291,6 @@ impl<'ctx> CodeGenerator<'ctx> {
         Ok((real_fn, real_env, max_body_size, idle_timeout))
     }
 
-    /// Build a `{ maxBodySize :: Num, idleTimeout :: Num }`-shaped record (`ServerOptions`)
-    /// on the GC heap and return a pointer to it — the two-field counterpart of
-    /// [`Self::build_handle_record`], for handing the reconstructed `ServerOptions` to
-    /// `serveConnection` inside [`Self::emit_http_serve_handler_thunk`].
-    fn build_server_options_record(
-        &mut self,
-        max_body_size: inkwell::values::FloatValue<'ctx>,
-        idle_timeout: inkwell::values::FloatValue<'ctx>,
-    ) -> Result<BasicValueEnum<'ctx>, String> {
-        use inkwell::values::AnyValue;
-        let struct_type = self.context.struct_type(
-            &[
-                max_body_size.get_type().into(),
-                idle_timeout.get_type().into(),
-            ],
-            false,
-        );
-        let size = struct_type.size_of().ok_or_else(|| {
-            "ServerOptions record struct type has no compile-time size".to_string()
-        })?;
-        let alloc_fn = self.get_intrinsic("__alloc")?;
-        let record_ptr = self
-            .builder
-            .build_call(alloc_fn, &[size.into()], "server_options_record")
-            .map_err(ctx("Failed to call __alloc for a ServerOptions record"))?
-            .as_any_value_enum()
-            .into_pointer_value();
-        let max_body_size_gep = self
-            .builder
-            .build_struct_gep(struct_type, record_ptr, 0, "server_options_max_body_size")
-            .map_err(ctx("Failed to build GEP for a ServerOptions record"))?;
-        self.builder
-            .build_store(max_body_size_gep, max_body_size)
-            .map_err(ctx("Failed to store a ServerOptions record's maxBodySize"))?;
-        let idle_timeout_gep = self
-            .builder
-            .build_struct_gep(struct_type, record_ptr, 1, "server_options_idle_timeout")
-            .map_err(ctx("Failed to build GEP for a ServerOptions record"))?;
-        self.builder
-            .build_store(idle_timeout_gep, idle_timeout)
-            .map_err(ctx("Failed to store a ServerOptions record's idleTimeout"))?;
-        Ok(record_ptr.into())
-    }
-
     /// A top-level trampoline `i8 (double connectionId, ptr bundle) -> i8`, the `http.@serve`
     /// counterpart of [`Self::emit_tcp_serve_handler_thunk`]: it builds the `Connection` the
     /// same way, but instead of calling the bundle's own function pointer directly, it
@@ -1361,7 +1321,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         let connection_id = function.get_nth_param(0).unwrap().into_float_value();
         let bundle = function.get_nth_param(1).unwrap().into_pointer_value();
 
-        let connection = self.build_handle_record(connection_id.into())?;
+        let connection = self.build_plain_record(&[connection_id.into()])?;
         let (real_fn, real_env, max_body_size, idle_timeout) =
             self.unpack_http_serve_bundle(bundle)?;
 
@@ -1376,7 +1336,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             .map_err(ctx("Failed to build the handler closure"))?
             .into_struct_value();
 
-        let options = self.build_server_options_record(max_body_size, idle_timeout)?;
+        let options = self.build_plain_record(&[max_body_size.into(), idle_timeout.into()])?;
 
         let serve_connection = self
             .module
