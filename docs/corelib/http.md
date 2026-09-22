@@ -10,8 +10,9 @@ Import with `<< core.http`. See the [corelib index](README.md).
 
 An HTTP client and server written in Quilon over [`core.net`](net.md)'s `net.@tcpRequest`
 and `net.@tcpServe`. The scheme is **plain HTTP** — URLs are `http://host[:port]/path`
-(scheme optional, default port 80). Each request opens one connection and sends
-`Connection: close`, over HTTP/1.1, on both sides.
+(scheme optional, default port 80). The client sends `Connection: close` on every request,
+over HTTP/1.1, and opens one connection per request; the server keeps a connection open
+across requests by default — see [Keep-alive](#keep-alive).
 
 ```quilon
 << core.http
@@ -203,12 +204,42 @@ quilon test corelib/http.qn
 `http.@serve(address :: Text, handler :: (Request) -> Response) -> net.Server` is a
 compiler-lowered primitive, like `net.@tcpServe`: its lowering calls that very same runtime
 entry, with `core.http`'s own connection handler filled in. Each accepted connection reads
-its request head, reads a body-carrying method's own body (below), calls `handler` once,
-writes the reply carrying `connection: close`, and is closed — one response per connection.
+a request head, reads a body-carrying method's own body (below), calls `handler` once, and
+writes the reply — then, unless that request or reply ends the connection (below), reads
+the next request off the same connection, looping for as long as the connection stays open.
 A handler fault (a failing `assert`, an invalid index, …) is fatal, exactly as everywhere
 else in the language, and takes the server with it. `kill` is `net.Server`'s own method
 (see [`core.net`'s server layer](net.md#the-raw-tcp-server-layer)): `server.kill(seconds)`
 or `server.kill()` for its 5-second default.
+
+### Keep-alive
+
+A connection carries more than one request when both sides are willing: `http.@serve`'s
+own connection handler reads a request, answers it, and loops back to read the next one
+off the same connection, carrying over any bytes a pipelined next request already sent
+alongside the one just answered. The loop ends — the connection closes — the moment any of
+these is true:
+
+- The request's own `Connection` header says `close`.
+- The reply `handler` returned carries its own `Connection: close` — an explicit header a
+  handler sets itself; `Response.reply`'s own generated default (below) is `keep-alive`.
+- The request line names `HTTP/1.0`: keep-alive is not that version's own default the way
+  it is HTTP/1.1's, so a bare HTTP/1.0 request gets one response and a close.
+- The next read off the connection returns no bytes at all — the peer closed, or
+  `ServerOptions.idleTimeout` (below) passed with nothing arriving.
+
+`Response.reply`'s own generated `Connection` header (below) is always `keep-alive`: the
+constructor has no request to read a wish off, so it advertises the connection staying
+open, the same default a modern HTTP/1.1 server uses absent a reason not to. What actually
+closes the connection afterward is the loop above, not that header — a request that closes
+still gets a reply carrying `Connection: keep-alive`, since the server intends to keep
+every OTHER connection open and this response's own bytes are unaffected by why this one
+particular connection is ending.
+
+An idle connection — one with no request bytes arriving, whether waiting on a fresh request
+or partway through one — closes once `ServerOptions.idleTimeout` seconds pass, the same
+`Connection.@read(seconds)` timeout overload documented on [`core.net`](net.md#the-raw-tcp-server-layer)
+does, given `idleTimeout` as its own deadline.
 
 ```quilon
 << core.http
@@ -266,7 +297,7 @@ hummus = (request :: http.Request) -> http.Response => <
 >
 
 ^ = () -> Num => <
-  options = http.ServerOptions { maxBodySize = 1 * 1024 * 1024 }   ~ 1 MiB, down from 16
+  options = http.ServerOptions { maxBodySize = 1 * 1024 * 1024, idleTimeout = 5 }   ~ 1 MiB, down from 16
   shop = http.@serve("127.0.0.1:8080", request => hummus(request), options)
   ~ …
   shop.kill(5)
@@ -276,12 +307,12 @@ hummus = (request :: http.Request) -> http.Response => <
 
 | Type | Shape |
 |------|-------|
-| `ServerOptions` | `{ maxBodySize :: Num }` — the request body cap, in bytes. |
+| `ServerOptions` | `{ maxBodySize :: Num, idleTimeout :: Num }` — the request body cap, in bytes, and how many seconds a connection may sit idle before it closes (see [Keep-alive](#keep-alive)). |
 
 | Method | Result |
 |--------|--------|
-| `ServerOptions.default() -> ServerOptions` | `{ maxBodySize = 16 * 1024 * 1024 }` (static). |
-| `http.@serve(address, handler, options :: ServerOptions) -> net.Server` | As the two-argument form, with `options.maxBodySize` in place of the default. |
+| `ServerOptions.default() -> ServerOptions` | `{ maxBodySize = 16 * 1024 * 1024, idleTimeout = 5 }` (static) — 16 MiB and 5 seconds, the same idle default Node uses for its own server sockets. |
+| `http.@serve(address, handler, options :: ServerOptions) -> net.Server` | As the two-argument form, with `options.maxBodySize`/`options.idleTimeout` in place of the defaults. |
 
 `Response` gains one constructor, `reply`, over six overloads, plus `wire()`:
 
@@ -296,10 +327,11 @@ hummus = (request :: http.Request) -> http.Response => <
 | `wire() -> Text` | The reply's raw text (`it.raw`) — what `serveConnection` writes to the connection. |
 
 Every constructor above sends **only** the headers it was given, plus two generated ones:
-`content-length`, counted in bytes (`Text.size`), and `connection: close`. A `content-type`
-comes from the three-argument overload — a program sets its own, the way it sets any other
-header. `Response.reply(OK, "x")` sends exactly
-`HTTP/1.1 200 OK\r\ncontent-length: 1\r\nconnection: close\r\n\r\nx`.
+`content-length`, counted in bytes (`Text.size`), and `connection: keep-alive` — see
+[Keep-alive](#keep-alive) for what actually decides whether the connection stays open. A
+`content-type` comes from the three-argument overload — a program sets its own, the way it
+sets any other header. `Response.reply(OK, "x")` sends exactly
+`HTTP/1.1 200 OK\r\ncontent-length: 1\r\nconnection: keep-alive\r\n\r\nx`.
 
 A program wanting a record literal built entirely by hand writes `http.Response { raw =
 "..." }` directly, the same escape hatch the client side already offers.

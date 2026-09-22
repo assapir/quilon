@@ -58,6 +58,7 @@ Quilon, reached through the connection the accept loop hands the handler.
 | Member | Effect |
 |--------|--------|
 | `connection.@read() -> Text` | The bytes that have arrived since the connection's last read, as a deferred `Text` — `""` once the peer has closed. Parks on readiness and forces at the first strict use, exactly like `net.@tcpRequest`. |
+| `connection.@read(seconds :: Num) -> Text` | As `@read()`, but gives up and yields `""` once `seconds` pass with nothing arriving, exactly as it yields `""` on a peer close — neither carries a channel a `Text` result could tell them apart through. Parks on readiness and the deadline together, racing whichever comes first, the way [`core.time`'s `@sleep`](time.md) parks on a deadline alone. |
 | `connection.@write(bytes :: Text) -> $` | Write every byte of `bytes`, parking on writability until all of it is sent. Effect-only. |
 | `connection.close() -> $` | Close the connection now. A handler that returns without calling this has its connection closed by the runtime. |
 

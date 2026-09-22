@@ -63,6 +63,13 @@ enum Park {
     /// map the token back to this fiber when it fires. Source-agnostic: a socket
     /// today, files/pipes later.
     Readiness(Token),
+    /// Park until the reactor reports this token ready OR `Instant` passes, whichever
+    /// comes first — `Connection.@read(seconds)`'s own park, racing a deadline against
+    /// readiness the way plain [`Park::Readiness`] and [`Park::Sleep`] never individually
+    /// need to. The caller re-checks the deadline itself after waking (see
+    /// `crate::net::TcpStream::read_with_deadline`): resuming a coroutine carries no
+    /// reason back, so there is no "was it the timer or the socket" to report here either.
+    ReadinessOrDeadline(Token, Instant),
     /// Park until another fiber wakes this address. A general one-fiber-waits-for-another
     /// rendezvous keyed by an opaque `usize`: [`wake_address`] re-readies every fiber parked
     /// on it. Backs both forcing a deferred value (the address is the deferred cell) and the
@@ -105,8 +112,16 @@ struct Scheduler {
     /// Parked-on-sleep fibers: `(wake deadline, id)`.
     timers: Vec<(Instant, usize)>,
     /// Fibers parked on source readiness, keyed by the token they wait on. Exactly
-    /// one fiber owns a token at a time (it owns the source), so this is 1:1.
+    /// one fiber owns a token at a time (it owns the source), so this is 1:1. A
+    /// [`Park::ReadinessOrDeadline`] waiter is entered here too — its own deadline
+    /// tracked alongside in `readiness_deadlines`.
     readiness_waiters: HashMap<Token, usize>,
+    /// `(deadline, token, id)` for every fiber parked via [`Park::ReadinessOrDeadline`],
+    /// swept the same way `timers` is: due entries move to `ready`, clearing their
+    /// `readiness_waiters` entry too so a readiness event arriving after the timeout does
+    /// not try to wake the same fiber a second time. A plain [`Park::Readiness`] waiter
+    /// never appears here.
+    readiness_deadlines: Vec<(Instant, Token, usize)>,
     /// Fibers parked on an address (a deferred cell, or the stdin gate). More than one
     /// fiber may wait on the same address, so this is 1:many — every waiter is
     /// re-readied when the address is woken.
@@ -121,6 +136,7 @@ impl Scheduler {
             ready: VecDeque::new(),
             timers: Vec::new(),
             readiness_waiters: HashMap::new(),
+            readiness_deadlines: Vec::new(),
             address_waiters: HashMap::new(),
         }
     }
@@ -490,6 +506,17 @@ pub(crate) fn park_on_readiness(token: Token) {
     suspend_on(yielder, Park::Readiness(token));
 }
 
+/// Park the current fiber until the reactor reports `token` ready or `deadline` passes,
+/// whichever comes first. The caller (`crate::net::TcpStream::read_with_deadline`) must
+/// have (re)registered the source for the interest it needs before calling this, exactly
+/// as [`park_on_readiness`]'s own caller must, and re-checks the deadline itself once this
+/// returns — a wake here is only ever an invitation to look, never a verdict on which of
+/// the two happened. Must be called from within a fiber (panics otherwise).
+pub(crate) fn park_on_readiness_or_deadline(token: Token, deadline: Instant) {
+    let yielder = current_yielder("park_on_readiness_or_deadline");
+    suspend_on(yielder, Park::ReadinessOrDeadline(token, deadline));
+}
+
 /// Park the current fiber until another fiber wakes `address`. The caller re-checks its own
 /// condition after every wake (a wake is an invitation to look, never a guarantee), so a
 /// spurious or shared wake simply re-parks. Must be called from within a fiber (panics
@@ -605,6 +632,13 @@ pub fn run<F: FnOnce() + 'static>(main: F) {
                     scheduler.fibers[id] = Some(fiber);
                     scheduler.readiness_waiters.insert(token, id);
                 }),
+                CoroutineResult::Yield(Park::ReadinessOrDeadline(token, deadline)) => {
+                    with_scheduler(|scheduler| {
+                        scheduler.fibers[id] = Some(fiber);
+                        scheduler.readiness_waiters.insert(token, id);
+                        scheduler.readiness_deadlines.push((deadline, token, id));
+                    })
+                }
                 CoroutineResult::Yield(Park::Waiting(address)) => with_scheduler(|scheduler| {
                     scheduler.fibers[id] = Some(fiber);
                     scheduler
@@ -648,7 +682,12 @@ pub fn run<F: FnOnce() + 'static>(main: F) {
         // break with address waiters left would be a genuine deadlock, and stopping is the
         // right response to that rather than blocking forever.
         let (next_deadline, readiness_parked) = with_scheduler(|scheduler| {
-            let next = scheduler.timers.iter().map(|(d, _)| *d).min();
+            let next = scheduler
+                .timers
+                .iter()
+                .map(|(d, _)| *d)
+                .chain(scheduler.readiness_deadlines.iter().map(|(d, _, _)| *d))
+                .min();
             (next, !scheduler.readiness_waiters.is_empty())
         });
         match (next_deadline, readiness_parked) {
@@ -667,6 +706,24 @@ pub fn run<F: FnOnce() + 'static>(main: F) {
             while i < scheduler.timers.len() {
                 if scheduler.timers[i].0 <= now {
                     let (_, id) = scheduler.timers.swap_remove(i);
+                    scheduler.ready.push_back(id);
+                } else {
+                    i += 1;
+                }
+            }
+        });
+
+        // Move due readiness-with-deadline waits back to ready, the same way — clearing
+        // each one's now-stale `readiness_waiters` entry too, so a readiness event for
+        // that token arriving after this does not also try to wake the very fiber this
+        // loop just re-readied.
+        with_scheduler(|scheduler| {
+            let now = Instant::now();
+            let mut i = 0;
+            while i < scheduler.readiness_deadlines.len() {
+                if scheduler.readiness_deadlines[i].0 <= now {
+                    let (_, token, id) = scheduler.readiness_deadlines.swap_remove(i);
+                    scheduler.readiness_waiters.remove(&token);
                     scheduler.ready.push_back(id);
                 } else {
                     i += 1;
@@ -721,6 +778,13 @@ fn wait_and_wake(timeout: Option<Duration>) {
     with_scheduler(|scheduler| {
         for token in ready_tokens {
             if let Some(id) = scheduler.readiness_waiters.remove(&token) {
+                // Clear any `ReadinessOrDeadline` entry riding along with this token too
+                // (a no-op for a plain `Readiness` waiter, which never has one) — this
+                // fiber is being woken right now, so its own deadline sweep must not also
+                // fire for it later.
+                scheduler
+                    .readiness_deadlines
+                    .retain(|(_, _, waiting_id)| *waiting_id != id);
                 scheduler.ready.push_back(id);
             }
         }

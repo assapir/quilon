@@ -12,6 +12,7 @@ mod common;
 
 use common::{connect_once_listening, connect_with_timeout, ensure_runtime_lib, free_port};
 use std::io::{Read, Write};
+use std::net::TcpStream;
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
@@ -111,11 +112,12 @@ fn wait_until_listening(host: &str, port: u16) {
     drop(connect_once_listening(host, port));
 }
 
-/// Send `request` over a fresh connection and read the reply to EOF — valid because the
-/// server always answers with `connection: close` and closes right after, one response per
-/// connection (this version's own rule). Connects once and fails fast: by the time any
-/// caller reaches this, `wait_until_listening` has already confirmed the server is up, so a
-/// connect failure here is a genuine problem, not the server still starting.
+/// Send `request` over a fresh connection and read the reply to EOF — valid for a request
+/// that itself asks to close, or one malformed enough that the server closes regardless
+/// (both still end the connection after one response). Connects once and fails fast: by
+/// the time any caller reaches this, `wait_until_listening` has already confirmed the
+/// server is up, so a connect failure here is a genuine problem, not the server still
+/// starting.
 fn send_raw(host: &str, port: u16, request: &[u8]) -> String {
     let mut stream = connect_with_timeout(host, port).expect("connect to the running server");
     stream.write_all(request).expect("write the request");
@@ -124,6 +126,43 @@ fn send_raw(host: &str, port: u16, request: &[u8]) -> String {
         .read_to_string(&mut response)
         .expect("read the reply to EOF");
     response
+}
+
+/// The earliest index at which `needle` occurs in `haystack`, or `None`.
+fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    haystack.windows(needle.len()).position(|window| window == needle)
+}
+
+/// Read exactly one HTTP response off `stream` — the keep-alive tests' own counterpart of
+/// `send_raw`, which cannot be used once a connection outlives its first response: reads
+/// until the head's blank line, then exactly `Content-Length` more bytes (every reply this
+/// suite's own handlers write is a short, non-chunked body), leaving anything further —
+/// a pipelined second response, or nothing yet — sitting in the socket for the next call.
+fn read_one_response(stream: &mut TcpStream) -> String {
+    let mut buffer = Vec::new();
+    let mut chunk = [0u8; 4096];
+    loop {
+        if let Some(head_end) = find_subslice(&buffer, b"\r\n\r\n") {
+            let head = String::from_utf8_lossy(&buffer[..head_end]);
+            let content_length: usize = head
+                .split("\r\n")
+                .find_map(|line| {
+                    let (name, value) = line.split_once(':')?;
+                    name.trim()
+                        .eq_ignore_ascii_case("content-length")
+                        .then(|| value.trim().parse().ok())
+                        .flatten()
+                })
+                .unwrap_or(0);
+            let total_needed = head_end + 4 + content_length;
+            if buffer.len() >= total_needed {
+                return String::from_utf8_lossy(&buffer[..total_needed]).into_owned();
+            }
+        }
+        let read = stream.read(&mut chunk).expect("read one response");
+        assert!(read > 0, "connection closed before a full response arrived");
+        buffer.extend_from_slice(&chunk[..read]);
+    }
 }
 
 /// Wait for `child` to exit, killing it and failing loudly instead of hanging the test run
@@ -301,7 +340,7 @@ hummus = (request :: http.Request) -> http.Response => <
 ^ = () -> Num => <
   server := http.@serve(
     "{address}", request => hummus(request),
-    http.ServerOptions {{ maxBodySize = {max_body_size} }})
+    http.ServerOptions {{ maxBodySize = {max_body_size}, idleTimeout = 5 }})
   0
 >
 "#
@@ -407,4 +446,192 @@ fn jit_http_serve_reads_a_content_length_and_a_chunked_body_under_a_raised_cap()
             "chunked reply: {chunked_reply}"
         );
     });
+}
+
+/// Spawn `program` (the GET/POST/quit handler, default `ServerOptions`, so a 5-second
+/// idle timeout and keep-alive as the connection default) under the JIT, wait for it to
+/// start listening, run `drive` against it with raw sockets, quit through `/quit`, and
+/// wait for a clean exit — the keep-alive tests' own counterpart of `run_body_echo_server`.
+fn run_hummus_server(drive: impl FnOnce(&str, u16)) {
+    let port = free_port();
+    let quilon = env!("CARGO_BIN_EXE_quilon");
+    let file = common::temp_ql("http_serve_keep_alive", &program(&format!("127.0.0.1:{port}")));
+
+    let child = Command::new(quilon)
+        .args(["run", file.to_str().unwrap()])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn quilon run");
+
+    wait_until_listening("127.0.0.1", port);
+    drive("127.0.0.1", port);
+
+    let mut quitter = connect_with_timeout("127.0.0.1", port).expect("connect to send quit");
+    quitter
+        .write_all(b"GET /quit HTTP/1.1\r\nHost: shop\r\nConnection: close\r\n\r\n")
+        .expect("write the quit request");
+    drop(quitter);
+
+    assert_eq!(
+        wait_bounded(child, Duration::from_secs(15)),
+        0,
+        "the server's own process exits 0 once kill has settled the accept loop"
+    );
+    let _ = std::fs::remove_file(&file);
+}
+
+#[test]
+fn jit_http_serve_keeps_a_connection_alive_for_a_second_request() {
+    run_hummus_server(|host, port| {
+        let mut stream = connect_with_timeout(host, port).expect("connect to the server");
+
+        stream
+            .write_all(b"GET /pantry HTTP/1.1\r\nHost: shop\r\n\r\n")
+            .expect("write the first request");
+        let first = read_one_response(&mut stream);
+        assert!(first.starts_with("HTTP/1.1 200 OK\r\n"), "first reply: {first}");
+        assert!(
+            first.contains("connection: keep-alive\r\n"),
+            "first reply: {first}"
+        );
+
+        // The same connection, a second request: only possible if the server kept it open.
+        stream
+            .write_all(b"GET /pantry HTTP/1.1\r\nHost: shop\r\n\r\n")
+            .expect("write the second request");
+        let second = read_one_response(&mut stream);
+        assert!(second.starts_with("HTTP/1.1 200 OK\r\n"), "second reply: {second}");
+    });
+}
+
+#[test]
+fn jit_http_serve_closes_after_a_request_that_asks_for_connection_close() {
+    run_hummus_server(|host, port| {
+        // `send_raw` reads to EOF: it only returns if the server actually closes after
+        // this one reply, despite that reply's own header defaulting to keep-alive — the
+        // request's own wish is what ends it, exactly as `shouldCloseAfter` decides.
+        let reply = send_raw(
+            host,
+            port,
+            b"GET /pantry HTTP/1.1\r\nHost: shop\r\nConnection: close\r\n\r\n",
+        );
+        assert!(reply.starts_with("HTTP/1.1 200 OK\r\n"), "reply: {reply}");
+        assert!(
+            reply.contains("connection: keep-alive\r\n"),
+            "reply: {reply}"
+        );
+    });
+}
+
+#[test]
+fn jit_http_serve_closes_after_one_response_for_an_http10_request() {
+    run_hummus_server(|host, port| {
+        // No `Connection` header at all: HTTP/1.0's own default is close, not keep-alive,
+        // so the request line alone must end the connection after this one reply.
+        let reply = send_raw(host, port, b"GET /pantry HTTP/1.0\r\nHost: shop\r\n\r\n");
+        assert!(reply.starts_with("HTTP/1.1 200 OK\r\n"), "reply: {reply}");
+    });
+}
+
+#[test]
+fn jit_http_serve_answers_two_pipelined_requests_in_one_write() {
+    run_hummus_server(|host, port| {
+        let mut stream = connect_with_timeout(host, port).expect("connect to the server");
+        let both = [
+            &b"GET /pantry HTTP/1.1\r\nHost: shop\r\n\r\n"[..],
+            &b"GET /pantry HTTP/1.1\r\nHost: shop\r\n\r\n"[..],
+        ]
+        .concat();
+        // Both requests in ONE write: the second's bytes arrive before the first response
+        // is written, so the server must pick them up from `leftoverAfterHead` rather than
+        // a fresh read.
+        stream
+            .write_all(&both)
+            .expect("write both requests in one go");
+
+        let first = read_one_response(&mut stream);
+        assert!(first.starts_with("HTTP/1.1 200 OK\r\n"), "first reply: {first}");
+        let second = read_one_response(&mut stream);
+        assert!(second.starts_with("HTTP/1.1 200 OK\r\n"), "second reply: {second}");
+    });
+}
+
+/// A server whose only purpose is proving `ServerOptions.idleTimeout`: `/quit` is still
+/// there so the test can clean up regardless of what the timeout under test does, but the
+/// timeout that matters is `idleTimeout` seconds of silence on the connection under test —
+/// kept well under a second so the test itself stays fast.
+fn idle_timeout_program(address: &str, idle_timeout: f64) -> String {
+    format!(
+        r#"
+<< core.http
+<< core.net
+
+@server := net.Server {{ handle = 0 }}
+
+killAndReply = () -> http.Response => <
+  server.kill(1)
+  http.Response.reply(http.OK, "bye")
+>
+
+hummus = (request :: http.Request) -> http.Response => <
+  request.path() == "/quit"
+    ? killAndReply()
+    : http.Response.reply(http.OK, "chickpeas: plenty")
+>
+
+^ = () -> Num => <
+  server := http.@serve(
+    "{address}", request => hummus(request),
+    http.ServerOptions {{ maxBodySize = 16 * 1024 * 1024, idleTimeout = {idle_timeout} }})
+  0
+>
+"#
+    )
+}
+
+#[test]
+fn jit_http_serve_closes_an_idle_connection_after_its_configured_timeout() {
+    let port = free_port();
+    let quilon = env!("CARGO_BIN_EXE_quilon");
+    let file = common::temp_ql(
+        "http_serve_idle_timeout",
+        &idle_timeout_program(&format!("127.0.0.1:{port}"), 0.2),
+    );
+
+    let child = Command::new(quilon)
+        .args(["run", file.to_str().unwrap()])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn quilon run");
+
+    wait_until_listening("127.0.0.1", port);
+
+    let start = Instant::now();
+    let mut stream = connect_with_timeout("127.0.0.1", port).expect("connect and go idle");
+    // Never writes anything: `idleTimeout` alone, not a peer close, must end this.
+    let mut buffer = [0u8; 1];
+    let read = stream.read(&mut buffer).expect("read the idle close");
+    assert_eq!(read, 0, "the idle connection was closed, not left open");
+    assert!(
+        start.elapsed() < Duration::from_secs(2),
+        "the idle timeout should close the connection in well under 2s, took {:?}",
+        start.elapsed()
+    );
+
+    let mut quitter = connect_with_timeout("127.0.0.1", port).expect("connect to send quit");
+    quitter
+        .write_all(b"GET /quit HTTP/1.1\r\nHost: shop\r\nConnection: close\r\n\r\n")
+        .expect("write the quit request");
+    drop(quitter);
+
+    assert_eq!(
+        wait_bounded(child, Duration::from_secs(15)),
+        0,
+        "the server's own process exits 0 once kill has settled the accept loop"
+    );
+    let _ = std::fs::remove_file(&file);
 }

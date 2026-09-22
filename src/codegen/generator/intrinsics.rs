@@ -277,6 +277,13 @@ impl<'ctx> CodeGenerator<'ctx> {
             // the DEFERRED Text immediately, forced (via `__force_text`) at its strict-use
             // site exactly like `__read_launch`'s.
             "__connection_read_launch" => self.ptr_len_struct_type().fn_type(&[f64t.into()], false),
+            // { ptr, i64 } __connection_read_with_timeout_launch(double connectionId,
+            // double seconds) — `Connection`'s `@read(seconds)`: like
+            // `__connection_read_launch`, but the read gives up (yielding `""`, the same as
+            // a peer close) once `seconds` pass with nothing arriving.
+            "__connection_read_with_timeout_launch" => self
+                .ptr_len_struct_type()
+                .fn_type(&[f64t.into(), f64t.into()], false),
             // void __connection_write(double connectionId, i8* data, i64 len) —
             // `Connection`'s `@write`: write every byte, parking on writability until all of
             // it is sent. Effect-only (`$`); `data`/`len` are the argument `Text`'s own raw

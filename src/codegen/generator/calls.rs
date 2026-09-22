@@ -776,28 +776,34 @@ impl<'ctx> CodeGenerator<'ctx> {
                     return Err(format!("{NAME} expects a closure handler"));
                 };
 
-                // `ServerOptions.maxBodySize`, read straight off the third argument's own
-                // field the way `handle_field` reads `Connection`/`Server`'s — or, for the
-                // two-argument form, `ServerOptions.default()`'s own field, called for real
-                // rather than mirrored as a second constant here: `ServerOptions.default()`
-                // is itself a callable, documented part of the exported surface, so a
-                // hand-copied literal could drift from it silently. `core.http.@serve`'s
-                // own two-argument inert placeholder body already calls it, which is what
-                // keeps `core.http.ServerOptions_default` reachable regardless of which
-                // arity a program actually calls.
-                let max_body_size = match arguments.get(2) {
+                // `ServerOptions.maxBodySize`/`idleTimeout`, read straight off the third
+                // argument's own fields the way `handle_field` reads `Connection`/
+                // `Server`'s — or, for the two-argument form, `ServerOptions.default()`'s
+                // own fields, called for real rather than mirrored as constants here:
+                // `ServerOptions.default()` is itself a callable, documented part of the
+                // exported surface, so a hand-copied literal could drift from it silently.
+                // `core.http.@serve`'s own two-argument inert placeholder body already
+                // calls it, which is what keeps `core.http.ServerOptions_default`
+                // reachable regardless of which arity a program actually calls.
+                let (max_body_size, idle_timeout) = match arguments.get(2) {
                     Some(options_argument) => {
-                        let BasicValueEnum::FloatValue(value) =
+                        let BasicValueEnum::FloatValue(max_body_size) =
                             self.generate_field_access(options_argument, "maxBodySize")?
                         else {
                             return Err(format!("{NAME} expects a ServerOptions options argument"));
                         };
-                        value
+                        let BasicValueEnum::FloatValue(idle_timeout) =
+                            self.generate_field_access(options_argument, "idleTimeout")?
+                        else {
+                            return Err(format!("{NAME} expects a ServerOptions options argument"));
+                        };
+                        (max_body_size, idle_timeout)
                     }
-                    None => self.default_max_body_size()?,
+                    None => self.default_server_options()?,
                 };
 
-                let bundle = self.bundle_http_serve_closure(closure, max_body_size)?;
+                let bundle =
+                    self.bundle_http_serve_closure(closure, max_body_size, idle_timeout)?;
 
                 let thunk = self.emit_http_serve_handler_thunk()?;
                 let thunk_ptr = thunk.as_global_value().as_pointer_value();
@@ -823,16 +829,38 @@ impl<'ctx> CodeGenerator<'ctx> {
             }
             // `Connection.@read()`: the receiver (`arguments[0]`) is a `Connection` value;
             // its `handle` field is the id the runtime table keys the connection by.
+            // `Connection.@read()` / `Connection.@read(seconds)`: overloaded like
+            // `Server.kill`, so no single `expect_arity` check applies here. The
+            // timed overload gives up and yields `""` once `seconds` pass with nothing
+            // arriving, exactly as it yields `""` on a peer close — neither carries a
+            // channel a `Text` result could tell them apart through.
             "read" => {
                 const NAME: &str = "core.net.Connection.@read";
                 const CALL_FAILED: &str = "Failed to call core.net.Connection.@read";
-                Self::expect_arity(NAME, arguments, true, 0)?;
                 let handle = self.handle_field(&arguments[0])?;
-                let read = self.get_intrinsic("__connection_read_launch")?;
-                let call = self
-                    .builder
-                    .build_call(read, &[handle.into()], "connection_read")
-                    .map_err(ctx(CALL_FAILED))?;
+                let call = match arguments.get(1) {
+                    None => {
+                        let read = self.get_intrinsic("__connection_read_launch")?;
+                        self.builder
+                            .build_call(read, &[handle.into()], "connection_read")
+                            .map_err(ctx(CALL_FAILED))?
+                    }
+                    Some(seconds_argument) => {
+                        let BasicValueEnum::FloatValue(seconds) =
+                            self.generate_expression(seconds_argument)?
+                        else {
+                            return Err(format!("{NAME} expects a Num seconds"));
+                        };
+                        let read = self.get_intrinsic("__connection_read_with_timeout_launch")?;
+                        self.builder
+                            .build_call(
+                                read,
+                                &[handle.into(), seconds.into()],
+                                "connection_read_with_timeout",
+                            )
+                            .map_err(ctx(CALL_FAILED))?
+                    }
+                };
                 // The result is a DEFERRED `Text` (`{ promise, -1 }`); the force-set decides
                 // where it is forced.
                 Self::call_result_to_basic(call)
@@ -1074,13 +1102,21 @@ impl<'ctx> CodeGenerator<'ctx> {
         Ok(function)
     }
 
-    /// `ServerOptions.default()`'s own `maxBodySize` (16 MiB), for the two-argument
-    /// `http.@serve(address, handler)` call: calls the real corelib function
-    /// (`core.http.ServerOptions_default`, always reachable — see the `serve` arm's own
-    /// doc) and reads its one field directly, the shape `build_handle_record` already
-    /// establishes for every `{ Num }` record this codegen builds, rather than a literal
-    /// that could drift from the Quilon-level default it is supposed to mirror.
-    fn default_max_body_size(&mut self) -> Result<inkwell::values::FloatValue<'ctx>, String> {
+    /// `ServerOptions.default()`'s own `maxBodySize` (16 MiB) and `idleTimeout` (5
+    /// seconds), for the two-argument `http.@serve(address, handler)` call: calls the real
+    /// corelib function (`core.http.ServerOptions_default`, always reachable — see the
+    /// `serve` arm's own doc) and reads its two fields directly, in declared order (see
+    /// `record_struct_type`), rather than literals that could drift from the Quilon-level
+    /// defaults they are supposed to mirror.
+    fn default_server_options(
+        &mut self,
+    ) -> Result<
+        (
+            inkwell::values::FloatValue<'ctx>,
+            inkwell::values::FloatValue<'ctx>,
+        ),
+        String,
+    > {
         let default_fn = self
             .module
             .get_function("core.http.ServerOptions_default")
@@ -1091,40 +1127,54 @@ impl<'ctx> CodeGenerator<'ctx> {
         else {
             return Err("core.http.ServerOptions_default must return a record".to_string());
         };
-        let field_ty = self
-            .context
-            .struct_type(&[self.context.f64_type().into()], false);
-        let field_ptr = self
+        let field_ty = self.context.struct_type(
+            &[self.context.f64_type().into(), self.context.f64_type().into()],
+            false,
+        );
+        let max_body_size_ptr = self
             .builder
             .build_struct_gep(field_ty, default_options, 0, "default_max_body_size_field")
-            .map_err(ctx("Failed to GEP ServerOptions.default()'s field"))?;
-        let value = self
+            .map_err(ctx("Failed to GEP ServerOptions.default()'s maxBodySize field"))?;
+        let max_body_size = self
             .builder
-            .build_load(self.context.f64_type(), field_ptr, "default_max_body_size")
-            .map_err(ctx("Failed to load ServerOptions.default()'s field"))?;
-        Ok(value.into_float_value())
+            .build_load(self.context.f64_type(), max_body_size_ptr, "default_max_body_size")
+            .map_err(ctx("Failed to load ServerOptions.default()'s maxBodySize field"))?
+            .into_float_value();
+        let idle_timeout_ptr = self
+            .builder
+            .build_struct_gep(field_ty, default_options, 1, "default_idle_timeout_field")
+            .map_err(ctx("Failed to GEP ServerOptions.default()'s idleTimeout field"))?;
+        let idle_timeout = self
+            .builder
+            .build_load(self.context.f64_type(), idle_timeout_ptr, "default_idle_timeout")
+            .map_err(ctx("Failed to load ServerOptions.default()'s idleTimeout field"))?
+            .into_float_value();
+        Ok((max_body_size, idle_timeout))
     }
 
-    /// The `{ ptr fn, ptr env, f64 maxBodySize }` bundle `http.@serve`'s lowering carries to
-    /// its handler thunk: the ordinary `{ ptr, ptr }` closure bundle
+    /// The `{ ptr fn, ptr env, f64 maxBodySize, f64 idleTimeout }` bundle `http.@serve`'s
+    /// lowering carries to its handler thunk: the ordinary `{ ptr, ptr }` closure bundle
     /// [`Self::bundle_closure`] builds for every other runtime entry, plus the
-    /// `ServerOptions` cap `serveConnection` needs alongside `handler` — bundled together
-    /// since the runtime's fixed-shape thunk takes exactly one environment pointer.
+    /// `ServerOptions` fields `serveConnection` needs alongside `handler` — bundled
+    /// together since the runtime's fixed-shape thunk takes exactly one environment
+    /// pointer.
     fn http_serve_bundle_type(&self) -> inkwell::types::StructType<'ctx> {
         let ptr = self.context.ptr_type(AddressSpace::default());
+        let f64_ty = self.context.f64_type();
         self.context.struct_type(
-            &[ptr.into(), ptr.into(), self.context.f64_type().into()],
+            &[ptr.into(), ptr.into(), f64_ty.into(), f64_ty.into()],
             false,
         )
     }
 
     /// Build the bundle [`Self::http_serve_bundle_type`] describes, over `closure`'s own
-    /// `{ ptr fn, ptr env }` and `max_body_size`, and return the pointer — the `http.@serve`
-    /// counterpart of [`Self::bundle_closure`].
+    /// `{ ptr fn, ptr env }`, `max_body_size`, and `idle_timeout`, and return the pointer —
+    /// the `http.@serve` counterpart of [`Self::bundle_closure`].
     fn bundle_http_serve_closure(
         &mut self,
         closure: inkwell::values::StructValue<'ctx>,
         max_body_size: inkwell::values::FloatValue<'ctx>,
+        idle_timeout: inkwell::values::FloatValue<'ctx>,
     ) -> Result<PointerValue<'ctx>, String> {
         let real_fn = self
             .builder
@@ -1162,12 +1212,19 @@ impl<'ctx> CodeGenerator<'ctx> {
         self.builder
             .build_store(cap_gep, max_body_size)
             .map_err(ctx("Failed to store the http serve bundle's cap"))?;
+        let idle_timeout_gep = self
+            .builder
+            .build_struct_gep(bundle_ty, bundle, 3, "http_serve_bundle_idle_timeout")
+            .map_err(ctx("Failed to build GEP for the http serve bundle's idle timeout"))?;
+        self.builder
+            .build_store(idle_timeout_gep, idle_timeout)
+            .map_err(ctx("Failed to store the http serve bundle's idle timeout"))?;
         Ok(bundle)
     }
 
     /// The reverse of [`Self::bundle_http_serve_closure`], run inside the handler thunk:
     /// load the bundle at `bundle` and split it into the handler's real function/environment
-    /// pointers and the `maxBodySize` `ServerOptions` cap.
+    /// pointers and the `maxBodySize`/`idleTimeout` `ServerOptions` fields.
     fn unpack_http_serve_bundle(
         &mut self,
         bundle: PointerValue<'ctx>,
@@ -1175,6 +1232,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         (
             PointerValue<'ctx>,
             PointerValue<'ctx>,
+            inkwell::values::FloatValue<'ctx>,
             inkwell::values::FloatValue<'ctx>,
         ),
         String,
@@ -1200,7 +1258,52 @@ impl<'ctx> CodeGenerator<'ctx> {
             .build_extract_value(loaded, 2, "max_body_size")
             .map_err(ctx("Failed to extract maxBodySize"))?
             .into_float_value();
-        Ok((real_fn, real_env, max_body_size))
+        let idle_timeout = self
+            .builder
+            .build_extract_value(loaded, 3, "idle_timeout")
+            .map_err(ctx("Failed to extract idleTimeout"))?
+            .into_float_value();
+        Ok((real_fn, real_env, max_body_size, idle_timeout))
+    }
+
+    /// Build a `{ maxBodySize :: Num, idleTimeout :: Num }`-shaped record (`ServerOptions`)
+    /// on the GC heap and return a pointer to it — the two-field counterpart of
+    /// [`Self::build_handle_record`], for handing the reconstructed `ServerOptions` to
+    /// `serveConnection` inside [`Self::emit_http_serve_handler_thunk`].
+    fn build_server_options_record(
+        &mut self,
+        max_body_size: inkwell::values::FloatValue<'ctx>,
+        idle_timeout: inkwell::values::FloatValue<'ctx>,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        use inkwell::values::AnyValue;
+        let struct_type = self
+            .context
+            .struct_type(&[max_body_size.get_type().into(), idle_timeout.get_type().into()], false);
+        let size = struct_type
+            .size_of()
+            .ok_or_else(|| "ServerOptions record struct type has no compile-time size".to_string())?;
+        let alloc_fn = self.get_intrinsic("__alloc")?;
+        let record_ptr = self
+            .builder
+            .build_call(alloc_fn, &[size.into()], "server_options_record")
+            .map_err(ctx("Failed to call __alloc for a ServerOptions record"))?
+            .as_any_value_enum()
+            .into_pointer_value();
+        let max_body_size_gep = self
+            .builder
+            .build_struct_gep(struct_type, record_ptr, 0, "server_options_max_body_size")
+            .map_err(ctx("Failed to build GEP for a ServerOptions record"))?;
+        self.builder
+            .build_store(max_body_size_gep, max_body_size)
+            .map_err(ctx("Failed to store a ServerOptions record's maxBodySize"))?;
+        let idle_timeout_gep = self
+            .builder
+            .build_struct_gep(struct_type, record_ptr, 1, "server_options_idle_timeout")
+            .map_err(ctx("Failed to build GEP for a ServerOptions record"))?;
+        self.builder
+            .build_store(idle_timeout_gep, idle_timeout)
+            .map_err(ctx("Failed to store a ServerOptions record's idleTimeout"))?;
+        Ok(record_ptr.into())
     }
 
     /// A top-level trampoline `i8 (double connectionId, ptr bundle) -> i8`, the `http.@serve`
@@ -1234,7 +1337,8 @@ impl<'ctx> CodeGenerator<'ctx> {
         let bundle = function.get_nth_param(1).unwrap().into_pointer_value();
 
         let connection = self.build_handle_record(connection_id.into())?;
-        let (real_fn, real_env, max_body_size) = self.unpack_http_serve_bundle(bundle)?;
+        let (real_fn, real_env, max_body_size, idle_timeout) =
+            self.unpack_http_serve_bundle(bundle)?;
 
         let closure_ty = self.closure_struct_type();
         let handler_closure = self
@@ -1247,9 +1351,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             .map_err(ctx("Failed to build the handler closure"))?
             .into_struct_value();
 
-        // `ServerOptions` has the identical one-`Num`-field layout `Connection`/`Server`
-        // do, so the same shape-only builder produces it.
-        let options = self.build_handle_record(max_body_size.into())?;
+        let options = self.build_server_options_record(max_body_size, idle_timeout)?;
 
         let serve_connection = self
             .module

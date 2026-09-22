@@ -77,12 +77,14 @@ linkedGreeting = "linked " + "again"
 
   ~ __tcp_serve_launch (net.@tcpServe), __server_kill (server.kill), and — from the
   ~ handler's own compiled body, even though nothing ever connects to reach it at
-  ~ runtime — __connection_read_launch/__connection_write/__connection_close. An
-  ~ ephemeral port on loopback, unlike @tcpRequest above, needs no guard: binding and
-  ~ immediately killing it is real, deterministic, and fast.
+  ~ runtime — __connection_read_launch/__connection_write/__connection_close, and
+  ~ __connection_read_with_timeout_launch from the timed overload. An ephemeral port on
+  ~ loopback, unlike @tcpRequest above, needs no guard: binding and immediately killing it
+  ~ is real, deterministic, and fast.
   respondSmoke = (connection :: net.Connection) -> $ => <
     line = connection.@read()
-    connection.@write(line)
+    timed = connection.@read(0.01)
+    connection.@write(line + timed)
     connection.close()
     $
   >

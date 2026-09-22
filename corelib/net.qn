@@ -33,6 +33,11 @@
   ~ has closed. Parks on readiness and forces at the first strict use, like `@tcpRequest`.
   @read = () -> Text => < "" >,
 
+  ~ Like `@read()`, but gives up and yields "" once `seconds` pass with nothing arriving —
+  ~ the same "" a closed peer already yields, since neither carries a channel a Text result
+  ~ could tell them apart through.
+  @read = (seconds :: Num) -> Text => < "" >,
+
   ~ Write every byte of `bytes`, parking on writability until all of it is sent.
   @write = (bytes :: Text) -> $ => < $ >,
 

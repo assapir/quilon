@@ -288,6 +288,24 @@ blankLineIndex = (raw :: Text) -> Num => <
   pureConvention < mixedConvention ? pureConvention : mixedConvention
 >
 
+~ Where the blank line `blankLineIndex` finds ENDS — one past its last grapheme — or
+~ `raw.length` when none has arrived yet. The pipelined-request reader's own counterpart:
+~ where a request that follows this one, if its bytes already arrived alongside it, begins.
+~ Always exactly `start + 2`, whichever of the four spellings matched: a CR immediately
+~ followed by an LF is one extended grapheme cluster (Unicode's own CR×LF rule), so
+~ `\r\n\r\n` is two grapheme-clustered CRLFs, and `\n\n`/`\r\n\n`/`\n\r\n` are each two
+~ graphemes for the same reason — a lone LF (or a clustered CRLF) either side of the
+~ midpoint, never three or four.
+blankLineEnd = (raw :: Text) -> Num => <
+  start = blankLineIndex(raw)
+  start == raw.length ? raw.length : start + 2
+>
+
+~ Whether `head`'s request line names HTTP/1.0 — keep-alive is not that version's own
+~ default (unlike HTTP/1.1's), so `serveConnection`'s loop ends after one response rather
+~ than reading a second request an HTTP/1.0 peer has no reason to expect it to look for.
+isHttp10Request = (head :: Text) -> Bool => < head.split("\n")[0].contains("HTTP/1.0") >
+
 ~ Everything in `text` after its first line, or `""` when `text` carries no second line at
 ~ all. Shared by `Response.headers()` and `Request.parse` — a status line and a request
 ~ line are both followed by header lines split the same way.
@@ -532,10 +550,13 @@ linesAfterFirst = (text :: Text) -> Text => <
 
 ~ The wire text every `Response` constructor below builds: a status line, exactly the
 ~ headers it was given (no `content-type` added), then `content-length` counted in BYTES,
-~ `connection: close`, a blank line, and `body`.
-statusReply = (status :: Status, body :: Text, headers :: Headers) -> Text => <
+~ a `connection` line, a blank line, and `body`. `keepAlive` decides that line's own value
+~ (`keep-alive` or `close`) — the one place either spelling is written, so
+~ `Response.reply` and `closingReply` below can never disagree on the wording.
+statusReply = (status :: Status, body :: Text, headers :: Headers, keepAlive :: Bool) -> Text => <
   "HTTP/1.1 `status.code()` `status.text()`\r\n" + headers.wire()
-    + "content-length: `body.size`\r\nconnection: close\r\n\r\n" + body
+    + "content-length: `body.size`\r\nconnection: " + (keepAlive ? "keep-alive" : "close")
+    + "\r\n\r\n" + body
 >
 
 ~ A reply: the raw response text, read through the methods below.
@@ -553,7 +574,13 @@ statusReply = (status :: Status, body :: Text, headers :: Headers) -> Text => <
   blankLine = () -> Num => < blankLineIndex(it.raw) >
 
   ~ A reply carrying `status`, `body`, and exactly `headers` alongside the generated ones.
-  reply = (status :: Status, body :: Text, headers :: Headers) -> Response => < Response { raw = statusReply(status, body, headers) } >,
+  ~ `statusReply`'s own `keepAlive` is always true here: a bare `Response.reply` call has
+  ~ no request to read a wish off, so it defaults to advertising keep-alive, the way a
+  ~ modern HTTP/1.1 server does absent a reason not to. `serveConnection`'s own loop is
+  ~ what actually decides whether to keep the connection open afterward — see
+  ~ `shouldCloseAfter` — and `closingReply` below is `answer`'s own escape hatch for the
+  ~ responses that must not.
+  reply = (status :: Status, body :: Text, headers :: Headers) -> Response => < Response { raw = statusReply(status, body, headers, true) } >,
   ~ A reply carrying `status` and `body`, with no headers beyond the generated ones.
   reply = (status :: Status, body :: Text) -> Response => < Response.reply(status, body, Headers.empty()) >,
   ~ An empty-body reply carrying `status`.
@@ -807,8 +834,8 @@ statusReply = (status :: Status, body :: Text, headers :: Headers) -> Text => <
   >
 }
 
-~ `http.@serve`'s own per-server settings — a request body cap today, room for more later
-~ without changing `@serve`'s two-argument form.
+~ `http.@serve`'s own per-server settings — a request body cap and an idle-connection
+~ timeout today, room for more later without changing `@serve`'s two-argument form.
 >> ServerOptions = {
   ~ The most bytes a request body may carry (BYTES, matching `Content-Length`'s own unit)
   ~ before its connection gets `413 Content Too Large` and closes. Checked against a
@@ -816,39 +843,46 @@ statusReply = (status :: Status, body :: Text, headers :: Headers) -> Text => <
   ~ it arrives, so an oversized body never has to finish arriving before it is rejected.
   maxBodySize :: Num,
 
-  ~ 16 MiB — the same cap `net.@tcpRequest` (the client's own transport) already applies to
-  ~ a RESPONSE, reused here for the size a request body may not exceed either.
-  default = () -> ServerOptions => < ServerOptions { maxBodySize = 16 * 1024 * 1024 } >
+  ~ How many seconds a connection may go without new bytes arriving before it is closed —
+  ~ between requests, waiting on a fresh one, and while one is still arriving. Applies to
+  ~ every `connection.@read` this module makes (`receiveHead`, `readBody`).
+  idleTimeout :: Num,
+
+  ~ 16 MiB (the same cap `net.@tcpRequest`, the client's own transport, already applies to a
+  ~ RESPONSE) and 5 seconds (the same default Node uses for its own server sockets).
+  default = () -> ServerOptions => < ServerOptions { maxBodySize = 16 * 1024 * 1024, idleTimeout = 5 } >
 }
 
 ~ Read from `connection` until a request head has fully arrived (the earliest blank line —
 ~ `blankLineIndex`): `Ok(accumulated)`, every byte received for this connection so far — the
 ~ head, its blank line, and whatever body bytes happened to arrive alongside it in the same
-~ read (`receiveBody` picks up from here rather than re-reading them) — once a blank line is
-~ present. A head of zero length counts: still a request for `serveConnection` to answer
-~ (with a 400, since `Request.parse("", "")` is malformed) rather than silence when the blank
-~ line is the very first thing the peer sends. `NotOk(fragment)` when the peer closes first
-~ (`connection.@read()` answering `""`), carrying whatever bytes did arrive —
+~ read (`readBody` picks up from here rather than re-reading them) — once a blank line is
+~ present. Checked BEFORE any read, so `soFar` already carrying a full head — a second
+~ request pipelined in the same write as the first, handed in by `serveConnection`'s own
+~ loop as `soFar` — answers at once with no read at all. A head of zero length counts:
+~ still a request for `serveConnection` to answer (with a 400, since `Request.parse("", "")`
+~ is malformed) rather than silence when the blank line is the very first thing the peer
+~ sends. `NotOk(fragment)` when the peer closes OR `idleTimeout` seconds pass with nothing
+~ arriving (`connection.@read(idleTimeout)` answering `""` either way — see
+~ `net.Connection`'s own `@read` overload), carrying whatever bytes did arrive —
 ~ `serveConnection` answers nothing in that case, there being no complete request to answer.
-~ Recursion stands in for the loop this language has none of: `soFar` is never already
-~ complete when this is called (this function itself only ever recurses on an incomplete
-~ one), so every call reads exactly one chunk before checking.
+~ `readMore`, a local closure rather than a second top-level function, is what lets it call
+~ back into `receiveHead`, its own enclosing function — top-to-bottom name resolution allows
+~ that (a definition is in scope for its own body, nested closures included) the way it
+~ would not for two top-level functions calling each other.
 ~
-~ ponytail: `blankLineIndex` rescans the whole of `accumulated` on every recursion, so an
+~ ponytail: `blankLineIndex` rescans the whole of `soFar` on every recursion, so an
 ~ adversarial peer trickling a head in over many small reads costs this function quadratic
 ~ time in the head's size. A real HTTP head is a few hundred bytes at most, so this is not
 ~ worth an incremental scan (searching only the new suffix, carrying over enough of the old
 ~ tail to catch a separator split across the boundary) until a header-flooding client shows
 ~ up as a real cost.
-receiveHead = (connection :: net.Connection, soFar :: Text) -> Result => <
-  chunk = connection.@read()
-  accumulated = soFar + chunk
-  splitAt = blankLineIndex(accumulated)
-  chunk == ""
-    ? NotOk(soFar)
-    : (splitAt < accumulated.length
-        ? Ok(accumulated)
-        : receiveHead(connection, accumulated))
+receiveHead = (connection :: net.Connection, soFar :: Text, idleTimeout :: Num) -> Result => <
+  readMore = () -> Result => <
+    chunk = connection.@read(idleTimeout)
+    chunk == "" ? NotOk(soFar) : receiveHead(connection, soFar + chunk, idleTimeout)
+  >
+  blankLineIndex(soFar) < soFar.length ? Ok(soFar) : readMore()
 >
 
 ~ Check `accumulated`'s body progress (`bodyProgress`'s native, through
@@ -859,8 +893,9 @@ receiveHead = (connection :: net.Connection, soFar :: Text) -> Result => <
 ~ own read-then-check shape, one function rather than a caller/loop split: `readMore` calls
 ~ `readBody`, its own enclosing function, which top-to-bottom name resolution allows (it is
 ~ in scope for its own body) the way it would not for two top-level functions calling each
-~ other. An empty read means the peer closed before a complete body arrived, which reads as
-~ `Malformed` — no complete body to answer, and the connection is already dead either way.
+~ other. An empty read — a close, or `idleTimeout` seconds with nothing arriving — means the
+~ body will never finish, which reads as `Malformed` — no complete body to answer, and the
+~ connection is already dead either way.
 ~
 ~ ponytail: rescans `accumulated` (up to `maxBodySize`) from byte zero on every recursion —
 ~ quadratic in the number of reads. Fine for the small bodies examples and tests carry; a
@@ -869,60 +904,122 @@ receiveHead = (connection :: net.Connection, soFar :: Text) -> Result => <
 ~ real traffic.
 readBody = (
   connection :: net.Connection, accumulated :: Text, transferEncoding :: Text,
-  contentLength :: Text, maxBodySize :: Num
+  contentLength :: Text, maxBodySize :: Num, idleTimeout :: Num
 ) -> BodyProgress => <
   progress = classifyBodyProgress(accumulated, transferEncoding, contentLength, maxBodySize)
   readMore = () -> BodyProgress => <
-    chunk = connection.@read()
+    chunk = connection.@read(idleTimeout)
     chunk == ""
       ? Malformed("connection closed before the body finished arriving")
-      : readBody(connection, accumulated + chunk, transferEncoding, contentLength, maxBodySize)
+      : readBody(
+          connection, accumulated + chunk, transferEncoding, contentLength, maxBodySize,
+          idleTimeout)
   >
   progress ?
     | Incomplete => readMore()
     | _          => progress
 >
 
-~ Finish handling `request`, once its head has parsed successfully: a method that carries a
-~ body and declares one of the two framing headers has it read (`readBody`); anything else
-~ — a nullary method, or a body-carrying one given neither header — calls `handler` on
-~ `request` exactly as parsed, its `Body` empty. `TooLarge` answers `413`; `Malformed` and
-~ `Incomplete` (which cannot actually occur here — `readBody` only ever returns it while
-~ still recursing) both answer `400`, `handler` never called either way.
-answer = (
-  connection :: net.Connection, accumulated :: Text, request :: Request,
-  handler :: (Request) -> Response, options :: ServerOptions
-) -> $ => <
-  transferEncoding = request.headers().value("transfer-encoding")
-  contentLength = request.headers().value("content-length")
-  request.method.carriesBody() && (transferEncoding != "" || contentLength != "")
-    ? (readBody(connection, accumulated, transferEncoding, contentLength, options.maxBodySize) ?
-        | Complete(body) =>
-            connection.@write(handler(
-              request.attachBody(body, request.headers().value("content-type"))).wire())
-        | TooLarge     => connection.@write(Response.reply(ContentTooLarge).wire())
-        | Malformed(_) => connection.@write(Response.reply(BadRequest).wire())
-        | Incomplete   => connection.@write(Response.reply(BadRequest).wire()))
-    : connection.@write(handler(request).wire())
+~ A server-generated reply that always closes the connection afterward — the
+~ malformed-request-line, oversized-body, and malformed-framing responses below write when
+~ there is no request left worth answering further on this connection. `Response.reply`'s
+~ own default (see its own doc) is keep-alive; this is the one caller that wants the
+~ opposite, so it goes straight to `statusReply` rather than through the public
+~ constructor.
+closingReply = (status :: Status) -> Response => <
+  Response { raw = statusReply(status, "", Headers.empty(), false) }
+>
+
+~ Everything past this request's own head (and body, for a body-carrying method) already
+~ sitting in `accumulated` — the start of a pipelined next request, if its bytes arrived
+~ alongside this one's. Only meaningful for a BODILESS request: a body-carrying one's own
+~ byte-exact framing is native (`readBody`'s `bodyProgress`), which reports only the decoded
+~ content, never how many raw bytes of `accumulated` it consumed, so `serveConnection`'s
+~ loop restarts such a request with no leftover at all (see its own call site).
+~
+~ ponytail: a pipelined request whose bytes arrive alongside a BODY-CARRYING request's own
+~ tail, in the very same read, is lost rather than carried into the next `receiveHead` — the
+~ sequential (write, wait for the reply, write again) keep-alive every real client and this
+~ suite's own tests use never hits this, since nothing pipelines ahead of an in-flight
+~ request's body that way. Carrying it over needs `bodyProgress`'s native to also report its
+~ own consumed byte count, worth adding once a body-carrying pipeline is real traffic.
+leftoverAfterHead = (accumulated :: Text) -> Text => <
+  accumulated.slice(blankLineEnd(accumulated), accumulated.length)
+>
+
+~ Whether `serveConnection`'s loop ends after writing `response` to `request`: an HTTP/1.0
+~ request, one that asked for `Connection: close` itself, or one whose response — built by
+~ `handler`, so read back off it rather than threaded in some other way — carries
+~ `Connection: close` of its own (an explicit override; `Response.reply`'s own default is
+~ keep-alive, so an ordinary handler response never trips this).
+shouldCloseAfter = (http10 :: Bool, request :: Request, response :: Response) -> Bool => <
+  http10
+    || request.headers().value("connection").trim().toLower() == "close"
+    || response.headers().value("connection").trim().toLower() == "close"
 >
 
 ~ `core.http`'s connection handler: the Quilon half of the `http.@serve` lowering, called
 ~ once per accepted connection by the fixed-shape thunk codegen builds over `handler` and
-~ `options`. Reads the request head, parses it, reads the body a body-carrying method's own
-~ framing header declares (`answer`; neither header means no body to read), calls `handler`,
-~ and writes the reply — a malformed request line, an oversized body, or malformed chunked
-~ framing answers 413/400 instead. A peer that closes before a head ever completes gets no
-~ reply, there being no request to answer. Nothing here closes the connection: the runtime
-~ does that once this function returns, the same as any other `net.@tcpServe` handler.
-serveConnection = (
-  connection :: net.Connection, handler :: (Request) -> Response, options :: ServerOptions
+~ `options`. `serveRequests` is the loop proper — self-recursive, since mutual recursion
+~ between top-level functions is not expressible — reading one request, answering it, and
+~ either looping back to read the next (carrying over `leftoverAfterHead`'s own bytes,
+~ empty for a body-carrying request — see its own doc) or stopping, per `shouldCloseAfter`.
+~ `serveConnection` itself is the fixed 3-argument entry `emit_http_serve_handler_thunk`
+~ looks up by name, so it stays a thin wrapper seeding the loop with no leftover at all.
+~ Nothing here ever closes the connection outright: the runtime does that once this
+~ function returns, the same as any other `net.@tcpServe` handler.
+serveRequests = (
+  connection :: net.Connection, leftover :: Text, handler :: (Request) -> Response,
+  options :: ServerOptions
 ) -> $ => <
-  receiveHead(connection, "") ?
+  ~ Write `response` and either stop (this request, or `response` itself, asked for
+  ~ close — or the request line was HTTP/1.0) or restart the loop from `nextLeftover`.
+  continueUnlessClosing = (
+    http10 :: Bool, request :: Request, response :: Response, nextLeftover :: Text
+  ) -> $ => <
+    connection.@write(response.wire())
+    shouldCloseAfter(http10, request, response)
+      ? $
+      : serveRequests(connection, nextLeftover, handler, options)
+  >
+
+  ~ `request`'s head parsed successfully out of `accumulated`: a method that carries a body
+  ~ and declares one of the two framing headers has it read (`readBody`); anything else — a
+  ~ nullary method, or a body-carrying one given neither header — calls `handler` on
+  ~ `request` exactly as parsed, its `Body` empty. `TooLarge` answers `413`; `Malformed` and
+  ~ `Incomplete` (which cannot actually occur here — `readBody` only ever returns it while
+  ~ still recursing) both answer `400` and end the connection, `handler` never called
+  ~ either way.
+  handleParsedRequest = (accumulated :: Text, http10 :: Bool, request :: Request) -> $ => <
+    transferEncoding = request.headers().value("transfer-encoding")
+    contentLength = request.headers().value("content-length")
+    finishWithBody = (body :: Text) -> $ => <
+      attached = request.attachBody(body, request.headers().value("content-type"))
+      continueUnlessClosing(http10, attached, handler(attached), "")
+    >
+    request.method.carriesBody() && (transferEncoding != "" || contentLength != "")
+      ? (readBody(
+          connection, accumulated, transferEncoding, contentLength, options.maxBodySize,
+          options.idleTimeout) ?
+            | Complete(body) => finishWithBody(body)
+            | TooLarge     => connection.@write(closingReply(ContentTooLarge).wire())
+            | Malformed(_) => connection.@write(closingReply(BadRequest).wire())
+            | Incomplete   => connection.@write(closingReply(BadRequest).wire()))
+      : continueUnlessClosing(http10, request, handler(request), leftoverAfterHead(accumulated))
+  >
+
+  receiveHead(connection, leftover, options.idleTimeout) ?
     | NotOk(_)        => $
     | Ok(accumulated) =>
         (Request.parse(accumulated.slice(0, blankLineIndex(accumulated)), "") ?
-          | NotOk(_)    => connection.@write(Response.reply(BadRequest).wire())
-          | Ok(request) => answer(connection, accumulated, request, handler, options))
+          | NotOk(_)    => connection.@write(closingReply(BadRequest).wire())
+          | Ok(request) => handleParsedRequest(accumulated, isHttp10Request(accumulated), request))
+>
+
+serveConnection = (
+  connection :: net.Connection, handler :: (Request) -> Response, options :: ServerOptions
+) -> $ => <
+  serveRequests(connection, "", handler, options)
 >
 
 ~ `http.@serve(address, handler) -> net.Server`, `options` defaulted to
@@ -1579,15 +1676,20 @@ test.describe("Status", () => <
 test.describe("Response's server-side constructors", () => <
   test.it("reply writes the exact bytes: status line, content-length, connection, body", () =>
     expect(Response.reply(OK, "x").wire(), equals(
-      "HTTP/1.1 200 OK\r\ncontent-length: 1\r\nconnection: close\r\n\r\nx")))
+      "HTTP/1.1 200 OK\r\ncontent-length: 1\r\nconnection: keep-alive\r\n\r\nx")))
 
   test.it("reply with a Status and a body writes that status's own reason phrase", () =>
     expect(Response.reply(Created, "stocked chickpeas").wire(), equals(
-      "HTTP/1.1 201 Created\r\ncontent-length: 17\r\nconnection: close\r\n\r\nstocked chickpeas")))
+      "HTTP/1.1 201 Created\r\ncontent-length: 17\r\nconnection: keep-alive\r\n\r\nstocked chickpeas")))
 
   test.it("reply with only a Status writes an empty body", () =>
     expect(Response.reply(MethodNotAllowed).wire(), equals(
-      "HTTP/1.1 405 Method Not Allowed\r\ncontent-length: 0\r\nconnection: close\r\n\r\n")))
+      "HTTP/1.1 405 Method Not Allowed\r\ncontent-length: 0\r\nconnection: keep-alive\r\n\r\n")))
+
+  test.it("reply defaults to keep-alive; closingReply always closes", () => <
+    expect(Response.reply(OK, "x").headers().value("connection"), equals("keep-alive"))
+    expect(closingReply(BadRequest).headers().value("connection"), equals("close"))
+  >)
 
   test.it("reply takes a Num code too, writing the exact same bytes as the Status overload", () =>
     expect(Response.reply(405).wire(), equals(Response.reply(MethodNotAllowed).wire())))
@@ -1703,4 +1805,59 @@ test.describe("Request.parse", () => <
     expect(request.method.token(), equals("GET"))
     expect(request.method.payload().content, equals(""))
   >)
+>)
+
+test.describe("blankLineEnd", () => <
+  test.it("ends right after a CRLF CRLF blank line", () =>
+    expect(blankLineEnd("GET / HTTP/1.1\r\n\r\nbody"), equals(16)))
+
+  test.it("ends right after a bare LF LF blank line", () =>
+    expect(blankLineEnd("GET / HTTP/1.1\n\nbody"), equals(16)))
+
+  test.it("ends right after a mixed CRLF LF blank line", () =>
+    expect(blankLineEnd("GET / HTTP/1.1\r\n\nbody"), equals(16)))
+
+  test.it("ends right after a mixed LF CRLF blank line", () =>
+    expect(blankLineEnd("GET / HTTP/1.1\n\r\nbody"), equals(16)))
+
+  test.it("reads the whole length when no blank line has arrived yet", () => <
+    partial = "GET / HTTP/1.1\r\nX-A: b"
+    expect(blankLineEnd(partial), equals(partial.length))
+  >)
+>)
+
+test.describe("isHttp10Request", () => <
+  test.it("recognizes an HTTP/1.0 request line", () =>
+    expect(isHttp10Request("GET / HTTP/1.0\r\nHost: x\r\n\r\n"), equals(true)))
+
+  test.it("does not mistake an HTTP/1.1 request line for HTTP/1.0", () =>
+    expect(isHttp10Request("GET / HTTP/1.1\r\nHost: x\r\n\r\n"), equals(false)))
+>)
+
+test.describe("leftoverAfterHead", () => <
+  test.it("carries a pipelined second request's own bytes", () => <
+    both = "GET /a HTTP/1.1\r\n\r\nGET /b HTTP/1.1\r\n\r\n"
+    expect(leftoverAfterHead(both), equals("GET /b HTTP/1.1\r\n\r\n"))
+  >)
+
+  test.it("reads as empty when nothing follows the head", () =>
+    expect(leftoverAfterHead("GET /a HTTP/1.1\r\n\r\n"), equals("")))
+>)
+
+test.describe("shouldCloseAfter", () => <
+  plainRequest = parsedRequest("GET /a HTTP/1.1")
+  closeWishRequest = parsedRequest("GET /a HTTP/1.1\r\nConnection: close")
+  keepAliveResponse = Response.reply(OK, "x")
+
+  test.it("closes after an HTTP/1.0 request regardless of either side's own header", () =>
+    expect(shouldCloseAfter(true, plainRequest, keepAliveResponse), equals(true)))
+
+  test.it("keeps going when neither side asked to close and the request is HTTP/1.1", () =>
+    expect(shouldCloseAfter(false, plainRequest, keepAliveResponse), equals(false)))
+
+  test.it("closes when the request itself asked for Connection: close", () =>
+    expect(shouldCloseAfter(false, closeWishRequest, keepAliveResponse), equals(true)))
+
+  test.it("closes when the response carries its own Connection: close", () =>
+    expect(shouldCloseAfter(false, plainRequest, closingReply(BadRequest)), equals(true)))
 >)
