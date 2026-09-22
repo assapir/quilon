@@ -166,6 +166,25 @@ impl<'a> Parser<'a> {
         result
     }
 
+    /// A plain (hole-free) string literal's text: an import path and a `Text` pattern each
+    /// need one, since neither can depend on a runtime value. Consumes the current token
+    /// (already peeked as `chunks`/`span` by the caller) and rejects a `Hole` chunk with
+    /// `code`/`message` — the one place either rejection is spelled, so the two can never
+    /// drift apart.
+    fn plain_string_literal(
+        &mut self,
+        chunks: &[StrChunk],
+        span: Span,
+        code: Code,
+        message: &str,
+    ) -> Result<String, ParseError> {
+        self.advance();
+        match chunks {
+            [StrChunk::Lit(value)] => Ok(value.clone()),
+            _ => Err(ParseError::new(code, span, message)),
+        }
+    }
+
     fn peek(&self) -> &Token {
         &self.tokens[self.pos]
     }

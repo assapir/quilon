@@ -6,6 +6,14 @@ All notable changes to Quilon are documented here.
 
 ### Added
 
+- **A `Text` scrutinee can be matched against literal text, not just a binding or `_`**:
+  `token ? | "GET" => Ok(Get) | "POST" => Ok(Post(noBody)) | _ => NotOk(...)`. A text
+  pattern lowers to the same `Text == Text` comparison a `==` expression on two `Text`
+  values uses; a non-sum scrutinee already needs a catch-all, so totality is unchanged, and
+  a text pattern against a `Num` or a sum is the same type mismatch a number pattern gives
+  against a `Text`. `info.platform()`, `info.os()`, and `Method.parse` in `core.http` are
+  now matches over their token, replacing their `==` ternary chains. See
+  `docs/expressions/pattern-matching.md` and `examples/text_match.qn`. Closes #461.
 - **The fiber-sharing check: a non-atomic `:=` value reachable from more than one fiber is
   a compile error.** `net.@tcpServe`'s `handler` argument runs on its own fiber per
   connection — the first Quilon code that does — so the checker now rejects a top-level

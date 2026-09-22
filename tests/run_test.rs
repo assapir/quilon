@@ -105,6 +105,25 @@ fn run_pattern_match_wildcard() {
 }
 
 #[test]
+fn run_pattern_match_text_literal() {
+    // examples/text_match.qn -> dispatches on a `Text` scrutinee against literal arms.
+    assert_exit(
+        "dispatch = (command :: Text) -> Num => <\n  command ?\n    | \"go\"   => 1\n    | \"stop\" => 2\n    | _      => 0\n>\n^ = () -> Num => < dispatch(\"stop\") >",
+        2,
+    );
+}
+
+#[test]
+fn run_pattern_match_text_literal_falls_through_to_catch_all() {
+    // A command the listed arms don't name falls to the catch-all, the same as an
+    // unlisted `Num`.
+    assert_exit(
+        "dispatch = (command :: Text) -> Num => <\n  command ?\n    | \"go\"   => 1\n    | \"stop\" => 2\n    | _      => 0\n>\n^ = () -> Num => < dispatch(\"reverse\") >",
+        0,
+    );
+}
+
+#[test]
 fn ternary_branch_may_be_a_reassignment() {
     // `:=` is the lowest-precedence operator, so a ternary branch — a bare-expression
     // position, like a lambda body — may itself be a reassignment of an outer `:=`
