@@ -1222,13 +1222,16 @@ A bare `:: Result` parameter — of a function or a `:=`/`=`-bound lambda, at an
 depth — is matched directly and its payload is bound (`Ok(x)`, not `Ok(_)`), but its
 payload type can't be worked out. The parameter's own declaration carries no payload type
 of its own (every bare `:: Result` is the same unspecialized `Ok(T)`/`NotOk(E)` shape), so
-the checker instead reads it off the declaration's own callers: this is reported only when
-that isn't possible — the declaration is never referenced anywhere in the program at all,
-so no caller can ever teach it a payload type. (A method's or an overloaded function's own
-`Result` parameter has no such call site to pin from either way — a member call's argument
-can't be attributed to one receiver-independent signature, and a bare call to an overloaded
-name doesn't say which member it fills — so those raise this same error unconditionally,
-whether or not the name is otherwise called.)
+the checker instead reads it off the declaration's own callers. This is reported when that
+isn't possible: the declaration is never referenced anywhere in the program at all, so no
+caller can ever teach it a payload type; or it IS referenced, but the binding is passed
+straight into a sum-variant constructor, a named type's own constructor, or a plain
+function whose slot there is a concrete type other than `Num` — a mismatch that would
+otherwise reach codegen as an internal error or a corrupted value. (A method's or an
+overloaded function's own `Result` parameter has no such call site to pin from either way —
+a member call's argument can't be attributed to one receiver-independent signature, and a
+bare call to an overloaded name doesn't say which member it fills — so those raise this
+same error unconditionally, whether or not the name is otherwise called.)
 
 ```quilon ignore
 describe = (result :: Result) -> Text => <

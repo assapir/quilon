@@ -1638,6 +1638,25 @@ fn reject_result_parameter_bound_but_uninformed_variant_fed_into_a_concrete_func
     assert_type_error_code(src, Code::UnresolvedResultPayload);
 }
 
+/// The same danger through a NAMED type's own constructor: codegen builds a record
+/// literal's struct from its field VALUES' own types (`generate_record`), so a
+/// `Generic`-defaulted field would give `Box` a different runtime layout than every
+/// read site expects — a corrupted value rather than one mismatched call argument.
+#[test]
+fn reject_result_parameter_bound_but_uninformed_variant_fed_into_a_named_constructor_field() {
+    let src = r#"
+        Box = { note :: Text, count :: Num }
+
+        judge = (result :: Result) -> Box => <
+          result ?
+            | Ok(text)     => Box { note = "ok", count = 1 }
+            | NotOk(text2) => Box { note = text2, count = 2 }
+        >
+        ^ = () -> Num => < judge(Ok("hi")).count >
+    "#;
+    assert_type_error_code(src, Code::UnresolvedResultPayload);
+}
+
 /// A `Result`'s payload also crosses an OVERLOADED callee: the one-argument `make`'s
 /// return type is refined from its own body (`Ok(Thing)`), so a call to it through the
 /// two-argument overload sees the real payload instead of the opaque annotation.

@@ -296,12 +296,24 @@ impl TypeChecker {
     /// body, never from a caller.
     ///
     /// A bound position no direct call informs is rejected instead of left `Generic`
-    /// when the binding itself is passed straight into a sum-variant constructor OR a
-    /// plain function whose own slot there is concrete and isn't `Num` (see
-    /// [`Self::pin_one_result_parameter`] and `flows_into_a_non_num_constructor`) — the
-    /// one shape that reaches codegen as `Num`'s `f64` stored against a
-    /// differently-shaped slot, an internal error (a constructor's `coerce_payload`, or
-    /// a plain call's own LLVM module verification) rather than a silent mismatch.
+    /// when the binding itself is passed straight into a sum-variant constructor, a
+    /// NAMED type's own constructor (`Box { note = text2, … }`), or a plain function,
+    /// whose slot there is concrete and isn't `Num` (see
+    /// [`Self::pin_one_result_parameter`] and `flows_into_a_non_num_constructor`) — each
+    /// a shape with a REGISTERED, checkable declared type to compare against. Left
+    /// `Generic`, a sum-variant or plain-call argument reaches codegen as `Num`'s `f64`
+    /// against a differently-shaped slot, a caught internal error (`coerce_payload`, or
+    /// LLVM's own module verification); a named constructor's OWN struct is instead
+    /// BUILT from its field values' actual types (`generate_record`), so a `Generic`
+    /// field there silently gives the whole record a DIFFERENT runtime layout than
+    /// every read site expects — corrupting memory rather than erroring cleanly, which
+    /// is exactly why this shape is checked here too rather than left as an accepted
+    /// residual risk. An ANONYMOUS record, array, map, or set literal has no such
+    /// registered shape of its own to check against (its inferred type is exactly its
+    /// elements' own types), so a `Generic` element in one of those remains the
+    /// SAME accepted, non-widened residual risk a bare uninformed return already
+    /// carries (see below) — a silently wrong value, not a crash, whenever such a
+    /// literal is later matched against some OTHER concrete annotation.
     ///
     /// One gap this leaves: a parameter FORWARDED into another function's own bare
     /// `:: Result` parameter, rather than called with a concrete `Ok`/`NotOk` argument
@@ -1087,16 +1099,6 @@ impl TypeChecker {
     /// so a payload forwarded into an overload set keeps the same accepted, non-widened
     /// forwarding gap it already had.
     fn slot_is_unsafe_for_generic(&self, callee: &str, position: usize) -> bool {
-        // A `Result` slot — specialized or not — shares `Result`'s own ONE canonical
-        // `{ ptr, i64 }` representation regardless of payload (`pack_result_payload`),
-        // so passing an equally-unpinned payload into it forces no REAL representation
-        // decision the way a genuinely concrete (`Text`, a record, …) field does; this
-        // is the accepted Result-to-Result forwarding gap this pass already documents,
-        // not a new concrete-slot danger.
-        let concrete_non_num = |field: &Type| {
-            !matches!(field, Type::Generic { .. } | Type::Num)
-                && !matches!(field, Type::Sum { name, .. } if name == crate::ast::RESULT_TYPE_NAME)
-        };
         self.sum_types.values().any(|sum_type| {
             let Type::Sum { variants, .. } = sum_type else {
                 return false;
@@ -1105,13 +1107,47 @@ impl TypeChecker {
                 .iter()
                 .find(|v| v.name == callee)
                 .and_then(|v| v.fields.get(position))
-                .is_some_and(concrete_non_num)
+                .is_some_and(is_concrete_non_num)
         }) || matches!(
             self.env.get_type(callee),
             Some(Type::Function { parameters, .. })
-                if parameters.get(position).is_some_and(concrete_non_num)
+                if parameters.get(position).is_some_and(is_concrete_non_num)
         )
     }
+
+    /// [`Self::slot_is_unsafe_for_generic`]'s counterpart for a NAMED type's constructor
+    /// (`Box { note = text2, … }`, `Expression::Constructor`), whose fields are matched
+    /// by NAME rather than position: whether `type_name`'s registered field `field_name`
+    /// is concrete and isn't `Num`. An anonymous record literal (`{ note = text2, … }`,
+    /// `Expression::Record`, no `type_name` of its own) has no such registered shape to
+    /// check against — its own inferred type is exactly what its field VALUES say, so
+    /// nothing here forces a mismatched slot; the danger for one of those, like a bare
+    /// return, is only whatever a SURROUNDING annotation demands, which is the already
+    /// accepted, non-widened residual risk [`TypeChecker::pin_result_parameters`]'s doc
+    /// comment names, not a new concrete-slot danger this pass closes.
+    fn named_field_is_unsafe_for_generic(&self, type_name: &str, field_name: &str) -> bool {
+        matches!(
+            self.env.get_type(type_name),
+            Some(Type::Named { fields, .. })
+                if fields
+                    .iter()
+                    .find(|(name, _)| name == field_name)
+                    .is_some_and(|(_, field)| is_concrete_non_num(field))
+        )
+    }
+}
+
+/// A `Result` slot — specialized or not — shares `Result`'s own ONE canonical `{ ptr,
+/// i64 }` representation regardless of payload (`pack_result_payload`), so passing an
+/// equally-unpinned payload into it forces no REAL representation decision the way a
+/// genuinely concrete (`Text`, a record, …) field does; this is the accepted
+/// Result-to-Result forwarding gap [`TypeChecker::pin_result_parameters`]'s doc comment
+/// already names, not a new concrete-slot danger. `Num` is exempt for the same reason
+/// `Generic` itself is: its own codegen default (`f64`) already IS `Num`'s
+/// representation.
+fn is_concrete_non_num(field: &Type) -> bool {
+    !matches!(field, Type::Generic { .. } | Type::Num)
+        && !matches!(field, Type::Sum { name, .. } if name == crate::ast::RESULT_TYPE_NAME)
 }
 
 /// Whether `binding_name` is passed, anywhere in `body`, as a bare argument to a call
@@ -1150,6 +1186,27 @@ fn flows_into_a_non_num_constructor(
                 if let Expression::Identifier { name, .. } = argument
                     && name == binding_name
                     && checker.slot_is_unsafe_for_generic(callee, position)
+                {
+                    found = true;
+                    return ControlFlow::Break(());
+                }
+            }
+        }
+        // A NAMED type's own constructor (`Box { note = text2, … }`) — codegen builds
+        // its struct from this literal's OWN field VALUES (`generate_record`), so a
+        // `Generic`-defaulted field here doesn't just mismatch a slot it's STORED into
+        // (as a sum-variant constructor's or a plain call's argument does) — it makes
+        // the CONSTRUCTED VALUE ITSELF a different runtime layout than every read site
+        // (sized from `Box`'s DECLARED field types) expects, corrupting the whole
+        // record rather than one argument.
+        if let Expression::Constructor {
+            type_name, fields, ..
+        } = expression
+        {
+            for (field_name, value) in fields {
+                if let Expression::Identifier { name, .. } = value
+                    && name == binding_name
+                    && checker.named_field_is_unsafe_for_generic(type_name, field_name)
                 {
                     found = true;
                     return ControlFlow::Break(());

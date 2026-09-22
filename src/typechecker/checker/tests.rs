@@ -288,6 +288,29 @@ fn test_result_parameter_bound_but_uninformed_and_fed_into_a_concrete_function_c
 }
 
 #[test]
+fn test_result_parameter_bound_but_uninformed_and_fed_into_a_named_constructor_field_is_rejected() {
+    // The same danger again, through a NAMED type's own constructor rather than a
+    // sum-variant one: `Box`'s `note` field is a concrete `Text`, and codegen's
+    // `generate_record` builds the record from its field VALUES' own types, so a
+    // `Generic`-defaulted `text2` would give this record a different runtime layout
+    // than `Box`'s declared shape — corrupting the whole value, not just one argument.
+    assert!(matches!(
+        check_ok(
+            "Box = { note :: Text, count :: Num }\n\
+             judge = (result :: Result) -> Box => <\n  \
+               result ?\n    \
+                 | Ok(text)     => Box { note = \"ok\", count = 1 }\n    \
+                 | NotOk(text2) => Box { note = text2, count = 2 }\n\
+             >\n\
+             ^ = () -> Num => <\n  \
+               judge(Ok(\"hi\")).count\n\
+             >"
+        ),
+        Err(TypeError::UnresolvedResultPayload { .. })
+    ));
+}
+
+#[test]
 fn test_result_parameter_forwarded_into_another_result_parameter_is_not_falsely_rejected() {
     // Regression: `slot_is_unsafe_for_generic` once treated ANY non-`Generic`,
     // non-`Num` slot as dangerous, including a slot that is ITSELF a `Result` — but
