@@ -313,6 +313,69 @@ fn test_result_parameter_referenced_only_as_a_value_is_not_falsely_rejected() {
 }
 
 #[test]
+fn test_result_parameter_shadowed_by_a_local_reassignment_is_not_cross_contaminated() {
+    // `helper`'s own local `result := Ok(x)` reuses `outer`'s parameter name, but is a
+    // fresh, already-concrete (`Num`) binding — the checker's own first-pass record of
+    // its scrutinee's real type (not just its name) keeps this site from being
+    // mistaken for a read of `outer`'s still-generic parameter, which would otherwise
+    // stamp `outer`'s pinned type over `helper`'s unrelated match.
+    assert!(
+        check_ok(
+            "outer = (result :: Result) -> Num => <\n  \
+               helper = (x :: Num) -> Num => <\n    \
+                 result = Ok(x)\n    \
+                 result ? | Ok(n) => n | NotOk(_) => 0\n  \
+               >\n  \
+               helper(5)\n\
+             >\n\
+             ^ = () -> Num => < outer(Ok(\"hi\")) >"
+        )
+        .is_ok()
+    );
+}
+
+#[test]
+fn test_result_parameter_of_a_bound_lambda_is_pinned_like_a_function() {
+    // A `:=`-bound lambda is called by its binding's name exactly like a
+    // `FunctionDeclaration`, and is never overloaded — so its bare `:: Result`
+    // parameter is pinned from its one caller the same way.
+    assert!(
+        check_ok(
+            "judge := (act :: Result) => < act ? | Ok(text) => text | NotOk(_) => \"n\" >\n\
+             ^ = () -> Num => < judge(Ok(\"hi\")).length >"
+        )
+        .is_ok()
+    );
+}
+
+#[test]
+fn test_result_parameter_never_matched_is_not_falsely_rejected_by_a_nested_shadow() {
+    // The method's own `result` parameter is never itself matched — only a NESTED
+    // helper's unrelated local `result := Ok(x)`, reusing the name, is. A false
+    // `UnresolvedResultPayload` here would mean the method's parameter was mistaken for
+    // that unrelated, already-concrete local.
+    assert!(
+        check_ok(
+            "Box = {\n  \
+               value :: Num,\n  \
+               unwrap = (result :: Result) -> Num => <\n    \
+                 helper = (x :: Num) -> Num => <\n      \
+                   result = Ok(x)\n      \
+                   result ? | Ok(n) => n | NotOk(_) => 0\n    \
+                 >\n    \
+                 helper(it.value)\n  \
+               >\n\
+             }\n\
+             ^ = () -> Num => <\n  \
+               b = Box { value = 5 }\n  \
+               b.unwrap(Ok(\"unused\"))\n\
+             >"
+        )
+        .is_ok()
+    );
+}
+
+#[test]
 fn test_constructor_pattern_on_a_non_sum_scrutinee_is_rejected() {
     // A constructor pattern dispatches on a variant tag, which a `Num` has none of.
     assert!(matches!(

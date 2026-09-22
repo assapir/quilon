@@ -1567,6 +1567,25 @@ fn run_nested_function_reusing_a_result_parameter_name_is_not_cross_contaminated
     assert_exit(src, 2);
 }
 
+/// A LOCAL reassignment inside a nested function, reusing the outer parameter's exact
+/// name, must not be mistaken for a read of the outer's still-generic parameter: the
+/// local's own value (`Ok(x)`, already concrete `Num`) is what the nested match reads,
+/// unaffected by whatever `outer`'s own parameter gets pinned to. `helper(5)` = 5.
+#[test]
+fn run_result_parameter_shadowed_by_a_local_reassignment_reads_its_own_value() {
+    let src = r#"
+        outer = (result :: Result) -> Num => <
+          helper = (x :: Num) -> Num => <
+            result = Ok(x)
+            result ? | Ok(n) => n | NotOk(_) => 0
+          >
+          helper(5)
+        >
+        ^ = () -> Num => < outer(Ok("hi")) >
+    "#;
+    assert_exit(src, 5);
+}
+
 #[test]
 fn nested_sum_as_sum_payload_is_accepted() {
     // A declared sum may be another sum's payload, embedded by value (it is declared

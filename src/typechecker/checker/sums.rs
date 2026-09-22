@@ -317,7 +317,25 @@ impl TypeChecker {
                         )?;
                     }
                 }
-                Item::VariableDeclaration(_) => {}
+                // A `:=`/`=`-bound lambda, called by its binding's name exactly like a
+                // `FunctionDeclaration` (`calls.rs`'s plain-call path resolves either the
+                // same way), is just as pinnable — and never overloaded (only a
+                // `FunctionDeclaration`'s name joins `overloaded_names`).
+                Item::VariableDeclaration(declaration) => {
+                    if let Expression::Lambda {
+                        parameters, body, ..
+                    } = &declaration.value
+                    {
+                        self.pin_result_parameters_of(
+                            &declaration.name,
+                            parameters,
+                            body,
+                            true,
+                            &calls_by_name,
+                            &referenced_names,
+                        )?;
+                    }
+                }
             }
         }
         Ok(())
@@ -344,7 +362,7 @@ impl TypeChecker {
             if !is_unspecialized_result(&self.resolve_type(annotation)) {
                 continue;
             }
-            let sites = result_parameter_matches(body, &parameter.name);
+            let sites = result_parameter_matches(&self.type_table, body, &parameter.name);
             if sites.is_empty() {
                 continue;
             }
@@ -515,13 +533,33 @@ fn first_binding(sites: &[ResultParameterMatch]) -> Option<&Span> {
 
 /// Every `Match` expression in `body` whose scrutinee is a bare read of `parameter_name`,
 /// EXCLUDING one that sits inside a nested scope that rebinds that same name — a nested
-/// function's or lambda's own same-named parameter. Past that point the name refers to a
-/// different value entirely, and treating its match as this parameter's own would teach
-/// the wrong declaration's binding a type pinned from someone else's callers (each
-/// shadowing declaration's own span, gathered in the same walk, marks the region to
-/// exclude by byte range — cheaper than threading scope state through every expression
+/// function's or lambda's own same-named parameter, or a local `=`/`:=`/nested-function
+/// declaration reusing the name from partway through the enclosing block onward. Past
+/// that point the name refers to a different value entirely, and treating its match as
+/// this parameter's own would teach the wrong binding a type pinned from someone else's
+/// callers (each shadowing declaration's own region, gathered in the same walk, is
+/// excluded by byte range — cheaper than threading scope state through every expression
 /// variant, since nothing outside a scope can read a name it shadows).
-fn result_parameter_matches(body: &Expression, parameter_name: &str) -> Vec<ResultParameterMatch> {
+///
+/// A SECOND, independent guard catches what a byte-range region cannot: a shadow whose
+/// own value is not a `Result` at all never reaches here (matching `Ok`/`NotOk` against
+/// it is rejected earlier, at the first checking pass, as a constructor pattern on a
+/// non-sum scrutinee) — but a shadow that reassigns the name to an ALREADY-CONCRETE
+/// `Result` (`result := Ok(aNum)`, say) type-checks fine and reaches this scan looking
+/// identical, by name, to a genuine read of the still-generic parameter. `type_table`,
+/// the checker's own first-pass record, disambiguates: it holds each identifier
+/// occurrence's REAL type from before this pass touches anything, so a site is kept only
+/// when its scrutinee's own recorded type is exactly as unspecialized as the target
+/// parameter's — a reassignment to something already concrete recorded something else
+/// and is dropped. (A reassignment to another value that HAPPENS to still be an
+/// unspecialized `Result`, e.g. forwarded from a different unpinned parameter, is not
+/// caught by this guard — narrower than the byte-range one above, and, like a
+/// same-named nested parameter, a rarer collision this pass leaves to the region guard.)
+fn result_parameter_matches(
+    type_table: &TypeTable,
+    body: &Expression,
+    parameter_name: &str,
+) -> Vec<ResultParameterMatch> {
     use crate::ast::{NOT_OK, OK};
 
     let mut sites = Vec::new();
@@ -540,6 +578,9 @@ fn result_parameter_matches(body: &Expression, parameter_name: &str) -> Vec<Resu
                 let Expression::Identifier { span, .. } = scrutinee.as_ref() else {
                     unreachable!("matched above")
                 };
+                if !type_table.get(span).is_some_and(is_unspecialized_result) {
+                    return ControlFlow::Continue(());
+                }
                 let mut site = ResultParameterMatch {
                     scrutinee_span: span.clone(),
                     ok_binding: None,
@@ -567,12 +608,40 @@ fn result_parameter_matches(body: &Expression, parameter_name: &str) -> Vec<Resu
             } if parameters.iter().any(|p| p.name == parameter_name) => {
                 shadows.push(span.clone());
             }
-            Expression::Block { statements, .. } => {
+            Expression::Block { statements, span } => {
                 for statement in statements {
-                    if let Statement::Item(Item::FunctionDeclaration(nested)) = statement
-                        && nested.parameters.iter().any(|p| p.name == parameter_name)
-                    {
-                        shadows.push(nested.span.clone());
+                    match statement {
+                        // A nested function's own PARAMETER of this name shadows it for
+                        // that function's whole span (its body, but also the function
+                        // literal itself — nothing outside can reach in either way).
+                        Statement::Item(Item::FunctionDeclaration(nested))
+                            if nested.parameters.iter().any(|p| p.name == parameter_name) =>
+                        {
+                            shadows.push(nested.span.clone());
+                        }
+                        // A nested function's or a local `=`/`:=` binding's own NAME
+                        // rebinds it from that declaration onward, through the rest of
+                        // THIS block (statements execute in the order written, and nest
+                        // no further scope of their own).
+                        Statement::Item(Item::FunctionDeclaration(nested))
+                            if nested.name == parameter_name =>
+                        {
+                            shadows.push(Span {
+                                start: nested.span.start,
+                                end: span.end,
+                                file: span.file,
+                            });
+                        }
+                        Statement::Item(Item::VariableDeclaration(local))
+                            if local.name == parameter_name =>
+                        {
+                            shadows.push(Span {
+                                start: local.span.start,
+                                end: span.end,
+                                file: span.file,
+                            });
+                        }
+                        _ => {}
                     }
                 }
             }
