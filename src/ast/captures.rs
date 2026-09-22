@@ -200,6 +200,6 @@ fn bind_pattern(pattern: &Pattern, bound: &mut HashSet<String>) {
                 bind_pattern(a, bound);
             }
         }
-        Pattern::Number { .. } | Pattern::Wildcard { .. } => {}
+        Pattern::Number { .. } | Pattern::Text { .. } | Pattern::Wildcard { .. } => {}
     }
 }

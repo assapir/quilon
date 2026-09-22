@@ -1,5 +1,5 @@
 use super::*;
-use crate::ast::{Statement, Type};
+use crate::ast::{Pattern, Statement, Type};
 use crate::lexer::Lexer;
 use crate::source_map::locate_in;
 
@@ -286,6 +286,72 @@ fn test_parse_pattern_wildcard() {
     let tokens = Lexer::tokenize("result = value ? | 0 => \"zero\" | _ => \"other\"").unwrap();
     let result = parse(&tokens);
     assert!(result.is_ok());
+}
+
+#[test]
+fn test_parse_pattern_text_literal() {
+    let tokens = Lexer::tokenize("result = value ? | \"GET\" => 0 | other => 1").unwrap();
+    let result = parse(&tokens).unwrap();
+    if let Item::VariableDeclaration(declaration) = &result.items[0] {
+        if let Expression::Match { arms, .. } = &declaration.value {
+            assert!(matches!(
+                &arms[0].pattern,
+                Pattern::Text { value, .. } if value == "GET"
+            ));
+        } else {
+            panic!("Expected Match expression");
+        }
+    } else {
+        panic!("Expected VariableDeclaration");
+    }
+}
+
+#[test]
+fn test_parse_pattern_several_text_arms() {
+    let tokens = Lexer::tokenize(
+        "result = value ?\n  | \"GET\"  => 0\n  | \"POST\" => 1\n  | \"PUT\"  => 2\n  | _      => 3",
+    )
+    .unwrap();
+    let result = parse(&tokens).unwrap();
+    if let Item::VariableDeclaration(declaration) = &result.items[0] {
+        if let Expression::Match { arms, .. } = &declaration.value {
+            assert_eq!(arms.len(), 4);
+            assert!(matches!(arms[0].pattern, Pattern::Text { .. }));
+            assert!(matches!(arms[1].pattern, Pattern::Text { .. }));
+            assert!(matches!(arms[2].pattern, Pattern::Text { .. }));
+            assert!(matches!(arms[3].pattern, Pattern::Wildcard { .. }));
+        } else {
+            panic!("Expected Match expression");
+        }
+    } else {
+        panic!("Expected VariableDeclaration");
+    }
+}
+
+#[test]
+fn test_parse_pattern_text_arm_with_catch_all() {
+    let tokens =
+        Lexer::tokenize("result = value ? | \"stop\" => \"brake\" | rest => rest").unwrap();
+    let result = parse(&tokens).unwrap();
+    if let Item::VariableDeclaration(declaration) = &result.items[0] {
+        if let Expression::Match { arms, .. } = &declaration.value {
+            assert!(matches!(arms[0].pattern, Pattern::Text { .. }));
+            assert!(matches!(arms[1].pattern, Pattern::Identifier { .. }));
+        } else {
+            panic!("Expected Match expression");
+        }
+    } else {
+        panic!("Expected VariableDeclaration");
+    }
+}
+
+#[test]
+fn test_parse_pattern_interpolated_text_is_rejected() {
+    let tokens = Lexer::tokenize("result = value ? | \"`x`\" => 0 | _ => 1").unwrap();
+    let Err(err) = parse(&tokens) else {
+        panic!("expected an interpolated text pattern to be a parse error");
+    };
+    assert_eq!(err.code, Code::InterpolatedTextPattern);
 }
 
 #[test]

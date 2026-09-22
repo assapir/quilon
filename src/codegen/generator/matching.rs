@@ -237,6 +237,23 @@ impl<'ctx> CodeGenerator<'ctx> {
                 }
             }
 
+            Pattern::Text { value: text, .. } => {
+                // Lower to the same `Text == Text` comparison a `==` expression on two
+                // `Text` values uses (`generate_text_compare`), against a constant built the
+                // same way a `Text` literal expression is (`build_text_constant`). The
+                // checker already guarantees a Text pattern only meets a Text scrutinee
+                // (`src/typechecker/checker/patterns.rs`), but a false no-match — not a
+                // hard `Err` — is this arm's answer to a mismatch anyway, the same way the
+                // `Number` arm above answers one.
+                if let BasicValueEnum::StructValue(_) = value {
+                    let constant = self.build_text_constant(text)?;
+                    self.generate_text_compare(BinaryOperator::Eq, value, constant)
+                        .map(|result| result.into_int_value())
+                } else {
+                    Ok(self.context.bool_type().const_zero())
+                }
+            }
+
             Pattern::Constructor { name, .. } => match value {
                 BasicValueEnum::StructValue(_) => self.variant_tag_matches(name, value),
                 // Not a struct - pattern doesn't match

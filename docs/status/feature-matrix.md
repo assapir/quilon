@@ -36,7 +36,7 @@ sidebar:
 | Closures: lexical capture (`=` by value / `:=` by reference), monomorphic | ✅ |
 | Ranges: infix `lo <- hi` → inclusive `[]Num` (descends when `lo > hi`); endpoints must be whole numbers a `Num` holds exactly; consumed directly by an array method it iterates without materializing | ✅ |
 | Spread: prefix `<-` in literals — array splice `[<-xs, 4]`, record update `{<-p, x = 9}` | ✅ |
-| Pattern matching (numbers, wildcard, identifiers, sum-type variants); every match is total — a sum lists its variants, anything else takes a catch-all | ✅ |
+| Pattern matching (numbers, text literals, wildcard, identifiers, sum-type variants); every match is total — a sum lists its variants, anything else takes a catch-all | ✅ |
 | User-defined sum types (`/` separator), exhaustive matching, payload binding | ✅ |
 | Sum-type methods: optional trailing `{ }` block (named methods, operators, render `` ` ``; `it` = the value); no fields, no `:=` methods | ✅ |
 | `Result` as a normal predefined sum type (`Ok`/`NotOk`) | ✅ |
@@ -74,4 +74,4 @@ sidebar:
 | Overloaded or top-level function name passed as a value | ❌ |
 | Generic / polymorphic-capturing closures | ❌ |
 | String interpolation | ❌ |
-| [Colorless implicit-futures concurrency](../concurrency/README.md) — `@` leaf IO primitives, deferred values, force-at-strict-op: the fiber scheduler, the `time.@sleep` pause, the value-returning `io.@readStdin` (deferred `Text`, forced on use), and the atomic-binding syntax `@name := …` (its reassignment rejected when the right side forces a deferred value) run today; cross-source overlap (networked `@get`) and the multicore runtime — which lets more than one fiber reach a marked binding at all — are still to come | 🚧 |
+| [Colorless implicit-futures concurrency](../concurrency/README.md) — `@` leaf IO primitives, deferred values, force-at-strict-op: the fiber scheduler, the `time.@sleep` pause, the value-returning `io.@readStdin` (deferred `Text`, forced on use), the atomic-binding syntax `@name := …` (its reassignment rejected when the right side forces a deferred value), the raw TCP server layer `net.@tcpServe`/`Connection`/`Server`, and the fiber-sharing check the checker enforces against a non-atomic `:=` binding a server handler reaches, directly or through a call, run today; cross-source overlap (networked `@get`) and the multicore runtime are still to come | 🚧 |

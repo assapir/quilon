@@ -585,7 +585,7 @@ impl Walker<'_> {
     fn pattern(&mut self, pattern: &mut Pattern) -> Result<(), QualifyError> {
         match pattern {
             Pattern::Identifier { name, span } => self.declare(name, span),
-            Pattern::Number { .. } | Pattern::Wildcard { .. } => Ok(()),
+            Pattern::Number { .. } | Pattern::Text { .. } | Pattern::Wildcard { .. } => Ok(()),
             Pattern::Constructor {
                 name,
                 arguments,

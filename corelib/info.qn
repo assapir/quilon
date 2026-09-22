@@ -80,24 +80,26 @@
 
 >> platform = () -> Platform => <
   arch = __platform()
-  arch == "aarch64" ? Aarch64
-    : arch == "x86_64" ? X86_64
-    : arch == "x86" ? X86
-    : arch == "arm" ? Arm
-    : arch == "riscv64" ? Riscv64
-    : arch == "wasm32" ? Wasm32
-    : WtfPlatform(arch)
+  arch ?
+    | "aarch64" => Aarch64
+    | "x86_64"  => X86_64
+    | "x86"     => X86
+    | "arm"     => Arm
+    | "riscv64" => Riscv64
+    | "wasm32"  => Wasm32
+    | other     => WtfPlatform(other)
 >
 
 >> os = () -> Os => <
   name = __os()
-  name == "linux" ? Linux
-    : name == "macOS" ? MacOS
-    : name == "windows" ? Windows
-    : name == "FreeBSD" ? FreeBSD
-    : name == "OpenBSD" ? OpenBSD
-    : name == "NetBSD" ? NetBSD
-    : WtfOs(name)
+  name ?
+    | "linux"   => Linux
+    | "macOS"   => MacOS
+    | "windows" => Windows
+    | "FreeBSD" => FreeBSD
+    | "OpenBSD" => OpenBSD
+    | "NetBSD"  => NetBSD
+    | other     => WtfOs(other)
 >
 
 >> pointerWidth = () -> PointerWidth => < __pointer_bits() == 64 ? Width64 : Width32 >

@@ -139,6 +139,9 @@ impl TypeChecker {
             Pattern::Number { .. } => {
                 self.check_type_compatibility(&Type::Num, expected_type, pattern.span())
             }
+            Pattern::Text { .. } => {
+                self.check_type_compatibility(&Type::Text, expected_type, pattern.span())
+            }
             Pattern::Wildcard { .. } => Ok(()), // Wildcard matches anything
             Pattern::Constructor {
                 name,

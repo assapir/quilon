@@ -102,6 +102,17 @@ impl<'a> Parser<'a> {
                 self.advance();
                 Ok(Pattern::Number { value, span })
             }
+            TokenKind::String(chunks) => {
+                let span = token.span.clone();
+                let chunks = chunks.clone();
+                let value = self.plain_string_literal(
+                    &chunks,
+                    span.clone(),
+                    Code::InterpolatedTextPattern,
+                    "a text pattern is a plain string literal",
+                )?;
+                Ok(Pattern::Text { value, span })
+            }
             TokenKind::Underscore => {
                 let span = token.span.clone();
                 self.advance();
