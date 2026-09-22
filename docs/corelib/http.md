@@ -216,9 +216,8 @@ or `server.kill()` for its 5-second default.
 
 A connection carries more than one request when both sides are willing: `http.@serve`'s
 own connection handler reads a request, answers it, and loops back to read the next one
-off the same connection, carrying over any bytes a pipelined next request already sent
-alongside the one just answered. The loop ends — the connection closes — the moment any of
-these is true:
+off the same connection, carrying over any bytes a pipelined next request sent alongside
+the one answered. The loop ends — the connection closes — the moment any of these is true:
 
 - The request's own `Connection` header says `close`.
 - The reply `handler` returned carries its own `Connection: close` — an explicit header a
@@ -230,8 +229,8 @@ these is true:
 
 `Response.reply`'s own generated `Connection` header (below) is always `keep-alive`: the
 constructor has no request to read a wish off, so it advertises the connection staying
-open, the same default a modern HTTP/1.1 server uses absent a reason not to. What actually
-closes the connection afterward is the loop above, not that header — a request that closes
+open, the same default a modern HTTP/1.1 server uses absent a reason not to. The loop
+above, not that header, closes the connection afterward — a request that closes
 still gets a reply carrying `Connection: keep-alive`, since the server intends to keep
 every OTHER connection open and this response's own bytes are unaffected by why this one
 particular connection is ending.
@@ -337,7 +336,7 @@ hummus = (request :: http.Request) -> http.Response => <
 
 Every constructor above sends **only** the headers it was given, plus two generated ones:
 `content-length`, counted in bytes (`Text.size`), and `connection: keep-alive` — see
-[Keep-alive](#keep-alive) for what actually decides whether the connection stays open. A
+[Keep-alive](#keep-alive) for what decides whether the connection stays open. A
 `content-type` comes from the three-argument overload — a program sets its own, the way it
 sets any other header. `Response.reply(OK, "x")` sends exactly
 `HTTP/1.1 200 OK\r\ncontent-length: 1\r\nconnection: keep-alive\r\n\r\nx`.
