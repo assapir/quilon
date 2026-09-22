@@ -878,3 +878,223 @@ fn test_an_unrelated_at_prefixed_name_still_reports_undefined() {
     let err = check_ok("^ = () -> Num => < @bogus() >").unwrap_err();
     assert!(matches!(err, TypeError::UndefinedVariable { .. }));
 }
+
+/// Lex, parse, and link `src` (real corelib modules, since `net.@tcpServe` only exists
+/// through `<< core.net`), then check it — what a fiber-sharing test needs, unlike
+/// `check_ok`'s bare (unlinked) source.
+fn check_linked(src: &str) -> Result<(), TypeError> {
+    let tokens = Lexer::tokenize(src).unwrap();
+    let program = parse(&tokens).unwrap();
+    let (program, _sources) = crate::modules::link(program, std::path::Path::new("."), None)
+        .expect("import linking failed");
+    TypeChecker::new().check_program(&program).map(|_| ())
+}
+
+/// The binding name a fiber-sharing rejection names — panics on any other outcome, so a
+/// test asserting the WRONG binding (or no rejection at all) fails loudly rather than
+/// silently passing.
+fn shared_across_fibers_name(src: &str) -> String {
+    match check_linked(src) {
+        Err(TypeError::SharedAcrossFibers { name, .. }) => name,
+        other => panic!("expected a SharedAcrossFibers rejection, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_fiber_handler_reading_a_plain_global_is_rejected() {
+    let src = "<< core.net\n\
+               hits := 0\n\
+               ^ = () -> Num => <\n  \
+                 net.@tcpServe(\"127.0.0.1:59401\", connection => < hits == 0 ? $ : $ >)\n  \
+                 0\n\
+               >";
+    assert_eq!(shared_across_fibers_name(src), "hits");
+}
+
+#[test]
+fn test_fiber_handler_writing_a_plain_global_is_rejected() {
+    let src = "<< core.net\n\
+               hits := 0\n\
+               ^ = () -> Num => <\n  \
+                 net.@tcpServe(\"127.0.0.1:59402\", connection => < hits := hits + 1 >)\n  \
+                 0\n\
+               >";
+    assert_eq!(shared_across_fibers_name(src), "hits");
+}
+
+#[test]
+fn test_fiber_handler_touching_a_global_two_calls_deep_is_rejected() {
+    let src = "<< core.net\n\
+               hits := 0\n\
+               bump = () -> $ => < hits := hits + 1 >\n\
+               callBump = () -> $ => < bump() >\n\
+               ^ = () -> Num => <\n  \
+                 net.@tcpServe(\"127.0.0.1:59403\", connection => < callBump() >)\n  \
+                 0\n\
+               >";
+    assert_eq!(shared_across_fibers_name(src), "hits");
+}
+
+#[test]
+fn test_fiber_handler_capturing_a_local_of_the_enclosing_block_is_rejected() {
+    let src = "<< core.net\n\
+               ^ = () -> Num => <\n  \
+                 hits := 0\n  \
+                 net.@tcpServe(\"127.0.0.1:59404\", connection => < hits := hits + 1 >)\n  \
+                 0\n\
+               >";
+    assert_eq!(shared_across_fibers_name(src), "hits");
+}
+
+#[test]
+fn test_fiber_handler_reaching_an_atomic_global_is_accepted() {
+    let src = "<< core.net\n\
+               @hits := 0\n\
+               ^ = () -> Num => <\n  \
+                 net.@tcpServe(\"127.0.0.1:59405\", connection => < hits := hits + 1 >)\n  \
+                 0\n\
+               >";
+    assert!(check_linked(src).is_ok());
+}
+
+#[test]
+fn test_fiber_handler_reading_an_immutable_global_record_is_accepted_despite_its_setter() {
+    // `=` freezes the value even though `Tally` declares a `:=` setter — the deep-
+    // immutability invariant this check reuses.
+    let src = "<< core.net\n\
+               Tally = { count :: Num, bump := () => < it.count := it.count + 1 > }\n\
+               board = Tally { count = 0 }\n\
+               ^ = () -> Num => <\n  \
+                 net.@tcpServe(\"127.0.0.1:59406\", connection => < board.count == 0 ? $ : $ >)\n  \
+                 0\n\
+               >";
+    assert!(check_linked(src).is_ok());
+}
+
+#[test]
+fn test_fiber_handler_declaring_its_own_local_is_accepted() {
+    let src = "<< core.net\n\
+               ^ = () -> Num => <\n  \
+                 net.@tcpServe(\"127.0.0.1:59407\", connection => <\n    \
+                   visits := 0\n    \
+                   visits := visits + 1\n    \
+                   $\n  \
+                 >)\n  \
+                 0\n\
+               >";
+    assert!(check_linked(src).is_ok());
+}
+
+#[test]
+fn test_a_program_with_no_server_is_unaffected_by_the_fiber_sharing_check() {
+    let src = "hits := 0\n\
+               bump = () -> $ => < hits := hits + 1 >\n\
+               ^ = () -> Num => <\n  \
+                 bump()\n  \
+                 hits\n\
+               >";
+    assert!(check_linked(src).is_ok());
+}
+
+#[test]
+fn test_fiber_handler_named_by_a_local_variable_is_still_checked() {
+    // `h` is a local (non-top-level) named handler, not an inline lambda — no-hoisting
+    // means it is declared above the call that passes it, so the check must find it there.
+    let src = "<< core.net\n\
+               hits := 0\n\
+               ^ = () -> Num => <\n  \
+                 h = (connection :: net.Connection) => < hits := hits + 1 >\n  \
+                 net.@tcpServe(\"127.0.0.1:59408\", h)\n  \
+                 0\n\
+               >";
+    assert_eq!(shared_across_fibers_name(src), "hits");
+}
+
+#[test]
+fn test_fiber_handler_lookup_ignores_a_same_named_local_in_an_unrelated_closure() {
+    // `setup`'s own `h` sits earlier in `^`'s body than `wrapper`'s, but it is not
+    // `wrapper`'s `h` — the lookup must resolve the name against the call's OWN
+    // enclosing function, `wrapper`, not whichever same-named declaration comes first
+    // in a flat search of `^`'s whole body.
+    let src = "<< core.net\n\
+               count := 0\n\
+               ^ = () -> Num => <\n  \
+                 setup = () -> Bool => <\n    \
+                   h = (c :: net.Connection) => < 0 >\n    \
+                   true\n  \
+                 >\n  \
+                 wrapper = () -> Num => <\n    \
+                   h = (c :: net.Connection) => < count := count + 1 >\n    \
+                   net.@tcpServe(\"127.0.0.1:59411\", h)\n    \
+                   0\n  \
+                 >\n  \
+                 setup()\n  \
+                 wrapper()\n  \
+                 0\n\
+               >";
+    assert_eq!(shared_across_fibers_name(src), "count");
+}
+
+#[test]
+fn test_fiber_handler_capturing_an_atomic_local_of_the_enclosing_block_is_accepted() {
+    // The mirror of `test_fiber_handler_reaching_an_atomic_global_is_accepted`, one
+    // scope down: a BLOCK-local atomic binding is exactly as safe as a top-level one.
+    let src = "<< core.net\n\
+               ^ = () -> Num => <\n  \
+                 @hits := 0\n  \
+                 net.@tcpServe(\"127.0.0.1:59409\", connection => < hits := hits + 1 >)\n  \
+                 0\n\
+               >";
+    assert!(check_linked(src).is_ok());
+}
+
+#[test]
+fn test_fiber_handler_local_of_its_own_is_accepted_despite_a_same_named_local_elsewhere() {
+    // `helper`'s own `count` is a totally different binding from the handler's own
+    // `count`, declared in an unrelated sibling function of `^` — sharing a name with a
+    // local the handler itself declares must not make it look captured.
+    let src = "<< core.net\n\
+               ^ = () -> Num => <\n  \
+                 net.@tcpServe(\"127.0.0.1:59413\", connection => <\n    \
+                   count := 0\n    \
+                   count := count + 1\n    \
+                   $\n  \
+                 >)\n  \
+                 helper = () -> Num => <\n    \
+                   count := 5\n    \
+                   count\n  \
+                 >\n  \
+                 0\n\
+               >";
+    assert!(check_linked(src).is_ok());
+}
+
+#[test]
+fn test_http_serve_handler_writing_a_plain_global_is_rejected() {
+    // `http.@serve` joins `net.@tcpServe` on the same fiber-launching accept loop, so the
+    // check must reject a non-atomic global its handler writes exactly the same way.
+    let src = "<< core.http\n\
+               hits := 0\n\
+               ^ = () -> Num => <\n  \
+                 http.@serve(\"127.0.0.1:59414\", request => <\n    \
+                   hits := hits + 1\n    \
+                   http.Response.reply(http.OK, \"ok\")\n  \
+                 >)\n  \
+                 0\n\
+               >";
+    assert_eq!(shared_across_fibers_name(src), "hits");
+}
+
+#[test]
+fn test_http_serve_handler_writing_an_atomic_global_is_accepted() {
+    let src = "<< core.http\n\
+               @hits := 0\n\
+               ^ = () -> Num => <\n  \
+                 http.@serve(\"127.0.0.1:59415\", request => <\n    \
+                   hits := hits + 1\n    \
+                   http.Response.reply(http.OK, \"ok\")\n  \
+                 >)\n  \
+                 0\n\
+               >";
+    assert!(check_linked(src).is_ok());
+}
