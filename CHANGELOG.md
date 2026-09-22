@@ -244,6 +244,16 @@ All notable changes to Quilon are documented here.
   a read of one exactly like a read of a deferred local. A store into such a global still
   never forces — `@testimony := io.@readStdin()` stays accepted. See
   `docs/concurrency/README.md` and `examples/deferred_global.qn`. Closes #445.
+- **A match arm's binding is no longer corrupted by a nested match inside it reusing the
+  same name.** `| Ok(body) => (second ? | Ok(body) => body | NotOk(reason) => reason) +
+  body` used to read the outer `body` back as whatever the inner `Ok(body)` arm's own slot
+  held — uninitialized on any run where that inner arm did not execute — because codegen's
+  variable-name map had no per-arm scope: a nested arm's bind overwrote the outer name's
+  slot and nothing restored it once the nested match was done. Each arm's bindings are now
+  restored to what they held before the arm, once its body is emitted, so an outer name
+  keeps reading its own value everywhere in its own arm regardless of what a nested match
+  inside it binds. See `docs/expressions/pattern-matching.md` and
+  `examples/nested_match.qn`. Closes #467.
 
 ## 0.11.0 "Rackham" — 2026-09-08
 

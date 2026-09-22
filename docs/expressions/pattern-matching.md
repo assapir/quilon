@@ -35,4 +35,9 @@ A ternary in an arm's body (`a ? b : c`) stays bare — it is a different constr
 or a ternary branch is already delimited the same way and needs no parentheses of its own.
 See [QN114](../tooling/errors.md#qn114--match-used-as-a-match-arm-body-without-parentheses).
 
+A nested match's arm may bind a name an outer arm already bound (`Grumpy(n)` above, reused
+as a nested arm's own binding); that inner binding shadows the outer one only for the
+extent of the inner arm, leaving the outer binding unchanged everywhere else in the outer
+arm (see `examples/nested_match.qn`).
+
 (See `examples/pattern_match.qn`.)

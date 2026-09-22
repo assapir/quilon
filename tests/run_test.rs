@@ -1265,6 +1265,50 @@ fn run_parenthesized_nested_match_as_arm_body() {
 }
 
 #[test]
+fn run_match_arm_binding_shadowed_by_nested_ok_arm_leaves_outer_binding_intact() {
+    // Regression: a nested match's arm reusing an outer arm's bound name corrupted the
+    // OUTER binding once control returned to it (codegen's flat variable-name map never
+    // restored the outer slot after the inner arm's own bind overwrote it). Two squirrels
+    // each stash either a `walnut` (`Ok`) or an excuse (`NotOk`); the second squirrel's
+    // stash is checked from inside the first's `Ok` arm, reusing `walnut` — and the first
+    // squirrel's own `walnut` (10) must still read as 10 once the inner match (20) is done:
+    // 20 + 10 = 30.
+    let src = r#"
+tallySquirrels = (first :: Result, second :: Result) -> Num => <
+  first ?
+    | Ok(walnut) => (second ?
+        | Ok(walnut)  => walnut
+        | NotOk(sulk) => sulk) + walnut
+    | NotOk(sulk) => sulk
+>
+
+^ = () -> Num => < tallySquirrels(Ok(10), NotOk(20)) >
+"#;
+    assert_exit(src, 30);
+}
+
+#[test]
+fn run_match_arm_binding_shadowed_by_nested_notok_arm_leaves_outer_binding_intact() {
+    // The mirror direction: the OUTER arm sharing a name with a nested arm is the
+    // `NotOk` one. Two grumpy cats each either purr (`Ok`) or hiss a `complaint`
+    // (`NotOk`); the second cat's mood is checked from inside the first's `NotOk` arm,
+    // reusing `complaint` — and the first cat's own `complaint` (7) must still read as 7
+    // once the inner match (3) is done: 3 + 7 = 10.
+    let src = r#"
+tallyCats = (first :: Result, second :: Result) -> Num => <
+  first ?
+    | Ok(purr) => purr
+    | NotOk(complaint) => (second ?
+        | Ok(purr)         => purr
+        | NotOk(complaint) => complaint) + complaint
+>
+
+^ = () -> Num => < tallyCats(NotOk(7), NotOk(3)) >
+"#;
+    assert_exit(src, 10);
+}
+
+#[test]
 fn run_named_record_sum_payload_reads_field() {
     // A named RECORD nested as a sum variant's payload: construct `Box(Point{..})`,
     // match `Box(p)`, and read the record's fields back at their real type. 3 + 4 = 7.

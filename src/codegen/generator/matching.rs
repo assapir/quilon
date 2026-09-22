@@ -7,6 +7,21 @@
 use super::tco::BodyPosition;
 use super::*;
 
+/// A pattern-bound name's pre-`bind_pattern` state, captured so [`CodeGenerator::bind_pattern`]'s
+/// caller can restore it once the arm's body is done. Without this, a nested match inside one
+/// arm that binds the same name (`| Ok(body) => (second ? | Ok(body) => ... | ...)`) leaves
+/// its own slot in every one of these maps behind in the outer arm — so a later read of the
+/// outer name resolves to the inner arm's slot, uninitialized on whichever runtime path did not
+/// take that inner arm. Mirrors `inline_lambda`'s parameter-shadowing save/restore
+/// (`arrays.rs`), extended with the two maps a constructor payload binding may also set.
+pub(super) struct SavedPatternBinding<'ctx> {
+    name: String,
+    variable: Option<(PointerValue<'ctx>, BasicTypeEnum<'ctx>)>,
+    var_type: Option<Type>,
+    record_fields: Option<Vec<String>>,
+    named_type: Option<String>,
+}
+
 impl<'ctx> CodeGenerator<'ctx> {
     /// Lower a `?`/`|` match (`scrutinee ? | pat => body ...`), emitting each arm's body at
     /// `position`. `match_expression` is the whole `Expression::Match` node (used only to look
@@ -91,11 +106,14 @@ impl<'ctx> CodeGenerator<'ctx> {
             // dropped along with whatever it declares.
             self.set_debug_loc(arm.pattern.span());
 
-            // Bind pattern variables
-            self.bind_pattern(&arm.pattern, match_val, scrutinee)?;
+            // Bind pattern variables — restored once this arm's body is emitted, so a
+            // nested match inside it that binds the same name cannot leak its slot past
+            // this arm (see `SavedPatternBinding`).
+            let saved_bindings = self.bind_pattern(&arm.pattern, match_val, scrutinee)?;
 
             let arm_result = self.emit_body(position, &arm.body)?;
             self.end_di_scope(saved_arm_scope);
+            self.restore_pattern_bindings(saved_bindings);
             if let Some(arm_val) = arm_result {
                 any_value_arm = true;
                 self.builder
@@ -297,12 +315,69 @@ impl<'ctx> CodeGenerator<'ctx> {
         }
     }
 
+    /// Names this pattern's own [`bind_pattern`] call is about to bind: the identifier
+    /// itself, or a constructor's identifier arguments (a constructor's sub-patterns are
+    /// always irrefutable — a binding or `_` — so this never needs to recurse further).
+    fn pattern_binding_names(pattern: &Pattern) -> Vec<&str> {
+        match pattern {
+            Pattern::Identifier { name, .. } => vec![name.as_str()],
+            Pattern::Constructor { arguments, .. } => arguments
+                .iter()
+                .filter_map(|arg| match arg {
+                    Pattern::Identifier { name, .. } => Some(name.as_str()),
+                    _ => None,
+                })
+                .collect(),
+            Pattern::Wildcard { .. } | Pattern::Number { .. } => vec![],
+        }
+    }
+
+    fn save_pattern_binding(&self, name: &str) -> SavedPatternBinding<'ctx> {
+        SavedPatternBinding {
+            name: name.to_string(),
+            variable: self.variables.get(name).copied(),
+            var_type: self.var_types.get(name).cloned(),
+            record_fields: self.record_types.get(name).cloned(),
+            named_type: self.var_named_types.get(name).cloned(),
+        }
+    }
+
+    /// Undo a `bind_pattern` call: put every map it may have touched back to what it held
+    /// for that name beforehand (absent, if it was absent), so an arm's binding is visible
+    /// only inside that arm — see [`SavedPatternBinding`].
+    pub(super) fn restore_pattern_bindings(&mut self, saved: Vec<SavedPatternBinding<'ctx>>) {
+        fn restore<V>(map: &mut HashMap<String, V>, name: String, value: Option<V>) {
+            match value {
+                Some(value) => {
+                    map.insert(name, value);
+                }
+                None => {
+                    map.remove(&name);
+                }
+            }
+        }
+        for entry in saved {
+            restore(&mut self.variables, entry.name.clone(), entry.variable);
+            restore(&mut self.var_types, entry.name.clone(), entry.var_type);
+            restore(
+                &mut self.record_types,
+                entry.name.clone(),
+                entry.record_fields,
+            );
+            restore(&mut self.var_named_types, entry.name, entry.named_type);
+        }
+    }
+
     pub(super) fn bind_pattern(
         &mut self,
         pattern: &Pattern,
         value: BasicValueEnum<'ctx>,
         scrutinee: &Expression,
-    ) -> Result<(), String> {
+    ) -> Result<Vec<SavedPatternBinding<'ctx>>, String> {
+        let saved: Vec<SavedPatternBinding<'ctx>> = Self::pattern_binding_names(pattern)
+            .into_iter()
+            .map(|name| self.save_pattern_binding(name))
+            .collect();
         match pattern {
             Pattern::Identifier { name, span } => {
                 // Bind the value to the identifier
@@ -318,7 +393,6 @@ impl<'ctx> CodeGenerator<'ctx> {
                 if let Some(qty) = self.oracle.expression_type(scrutinee) {
                     self.declare_variable(name, alloca, qty, span, None);
                 }
-                Ok(())
             }
 
             Pattern::Constructor {
@@ -392,10 +466,10 @@ impl<'ctx> CodeGenerator<'ctx> {
                         }
                     }
                 }
-                Ok(())
             }
 
-            _ => Ok(()), // Other patterns don't bind variables
+            _ => {} // Other patterns don't bind variables
         }
+        Ok(saved)
     }
 }
