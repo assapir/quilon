@@ -109,14 +109,18 @@ fn all_type_declarations<'a>(program: &'a Program) -> Vec<&'a TypeDeclaration> {
     found
 }
 
-/// A saved (possibly-absent) binding for one name, captured so `inline_lambda` can
-/// restore whatever a lambda parameter shadowed: its `variables` entry (alloca + LLVM
-/// type) and its `var_types` entry (Quilon type for overload mangling).
-type SavedBinding<'ctx> = (
-    String,
-    Option<(PointerValue<'ctx>, BasicTypeEnum<'ctx>)>,
-    Option<Type>,
-);
+/// One name's entry (if any) in every per-variable map the generator tracks, captured so
+/// a shadowing binding can restore exactly what it shadowed once its own scope ends.
+/// Shared by `inline_lambda`'s lambda-parameter shadowing (`arrays.rs`) and
+/// `bind_pattern`'s match-arm shadowing (`matching.rs`) — see [`CodeGenerator::save_binding`]
+/// and [`CodeGenerator::restore_bindings`].
+struct SavedBinding<'ctx> {
+    name: String,
+    variable: Option<(PointerValue<'ctx>, BasicTypeEnum<'ctx>)>,
+    var_type: Option<Type>,
+    record_fields: Option<Vec<String>>,
+    named_type: Option<String>,
+}
 
 /// A closure's call ABI: its source-parameter LLVM types and its return type. The
 /// implicit trailing environment pointer is NOT included (every closure call appends it).
@@ -1098,6 +1102,43 @@ impl<'ctx> CodeGenerator<'ctx> {
         self.var_named_types = frame.var_named_types;
         self.var_types = frame.var_types;
         self.boxed_vars = frame.boxed_vars;
+    }
+
+    /// Capture `name`'s current entry (if any) in every per-variable map, before a
+    /// shadowing binding overwrites it — pair with [`Self::restore_bindings`].
+    fn save_binding(&self, name: &str) -> SavedBinding<'ctx> {
+        SavedBinding {
+            name: name.to_string(),
+            variable: self.variables.get(name).copied(),
+            var_type: self.var_types.get(name).cloned(),
+            record_fields: self.record_types.get(name).cloned(),
+            named_type: self.var_named_types.get(name).cloned(),
+        }
+    }
+
+    /// Undo whatever shadowed each saved name: put every map back to what it held
+    /// beforehand (absent, if it was absent there).
+    fn restore_bindings(&mut self, saved: Vec<SavedBinding<'ctx>>) {
+        fn restore<V>(map: &mut HashMap<String, V>, name: String, value: Option<V>) {
+            match value {
+                Some(value) => {
+                    map.insert(name, value);
+                }
+                None => {
+                    map.remove(&name);
+                }
+            }
+        }
+        for entry in saved {
+            restore(&mut self.variables, entry.name.clone(), entry.variable);
+            restore(&mut self.var_types, entry.name.clone(), entry.var_type);
+            restore(
+                &mut self.record_types,
+                entry.name.clone(),
+                entry.record_fields,
+            );
+            restore(&mut self.var_named_types, entry.name, entry.named_type);
+        }
     }
 
     /// Suspend the enclosing function (frame, insert block, current function) to emit a

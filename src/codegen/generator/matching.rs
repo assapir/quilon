@@ -91,11 +91,14 @@ impl<'ctx> CodeGenerator<'ctx> {
             // dropped along with whatever it declares.
             self.set_debug_loc(arm.pattern.span());
 
-            // Bind pattern variables
-            self.bind_pattern(&arm.pattern, match_val, scrutinee)?;
+            // Bind pattern variables — restored once this arm's body is emitted, so a
+            // nested match inside it that binds the same name cannot leak its slot past
+            // this arm (see `CodeGenerator::save_binding`).
+            let saved_bindings = self.bind_pattern(&arm.pattern, match_val, scrutinee)?;
 
             let arm_result = self.emit_body(position, &arm.body)?;
             self.end_di_scope(saved_arm_scope);
+            self.restore_bindings(saved_bindings);
             if let Some(arm_val) = arm_result {
                 any_value_arm = true;
                 self.builder
@@ -314,12 +317,33 @@ impl<'ctx> CodeGenerator<'ctx> {
         }
     }
 
+    /// Names this pattern's own [`bind_pattern`] call is about to bind: the identifier
+    /// itself, or a constructor's identifier arguments (a constructor's sub-patterns are
+    /// always irrefutable — a binding or `_` — so this never needs to recurse further).
+    fn pattern_binding_names(pattern: &Pattern) -> Vec<&str> {
+        match pattern {
+            Pattern::Identifier { name, .. } => vec![name.as_str()],
+            Pattern::Constructor { arguments, .. } => arguments
+                .iter()
+                .filter_map(|arg| match arg {
+                    Pattern::Identifier { name, .. } => Some(name.as_str()),
+                    _ => None,
+                })
+                .collect(),
+            Pattern::Wildcard { .. } | Pattern::Number { .. } | Pattern::Text { .. } => vec![],
+        }
+    }
+
     pub(super) fn bind_pattern(
         &mut self,
         pattern: &Pattern,
         value: BasicValueEnum<'ctx>,
         scrutinee: &Expression,
-    ) -> Result<(), String> {
+    ) -> Result<Vec<SavedBinding<'ctx>>, String> {
+        let saved: Vec<SavedBinding<'ctx>> = Self::pattern_binding_names(pattern)
+            .into_iter()
+            .map(|name| self.save_binding(name))
+            .collect();
         match pattern {
             Pattern::Identifier { name, span } => {
                 // Bind the value to the identifier
@@ -335,7 +359,6 @@ impl<'ctx> CodeGenerator<'ctx> {
                 if let Some(qty) = self.oracle.expression_type(scrutinee) {
                     self.declare_variable(name, alloca, qty, span, None);
                 }
-                Ok(())
             }
 
             Pattern::Constructor {
@@ -409,10 +432,10 @@ impl<'ctx> CodeGenerator<'ctx> {
                         }
                     }
                 }
-                Ok(())
             }
 
-            _ => Ok(()), // Other patterns don't bind variables
+            _ => {} // Other patterns don't bind variables
         }
+        Ok(saved)
     }
 }
