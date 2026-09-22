@@ -973,6 +973,15 @@ finalReplyWire = (http10 :: Bool, request :: Request, response :: Response) -> T
         wireBytes, shouldCloseAfter(http10, request, response) ? "close" : "keep-alive")
 >
 
+~ The wire bytes for an empty-body `status` reply that always closes the connection —
+~ `serveRequests`'s own malformed-request-line/oversized-body/malformed-framing answers,
+~ written when there is no request left worth reading further on this connection.
+~ `Response.reply(status)` on its own carries no `connection` header (see `statusReply`'s
+~ own doc); this is where such a reply gets its `close` before being written.
+closeWire = (status :: Status) -> Text => <
+  insertConnectionHeader(Response.reply(status).wire(), "close")
+>
+
 ~ `core.http`'s connection handler: the Quilon half of the `http.@serve` lowering, called
 ~ once per accepted connection by the fixed-shape thunk codegen builds over `handler` and
 ~ `options`. `serveRequests` is the loop proper — self-recursive, since mutual recursion
@@ -1023,9 +1032,9 @@ serveRequests = (
           connection, accumulated, transferEncoding, contentLength, options.maxBodySize,
           options.idleTimeout) ?
             | Complete(body) => finishWithBody(body)
-            | TooLarge     => connection.@write(Response.reply(ContentTooLarge).wire())
-            | Malformed(_) => connection.@write(Response.reply(BadRequest).wire())
-            | Incomplete   => connection.@write(Response.reply(BadRequest).wire()))
+            | TooLarge     => connection.@write(closeWire(ContentTooLarge))
+            | Malformed(_) => connection.@write(closeWire(BadRequest))
+            | Incomplete   => connection.@write(closeWire(BadRequest)))
       : continueUnlessClosing(http10, request, handler(request), leftoverAfterHead(accumulated))
   >
 
@@ -1033,7 +1042,7 @@ serveRequests = (
     | NotOk(_)        => $
     | Ok(accumulated) =>
         (Request.parse(accumulated.slice(0, blankLineIndex(accumulated)), "") ?
-          | NotOk(_)    => connection.@write(Response.reply(BadRequest).wire())
+          | NotOk(_)    => connection.@write(closeWire(BadRequest))
           | Ok(request) => handleParsedRequest(accumulated, isHttp10Request(accumulated), request))
 >
 
@@ -1939,4 +1948,15 @@ test.describe("finalReplyWire", () => <
     written = finalReplyWire(true, request, response)
     expect(Response { raw = written }.headers().value("connection"), equals("keep-alive"))
   >)
+>)
+
+test.describe("closeWire", () => <
+  test.it("the 413 (ContentTooLarge) reply carries its own connection: close", () => <
+    written = closeWire(ContentTooLarge)
+    expect(Response { raw = written }.headers().value("connection"), equals("close"))
+    expect(written, contains("413 Content Too Large\r\n"))
+  >)
+
+  test.it("a 400 (BadRequest) reply carries its own connection: close", () =>
+    expect(Response { raw = closeWire(BadRequest) }.headers().value("connection"), equals("close")))
 >)

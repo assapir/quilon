@@ -599,6 +599,7 @@ fn importing_core_http_contributes_exactly_this_surface() {
         "core.http.shouldCloseAfter",
         "core.http.insertConnectionHeader",
         "core.http.finalReplyWire",
+        "core.http.closeWire",
         "core.http.classifyBodyProgress",
         "core.http.receiveHead",
         "core.http.readBody",
@@ -1558,6 +1559,7 @@ fn the_corelib_http_suite_passes_when_the_module_is_the_file_named() {
         "shouldCloseAfter",
         "insertConnectionHeader",
         "finalReplyWire",
+        "closeWire",
     ] {
         assert!(
             out.stdout.contains(group),
@@ -1566,7 +1568,7 @@ fn the_corelib_http_suite_passes_when_the_module_is_the_file_named() {
         );
     }
     assert!(
-        out.stdout.contains("153 passed, 0 failed"),
+        out.stdout.contains("155 passed, 0 failed"),
         "unexpected summary:\n{}",
         out.stdout
     );
