@@ -288,6 +288,44 @@ fn test_result_parameter_bound_but_uninformed_and_fed_into_a_concrete_function_c
 }
 
 #[test]
+fn test_result_parameter_forwarded_into_another_result_parameter_is_not_falsely_rejected() {
+    // Regression: `slot_is_unsafe_for_generic` once treated ANY non-`Generic`,
+    // non-`Num` slot as dangerous, including a slot that is ITSELF a `Result` — but
+    // `Result` always packs into its own uniform `{ ptr, i64 }` layout regardless of
+    // payload, so forwarding an equally-unpinned payload into another `:: Result`
+    // parameter (here, `peel`'s own recursive call) forces no real representation
+    // decision and must stay the accepted forwarding gap, not a new rejection.
+    assert!(
+        check_ok(
+            "peel = (r :: Result) -> Num => <\n  \
+           r ? | Ok(inner) => peel(inner) | NotOk(e) => 0\n\
+         >\n\
+         relay = (r :: Result) -> Num => < peel(r) >\n\
+         ^ = () -> Num => < 0 >"
+        )
+        .is_ok()
+    );
+}
+
+#[test]
+fn test_result_parameter_forwarded_into_a_constructors_result_field_is_not_falsely_rejected() {
+    // The same exemption through a user sum-variant constructor whose OWN declared
+    // field is `Result`, not a genuinely concrete type.
+    assert!(
+        check_ok(
+            "Wrapper = Wrap(Result) / Empty\n\
+         useWrap = (w :: Wrapper) -> Num => < 1 >\n\
+         peel = (r :: Result) -> Num => <\n  \
+           r ? | Ok(inner) => useWrap(Wrap(inner)) | NotOk(e) => 0\n\
+         >\n\
+         relay = (r :: Result) -> Num => < peel(r) >\n\
+         ^ = () -> Num => < 0 >"
+        )
+        .is_ok()
+    );
+}
+
+#[test]
 fn test_result_parameter_shadow_of_an_unrelated_sibling_local_does_not_hide_a_real_match() {
     // Regression: two SIBLING nested functions each declare their own, unrelated local
     // named `copy`; one of them happens to copy the outer `result` alias into its OWN

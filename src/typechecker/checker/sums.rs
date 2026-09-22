@@ -310,9 +310,16 @@ impl TypeChecker {
     /// own to read) — the forwarded-to parameter is then left `Generic` exactly like a
     /// never-called one, and `oracle::value_repr_type` renders it as `Num`'s `f64`
     /// regardless of its real payload. This is caught only when the forwarded-to
-    /// parameter's OWN body feeds it into a concrete-typed constructor (the guard
-    /// above); a forwarded-to parameter merely returned, or used in arithmetic, is not
-    /// — the same residual risk any other `Generic` default here has always carried.
+    /// parameter's OWN body feeds it into a concrete-typed constructor or a plain
+    /// function call ([`Self::slot_is_unsafe_for_generic`]'s guard, deliberately NOT
+    /// resolving an OVERLOADED name's own member — see its doc comment); a forwarded-to
+    /// parameter merely returned, used in arithmetic, or itself fed into an overloaded
+    /// call is not. The residual risk differs by shape: returned or used in arithmetic,
+    /// it silently computes as if it really were `Num`; fed into an overloaded call
+    /// (or any other statically-fixed non-`Num` slot this guard doesn't reach), the
+    /// mismatch is still an internal error at codegen (LLVM's own module verification,
+    /// or `coerce_payload`), not a silent wrong answer — the same class of failure this
+    /// whole fix exists to catch earlier, just not caught here.
     /// Closing it fully would need either tracing a payload's type through every call in
     /// between (undoing the very whole-program mis-attribution risk the narrowing above
     /// exists to avoid) or rejecting every such forwarding parameter outright (which
@@ -1080,7 +1087,16 @@ impl TypeChecker {
     /// so a payload forwarded into an overload set keeps the same accepted, non-widened
     /// forwarding gap it already had.
     fn slot_is_unsafe_for_generic(&self, callee: &str, position: usize) -> bool {
-        let concrete_non_num = |field: &Type| !matches!(field, Type::Generic { .. } | Type::Num);
+        // A `Result` slot — specialized or not — shares `Result`'s own ONE canonical
+        // `{ ptr, i64 }` representation regardless of payload (`pack_result_payload`),
+        // so passing an equally-unpinned payload into it forces no REAL representation
+        // decision the way a genuinely concrete (`Text`, a record, …) field does; this
+        // is the accepted Result-to-Result forwarding gap this pass already documents,
+        // not a new concrete-slot danger.
+        let concrete_non_num = |field: &Type| {
+            !matches!(field, Type::Generic { .. } | Type::Num)
+                && !matches!(field, Type::Sum { name, .. } if name == crate::ast::RESULT_TYPE_NAME)
+        };
         self.sum_types.values().any(|sum_type| {
             let Type::Sum { variants, .. } = sum_type else {
                 return false;
