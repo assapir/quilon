@@ -44,6 +44,6 @@ See [QN114](../tooling/errors.md#qn114--match-used-as-a-match-arm-body-without-p
 A nested match's arm may bind a name an outer arm already bound (`Grumpy(n)` above, reused
 as a nested arm's own binding); that inner binding shadows the outer one only for the
 extent of the inner arm, leaving the outer binding unchanged everywhere else in the outer
-arm (see `examples/nested_match.qn`).
+arm (see `examples/pattern_match.qn`).
 
-(See `examples/pattern_match.qn`, `examples/text_match.qn`, and `examples/nested_match.qn`.)
+(See `examples/pattern_match.qn`.)

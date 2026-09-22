@@ -106,7 +106,7 @@ fn run_pattern_match_wildcard() {
 
 #[test]
 fn run_pattern_match_text_literal() {
-    // examples/text_match.qn -> dispatches on a `Text` scrutinee against literal arms.
+    // examples/pattern_match.qn -> dispatches on a `Text` scrutinee against literal arms.
     assert_exit(
         "dispatch = (command :: Text) -> Num => <\n  command ?\n    | \"go\"   => 1\n    | \"stop\" => 2\n    | _      => 0\n>\n^ = () -> Num => < dispatch(\"stop\") >",
         2,
