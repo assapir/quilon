@@ -27,7 +27,7 @@ evergreen — the durable record that survives across contributors and AI-agent 
 | **M5** | ~~Implicit parallelism (CPU) — parallel array methods from inferred purity~~ | 💤 Deprioritized |
 | **M6** | **Concurrency runtime — colorless implicit futures ([#120]) — THE core deliverable.** Stage 1: single-threaded fibers + reactor; Stage 2: M:N work-stealing + cross-thread GC | 🔨 In progress (Stage 1 ✅) — **core** |
 | **M7** | Polish — formatter/linter, corelib, debug info | 🔨 In progress |
-| **M8** | **Web — a native HTTP server built on the M6 runtime** | 🔨 In progress (server ships; keep-alive, signal trap remain) |
+| **M8** | **Web — a native HTTP server built on the M6 runtime** | 🔨 In progress (server ships; signal trap remains) |
 
 Legend: ✅ complete · 🔨 in progress · ⬜ planned · 💤 deprioritized.
 
@@ -140,8 +140,7 @@ The **"then web"** half of the north star: a native HTTP server built on the M6 
 Stage 1 — one worker, a fiber per connection, one reactor wait covering every connection —
 so many in-flight connections are cheap fibers with their IO overlapped implicitly ([#435]).
 Stage 2 turns that one worker into many without changing server code. What remains on the
-server: keep-alive, a signal trap for graceful shutdown ([#453]), and a router. Its
-on-ramps:
+server: a signal trap for graceful shutdown ([#453]), and a router. Its on-ramps:
 
 | Item | Status |
 |------|--------|
