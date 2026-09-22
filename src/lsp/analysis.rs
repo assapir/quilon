@@ -435,7 +435,7 @@ impl Resolver {
                     self.pattern_bindings(argument);
                 }
             }
-            Pattern::Number { .. } | Pattern::Wildcard { .. } => {}
+            Pattern::Number { .. } | Pattern::Text { .. } | Pattern::Wildcard { .. } => {}
         }
     }
 }
@@ -1264,7 +1264,7 @@ fn bind_pattern(pattern: &Pattern, scopes: &mut [HashMap<String, CompletionItem>
                 bind_pattern(argument, scopes);
             }
         }
-        Pattern::Number { .. } | Pattern::Wildcard { .. } => {}
+        Pattern::Number { .. } | Pattern::Text { .. } | Pattern::Wildcard { .. } => {}
     }
 }
 

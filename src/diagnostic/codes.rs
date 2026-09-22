@@ -61,6 +61,7 @@ codes! {
     NameGluedToSymbol = 113 => "disallowed character glued to a name",
     NestedMatchNeedsParens = 114 => "match used as a match-arm body without parentheses",
     EarlyBlockClose = 115 => "a line-final `>` closed a block earlier than intended",
+    InterpolatedTextPattern = 116 => "text pattern with interpolation",
 
     // Family 2 — module resolution and linking
     AtDeclarationOutsideCorelib = 200 => "`@` primitive declared outside the corelib",
@@ -124,6 +125,7 @@ codes! {
     AtomicBindingNotMutable = 347 => "atomic binding declared without `:=`",
     AtomicBindingUsedBare = 348 => "atomic binding used with `@` after its declaration",
     AtomicReassignmentForced = 349 => "atomic binding reassignment waits on a deferred value",
+    SharedAcrossFibers = 350 => "`:=` value shared across fibers",
 
     // Family 4 — codegen and build
     CodegenFailed = 400 => "code generation failed",
