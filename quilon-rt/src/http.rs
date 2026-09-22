@@ -1,13 +1,15 @@
 // SPDX-License-Identifier: GPL-2.0-only WITH Classpath-exception-2.0
 
-//! HTTP response body framing — the byte-level work `core.http`'s `Response.body()` and
-//! `Request.send()` cannot do in Quilon. A chunk boundary and a `Content-Length` count both
-//! cut BYTES, while `Text` slices by GRAPHEME, so a server that ends a chunk inside a
-//! multi-byte character has no Quilon-reachable split point (the body would carry a
-//! replacement character where the boundary fell). [`__http_frame_body`] does the whole
-//! byte-level job instead: locate the head/body blank line, then dechunk, take exactly
-//! `Content-Length` bytes, or close-delimit. Head parsing (status line, headers) stays
-//! Quilon, in `corelib/http.qn`.
+//! HTTP body framing — the byte-level work `core.http`'s `Response.body()`,
+//! `Request.send()`, and the server's own `serveConnection` cannot do in Quilon. A chunk
+//! boundary and a `Content-Length` count both cut BYTES, while `Text` slices by GRAPHEME,
+//! so a server that ends a chunk inside a multi-byte character has no Quilon-reachable
+//! split point (the body would carry a replacement character where the boundary fell).
+//! [`__http_frame_body`] frames a REPLY already fully in hand (the client waits for the
+//! peer to close before calling it); [`__http_body_progress`] answers the same framing
+//! question incrementally for a REQUEST body still arriving, so `corelib/http.qn`'s own
+//! `readBody` knows when to stop reading. Head parsing (status/request line, headers)
+//! stays Quilon either way.
 
 use crate::deferred::QlResult;
 
@@ -40,32 +42,84 @@ fn is_chunked(transfer_encoding: &str) -> bool {
         .is_some_and(|token| token.trim().eq_ignore_ascii_case("chunked"))
 }
 
-/// Dechunk `body`: a hex size line (an optional `;extension` ignored), exactly that many
-/// data bytes, a terminating CRLF, repeated; a `0` chunk ends the data, and any trailers up
-/// to the final blank line are dropped without being parsed. A non-hex size, a missing
-/// CRLF, or data ending early is malformed framing.
-fn dechunk(body: &[u8]) -> Result<Vec<u8>, &'static str> {
+/// The three things [`dechunk_progress`]/[`body_progress`] can determine about a REQUEST
+/// body still arriving, unlike [`frame_body`]'s reply — which always sees the whole thing,
+/// since the client waits for the peer to close before framing anything: framed already
+/// (`Complete`), more bytes needed (`Incomplete`), too big for the server's own cap
+/// (`TooLarge`), or broken beyond repair (`Malformed`). [`dechunk`] reuses the same
+/// state machine with an unbounded cap, where `Incomplete`/`TooLarge` fold into the one
+/// error a reply already fully in hand has no room to distinguish them from.
+enum BodyProgress {
+    Complete(Vec<u8>),
+    Incomplete,
+    TooLarge,
+    Malformed(&'static str),
+}
+
+/// Dechunk a hex size line (an optional `;extension` ignored), exactly that many data
+/// bytes, a terminating CRLF, repeated; a `0` chunk ends the data, and any trailers up to
+/// the final blank line are dropped without being parsed. Stops the moment the decoded
+/// total would exceed `max_body_size` — before waiting for a chunk bigger than the whole
+/// cap to finish arriving — and reports data that has not finished arriving yet
+/// (`Incomplete`) apart from data that will never parse (`Malformed`).
+fn dechunk_progress(body: &[u8], max_body_size: usize) -> BodyProgress {
     let mut decoded = Vec::new();
     let mut rest = body;
     loop {
-        let line_end = find_subslice(rest, b"\r\n").ok_or("malformed chunked framing")?;
+        let Some(line_end) = find_subslice(rest, b"\r\n") else {
+            return BodyProgress::Incomplete;
+        };
         let size_field = &rest[..line_end];
         let size_hex = match size_field.iter().position(|&byte| byte == b';') {
             Some(at) => &size_field[..at],
             None => size_field,
         };
-        let size_text = std::str::from_utf8(size_hex).map_err(|_| "malformed chunked framing")?;
-        let size =
-            usize::from_str_radix(size_text.trim(), 16).map_err(|_| "malformed chunked framing")?;
+        let Ok(size_text) = std::str::from_utf8(size_hex) else {
+            return BodyProgress::Malformed("malformed chunked framing");
+        };
+        let Ok(size) = usize::from_str_radix(size_text.trim(), 16) else {
+            return BodyProgress::Malformed("malformed chunked framing");
+        };
         rest = &rest[line_end + 2..];
         if size == 0 {
-            return Ok(decoded);
+            return BodyProgress::Complete(decoded);
         }
-        if rest.len() < size + 2 || &rest[size..size + 2] != b"\r\n" {
-            return Err("malformed chunked framing");
+        // `checked_add`, not `decoded.len() + size`: a crafted size near `usize::MAX` (a
+        // valid hex parse) would otherwise wrap past `max_body_size` undetected, and the
+        // `size + 2` below would wrap into a slice that panics rather than reporting
+        // `TooLarge`. Either overflow already means "bigger than any real cap".
+        let over_cap = match decoded.len().checked_add(size) {
+            Some(total) => total > max_body_size,
+            None => true,
+        };
+        if over_cap {
+            return BodyProgress::TooLarge;
+        }
+        let Some(chunk_and_terminator) = size.checked_add(2) else {
+            return BodyProgress::TooLarge;
+        };
+        if rest.len() < chunk_and_terminator {
+            return BodyProgress::Incomplete;
+        }
+        if &rest[size..chunk_and_terminator] != b"\r\n" {
+            return BodyProgress::Malformed("malformed chunked framing");
         }
         decoded.extend_from_slice(&rest[..size]);
-        rest = &rest[size + 2..];
+        rest = &rest[chunk_and_terminator..];
+    }
+}
+
+/// Dechunk a reply already fully in hand: [`dechunk_progress`] with no cap
+/// (`usize::MAX`), so `TooLarge` cannot occur except from the same size-overflow
+/// [`dechunk_progress`] itself treats as malformed, and `Incomplete` — data that would
+/// finish arriving given more bytes, which a reply already fully received never will —
+/// means the framing was truncated, exactly as malformed as anything else `dechunk`
+/// itself reports.
+fn dechunk(body: &[u8]) -> Result<Vec<u8>, &'static str> {
+    match dechunk_progress(body, usize::MAX) {
+        BodyProgress::Complete(decoded) => Ok(decoded),
+        BodyProgress::Incomplete | BodyProgress::TooLarge => Err("malformed chunked framing"),
+        BodyProgress::Malformed(reason) => Err(reason),
     }
 }
 
@@ -105,6 +159,80 @@ fn frame_body(
         };
     }
     QlResult::ok(body)
+}
+
+/// The framing rule `core.http`'s connection handler applies to a REQUEST body still being
+/// read, given `raw` (the connection's own bytes received so far, from the very first
+/// one): `chunked` takes precedence over `Content-Length`, mirroring [`frame_body`]'s own
+/// rule. Never called with neither header present — a method with no meaning for a body,
+/// or one given neither header, has no body to read at all, decided in `corelib/http.qn`
+/// before this runs.
+fn body_progress(
+    raw: &[u8],
+    transfer_encoding: &str,
+    content_length: &str,
+    max_body_size: usize,
+) -> BodyProgress {
+    let Some((at, spelling_len)) = find_blank_line(raw) else {
+        return BodyProgress::Incomplete;
+    };
+    let body = &raw[at + spelling_len..];
+    if is_chunked(transfer_encoding) {
+        return dechunk_progress(body, max_body_size);
+    }
+    // A `Transfer-Encoding` present but not (ending in) `chunked` names an encoding this
+    // server does not decode — distinct from `content_length` simply being malformed, so
+    // the reason names what is actually wrong rather than blaming an absent header.
+    if !transfer_encoding.is_empty() {
+        return BodyProgress::Malformed("unsupported Transfer-Encoding");
+    }
+    match content_length.trim().parse::<usize>() {
+        Ok(expected) if expected > max_body_size => BodyProgress::TooLarge,
+        Ok(expected) if body.len() >= expected => BodyProgress::Complete(body[..expected].to_vec()),
+        Ok(_) => BodyProgress::Incomplete,
+        Err(_) => BodyProgress::Malformed("malformed Content-Length"),
+    }
+}
+
+/// `core.http.bodyProgress(accumulated, transferEncoding, contentLength, maxBodySize) ->
+/// Result`: the native primitive behind `serveConnection`'s own body-reading loop
+/// (`readBody`/`answer` in `corelib/http.qn`). `Ok(bodyBytes)` once the framing
+/// `transferEncoding`/`contentLength` declare has fully arrived; `NotOk("incomplete")`
+/// while more bytes are still needed; `NotOk("too large")` once the declared or decoded
+/// size passes `maxBodySize`; `NotOk(reason)` for any other malformed framing.
+/// Synchronous, like `__http_frame_body` — the bytes are already in hand, there is no IO
+/// here.
+///
+/// # Safety contract (upheld by the compiler)
+/// `out` points to writable storage for one [`QlResult`]; each `(*_data, *_len)` pair is
+/// null with a non-positive length, or points to `*_len` readable bytes for this call (the
+/// `Text` arguments' live bytes at the call site).
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
+#[unsafe(no_mangle)]
+pub extern "C" fn __http_body_progress(
+    out: *mut QlResult,
+    raw_data: *const u8,
+    raw_len: i64,
+    transfer_encoding_data: *const u8,
+    transfer_encoding_len: i64,
+    content_length_data: *const u8,
+    content_length_len: i64,
+    max_body_size: f64,
+) {
+    let raw = borrow_bytes(raw_data, raw_len);
+    let transfer_encoding = text_of(transfer_encoding_data, transfer_encoding_len);
+    let content_length = text_of(content_length_data, content_length_len);
+    // `as usize` saturates rather than overflows or panics — the same conversion
+    // `core.io.@streamFile`'s own chunk size takes (`quilon-rt/src/io.rs`).
+    let max_body_size = max_body_size as usize;
+    let result = match body_progress(raw, &transfer_encoding, &content_length, max_body_size) {
+        BodyProgress::Complete(bytes) => QlResult::ok(&bytes),
+        BodyProgress::Incomplete => QlResult::not_ok("incomplete"),
+        BodyProgress::TooLarge => QlResult::not_ok("too large"),
+        BodyProgress::Malformed(reason) => QlResult::not_ok(reason),
+    };
+    // SAFETY: `out` is writable storage for one `QlResult` (the code generator's alloca).
+    unsafe { *out = result };
 }
 
 /// `core.http.frameBody(raw, bodiless, transferEncoding, contentLength) -> Result`: the
@@ -190,6 +318,179 @@ mod tests {
         );
         let bytes = crate::text::byte_slice(out.slot.data as *const u8, out.slot.len).to_vec();
         (out.tag, bytes)
+    }
+
+    /// `__http_body_progress`'s own harness, mirroring `frame` above: a `NotOk` payload is
+    /// read back as TEXT (`"incomplete"`, `"too large"`, or a malformed-framing reason)
+    /// rather than raw bytes, since that is what `readBody`/`answer` themselves match on.
+    fn progress(
+        raw: &[u8],
+        transfer_encoding: &str,
+        content_length: &str,
+        max_body_size: f64,
+    ) -> (i8, String) {
+        let _guard = GC_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        __gc_init();
+        let mut out = QlResult {
+            tag: 0,
+            slot: crate::mem::QlSlice::empty(),
+        };
+        let (raw_ptr, raw_len) = crate::test_support::text_of_bytes(raw);
+        let (transfer_encoding_ptr, transfer_encoding_len) =
+            crate::test_support::text_of(transfer_encoding);
+        let (content_length_ptr, content_length_len) = crate::test_support::text_of(content_length);
+        __http_body_progress(
+            &mut out,
+            raw_ptr,
+            raw_len,
+            transfer_encoding_ptr,
+            transfer_encoding_len,
+            content_length_ptr,
+            content_length_len,
+            max_body_size,
+        );
+        let bytes = crate::text::byte_slice(out.slot.data as *const u8, out.slot.len).to_vec();
+        (out.tag, String::from_utf8_lossy(&bytes).into_owned())
+    }
+
+    #[test]
+    fn progress_is_incomplete_before_the_head_s_blank_line_has_arrived() {
+        let (tag, reason) = progress(
+            b"POST /orders HTTP/1.1\r\nContent-Length: 5",
+            "",
+            "5",
+            1024.0,
+        );
+        assert_eq!(tag, RESULT_NOTOK_TAG);
+        assert_eq!(reason, "incomplete");
+    }
+
+    #[test]
+    fn progress_is_incomplete_short_of_a_declared_content_length() {
+        let (tag, reason) = progress(
+            b"POST /orders HTTP/1.1\r\nContent-Length: 5\r\n\r\nbe",
+            "",
+            "5",
+            1024.0,
+        );
+        assert_eq!(tag, RESULT_NOTOK_TAG);
+        assert_eq!(reason, "incomplete");
+    }
+
+    #[test]
+    fn progress_completes_once_content_length_bytes_have_all_arrived() {
+        let (tag, body) = progress(
+            b"POST /orders HTTP/1.1\r\nContent-Length: 5\r\n\r\nbeans",
+            "",
+            "5",
+            1024.0,
+        );
+        assert_eq!(tag, RESULT_OK_TAG);
+        assert_eq!(body, "beans");
+    }
+
+    #[test]
+    fn progress_rejects_a_declared_content_length_over_the_cap_before_any_body_arrives() {
+        let (tag, reason) = progress(
+            b"POST /orders HTTP/1.1\r\nContent-Length: 999\r\n\r\n",
+            "",
+            "999",
+            10.0,
+        );
+        assert_eq!(tag, RESULT_NOTOK_TAG);
+        assert_eq!(reason, "too large");
+    }
+
+    #[test]
+    fn progress_is_malformed_for_a_non_numeric_content_length() {
+        let (tag, reason) = progress(
+            b"POST /orders HTTP/1.1\r\nContent-Length: abc\r\n\r\nx",
+            "",
+            "abc",
+            1024.0,
+        );
+        assert_eq!(tag, RESULT_NOTOK_TAG);
+        assert_eq!(reason, "malformed Content-Length");
+    }
+
+    #[test]
+    fn progress_is_incomplete_mid_chunk() {
+        let (tag, reason) = progress(
+            b"POST /orders HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhel",
+            "chunked",
+            "",
+            1024.0,
+        );
+        assert_eq!(tag, RESULT_NOTOK_TAG);
+        assert_eq!(reason, "incomplete");
+    }
+
+    #[test]
+    fn progress_completes_at_the_zero_size_chunk() {
+        let (tag, body) = progress(
+            b"POST /orders HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n0\r\n\r\n",
+            "chunked",
+            "",
+            1024.0,
+        );
+        assert_eq!(tag, RESULT_OK_TAG);
+        assert_eq!(body, "hello");
+    }
+
+    #[test]
+    fn progress_rejects_a_chunk_whose_declared_size_would_exceed_the_cap() {
+        let (tag, reason) = progress(
+            b"POST /orders HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n64\r\n",
+            "chunked",
+            "",
+            10.0,
+        );
+        assert_eq!(tag, RESULT_NOTOK_TAG);
+        assert_eq!(reason, "too large");
+    }
+
+    #[test]
+    fn progress_is_malformed_for_a_non_hex_chunk_size_once_the_size_line_is_complete() {
+        let (tag, reason) = progress(
+            b"POST /orders HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\nZZ\r\nhello\r\n0\r\n\r\n",
+            "chunked",
+            "",
+            1024.0,
+        );
+        assert_eq!(tag, RESULT_NOTOK_TAG);
+        assert_eq!(reason, "malformed chunked framing");
+    }
+
+    /// A chunk-size line near `usize::MAX` (a valid hex parse) must read as `"too large"`
+    /// rather than wrapping the cap check and panicking on the slice that follows it.
+    #[test]
+    fn progress_rejects_a_chunk_size_near_usize_max_without_panicking() {
+        let (tag, reason) = progress(
+            b"POST /orders HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\nfffffffffffffffe\r\n",
+            "chunked",
+            "",
+            1024.0,
+        );
+        assert_eq!(tag, RESULT_NOTOK_TAG);
+        assert_eq!(reason, "too large");
+    }
+
+    #[test]
+    fn dechunk_rejects_a_chunk_size_near_usize_max_without_panicking() {
+        let result = dechunk(b"fffffffffffffffe\r\nhello\r\n0\r\n\r\n");
+        assert_eq!(result, Err("malformed chunked framing"));
+    }
+
+    #[test]
+    fn progress_is_malformed_for_an_unsupported_transfer_encoding() {
+        let (tag, reason) = progress(
+            b"POST /orders HTTP/1.1\r\nTransfer-Encoding: gzip\r\n\r\n",
+            "gzip",
+            "",
+            1024.0,
+        );
+        assert_eq!(tag, RESULT_NOTOK_TAG);
+        assert_eq!(reason, "unsupported Transfer-Encoding");
     }
 
     #[test]

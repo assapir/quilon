@@ -69,7 +69,7 @@ pub use collections::{
     __set_len, __set_new, __set_remove, __set_union,
 };
 pub use deferred::{__force_result, __force_text, __read_launch, QlResult};
-pub use http::__http_frame_body;
+pub use http::{__http_body_progress, __http_frame_body};
 pub use io::{__color_enabled, __print_text_fd, __stream_file_run, __write_bytes};
 pub use launch_scope::{__block_scope_enter, __block_scope_join};
 pub use mem::{
@@ -206,6 +206,8 @@ intrinsic_registry! {
     __stream_file_run: extern "C" fn(*mut QlResult, *const u8, i64, f64, *const c_void, *mut c_void),
     __http_frame_body:
         extern "C" fn(*mut QlResult, *const u8, i64, i8, *const u8, i64, *const u8, i64),
+    __http_body_progress:
+        extern "C" fn(*mut QlResult, *const u8, i64, *const u8, i64, *const u8, i64, f64),
     __force_text: extern "C" fn(*const c_void) -> QlSlice,
     __force_result: extern "C" fn(*mut QlResult, *const c_void),
     __block_scope_enter: extern "C" fn(),

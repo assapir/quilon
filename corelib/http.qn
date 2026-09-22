@@ -62,6 +62,15 @@ Values = {
   ~ Every header name present, already lower-cased.
   names = () -> []Text => < it.values.names() >,
 
+  ~ The first value under `name`, or `""` when absent — the fallback every framing header
+  ~ (`transfer-encoding`, `content-length`) and content type read below shares, rather than
+  ~ repeating its own `Ok`/`NotOk` match at each call site.
+  value = (name :: Text) -> Text => <
+    it.get(name) ?
+      | Ok(found) => found
+      | NotOk(_)  => ""
+  >,
+
   add := (name :: Text, value :: Text) -> $ => <
     it.values.add(name.trim().toLower(), value)
     $
@@ -192,6 +201,18 @@ Values = {
       | Patch(_) => true
       | _        => false
   >
+
+  ~ `it` with a body-carrying variant's own payload replaced by `body` — a nullary method
+  ~ defines no meaning for an enclosed body, so it is returned unchanged: the server's own
+  ~ signal (`Request.attachBody`) that a bodiless method ignores a body it is given.
+  withBody = (body :: Body) -> Method => <
+    it ?
+      | Post(_)  => Post(body)
+      | Put(_)   => Put(body)
+      | Query(_) => Query(body)
+      | Patch(_) => Patch(body)
+      | _        => it
+  >
 }
 
 ~ core.http's native body-framing primitive: locate the head/body blank line on RAW bytes,
@@ -202,6 +223,44 @@ Values = {
 ~ grapheme-indexed `Text` cannot express — is a runtime intrinsic instead.
 frameBody = (raw :: Text, bodiless :: Bool, transferEncoding :: Text, contentLength :: Text) -> Result => <
   bodiless ? Ok("") : NotOk("")
+>
+
+~ core.http's native body-PROGRESS primitive, the server's own sibling of `frameBody`:
+~ whether the request body `transferEncoding`/`contentLength` declare has fully arrived in
+~ `accumulated` yet (the connection's own bytes received so far, from the very first one —
+~ the intrinsic locates the head/body blank line itself, exactly as `frameBody` does).
+~ `Ok(bodyBytes)` once it has; `NotOk("incomplete")` while more bytes are still needed;
+~ `NotOk("too large")` once the declared or decoded size passes `maxBodySize`;
+~ `NotOk(reason)` for any other malformed framing — `classifyBodyProgress`, below, maps all
+~ four onto `BodyProgress` once so nothing downstream compares these strings by hand.
+~ Compiler-lowered, like `frameBody` — the body below is an inert placeholder pinning the
+~ checker's inferred `Result` payload type to `Text`.
+bodyProgress = (accumulated :: Text, transferEncoding :: Text, contentLength :: Text, maxBodySize :: Num) -> Result => <
+  accumulated == "" ? Ok("") : NotOk("incomplete")
+>
+
+~ What `bodyProgress`'s raw `Result` means, read once so `readBody`/`answer` match on a
+~ proper sum instead of comparing reason strings: the framed bytes, once framing is
+~ complete; still waiting on more; over `maxBodySize`; or malformed in some other way,
+~ carrying the native's own reason.
+BodyProgress = Complete(Text) / Incomplete / TooLarge / Malformed(Text)
+
+~ `bodyProgress(accumulated, transferEncoding, contentLength, maxBodySize)`'s own `Result`
+~ (`Ok(bytes)` / `NotOk(reason)`), classified into `BodyProgress` — the one place the
+~ native's raw `Result` is read at all; `readBody`/`answer` see only the sum. Calls
+~ `bodyProgress` directly (rather than taking an already-computed `:: Result` as its own
+~ parameter) so the match below is on that call's own concrete payload type, not on a
+~ generic `Result` arriving with no such anchor.
+classifyBodyProgress = (
+  accumulated :: Text, transferEncoding :: Text, contentLength :: Text, maxBodySize :: Num
+) -> BodyProgress => <
+  bodyProgress(accumulated, transferEncoding, contentLength, maxBodySize) ?
+    | Ok(body)      => Complete(body)
+    | NotOk(reason) =>
+        (reason ?
+          | "incomplete" => Incomplete
+          | "too large"  => TooLarge
+          | other        => Malformed(other))
 >
 
 ~ The index of `needle`'s first occurrence in `raw`, or `raw.length` when it never occurs —
@@ -564,13 +623,9 @@ statusReply = (status :: Status, body :: Text, headers :: Headers) -> Text => <
   ~ is not. `body()` and `send()`'s framing check both read this; `body()` masks a `NotOk`
   ~ to `""`, `send()` surfaces it.
   bodyResult = () -> Result => <
-    transferEncoding = it.headers().get("transfer-encoding") ?
-      | Ok(value) => value
-      | NotOk(_)  => ""
-    contentLength = it.headers().get("content-length") ?
-      | Ok(value) => value
-      | NotOk(_)  => ""
-    frameBody(it.raw, it.bodiless(), transferEncoding, contentLength)
+    frameBody(
+      it.raw, it.bodiless(),
+      it.headers().value("transfer-encoding"), it.headers().value("content-length"))
   >
 
   ~ The reply's body: dechunked when `Transfer-Encoding: chunked`, exactly `Content-Length`
@@ -602,21 +657,41 @@ statusReply = (status :: Status, body :: Text, headers :: Headers) -> Text => <
   url :: Text,
   options :: RequestOptions,
 
+  ~ `it` with `body`'s content and `contentType` attached to its method, when the method
+  ~ carries one (`Method.withBody` leaves a nullary method's own value unchanged, so a
+  ~ bodiless method given a body simply ignores it).
+  attachBody = (body :: Text, contentType :: Text) -> Request => <
+    Request {
+      method = it.method.carriesBody() ? it.method.withBody(Body { content = body, contentType = contentType }) : it.method,
+      url = it.url,
+      options = it.options
+    }
+  >,
+
   ~ The server side of `wire()`: parse a raw request head — everything up to, but not
-  ~ including, the blank line — into a `Request`. `Ok(Request)` when the request line
-  ~ carries a method this module recognizes and a target; `NotOk(reason)` otherwise — the
-  ~ caller's own signal (`serveConnection`) to answer 400 and close.
-  parse = (head :: Text) -> Result => <
+  ~ including, the blank line — plus `body` (`""` when the method carries none, or none has
+  ~ been read yet), into a `Request` — `body` and the request's own `content-type` header
+  ~ (`""` when absent) attached to a body-carrying method via `attachBody`, a bodiless
+  ~ method ignoring both. `Ok(Request)` when the request line carries a method this module
+  ~ recognizes and a target; `NotOk(reason)` otherwise — the caller's own signal
+  ~ (`serveConnection`) to answer 400 and close.
+  ~
+  ~ One function taking `body` outright rather than a one-argument `parse` plus a
+  ~ two-argument overload: the checker cannot carry a `Result`'s inferred payload type
+  ~ through a call to an OVERLOADED function of the same name (only a plain one, like
+  ~ `Method.parse`/`Headers.parse` below), so a second `parse` overload calling this one
+  ~ would leave `request.attachBody(...)` unable to resolve `attachBody` as a member at
+  ~ all. `parsedRequest`, this suite's own test helper, passes `""` where a case gives no
+  ~ body.
+  parse = (head :: Text, body :: Text) -> Result => <
     normalized = head.replaceAll("\r\n", "\n")
     fields = normalized.split("\n")[0].split(" ")
+    headers = Headers.parse(linesAfterFirst(normalized).split("\n"))
     fields.size < 2
       ? NotOk("malformed request line")
       : (Method.parse(fields[0]) ?
-          | Ok(method) => Ok(Request {
-              method = method,
-              url = fields[1],
-              options = RequestOptions { headers = Headers.parse(linesAfterFirst(normalized).split("\n")) }
-            })
+          | Ok(method) => Ok(Request { method = method, url = fields[1], options = RequestOptions { headers = headers } }
+              .attachBody(body, headers.value("content-type")))
           | NotOk(reason) => NotOk(reason))
   >,
 
@@ -732,11 +807,27 @@ statusReply = (status :: Status, body :: Text, headers :: Headers) -> Text => <
   >
 }
 
+~ `http.@serve`'s own per-server settings — a request body cap today, room for more later
+~ without changing `@serve`'s two-argument form.
+>> ServerOptions = {
+  ~ The most bytes a request body may carry (BYTES, matching `Content-Length`'s own unit)
+  ~ before its connection gets `413 Content Too Large` and closes. Checked against a
+  ~ declared `Content-Length` immediately, and against a chunked body's own decoded size as
+  ~ it arrives, so an oversized body never has to finish arriving before it is rejected.
+  maxBodySize :: Num,
+
+  ~ 16 MiB — the same cap `net.@tcpRequest` (the client's own transport) already applies to
+  ~ a RESPONSE, reused here for the size a request body may not exceed either.
+  default = () -> ServerOptions => < ServerOptions { maxBodySize = 16 * 1024 * 1024 } >
+}
+
 ~ Read from `connection` until a request head has fully arrived (the earliest blank line —
-~ `blankLineIndex`): `Ok(head)`, everything up to but not including that blank line — a
-~ head of zero length included, when the blank line is the very first thing the peer sends,
-~ still a request for `serveConnection` to answer (with a 400, since `Request.parse("")` is
-~ malformed) rather than silence. `NotOk(fragment)` when the peer closes first
+~ `blankLineIndex`): `Ok(accumulated)`, every byte received for this connection so far — the
+~ head, its blank line, and whatever body bytes happened to arrive alongside it in the same
+~ read (`receiveBody` picks up from here rather than re-reading them) — once a blank line is
+~ present. A head of zero length counts: still a request for `serveConnection` to answer
+~ (with a 400, since `Request.parse("", "")` is malformed) rather than silence when the blank
+~ line is the very first thing the peer sends. `NotOk(fragment)` when the peer closes first
 ~ (`connection.@read()` answering `""`), carrying whatever bytes did arrive —
 ~ `serveConnection` answers nothing in that case, there being no complete request to answer.
 ~ Recursion stands in for the loop this language has none of: `soFar` is never already
@@ -756,36 +847,106 @@ receiveHead = (connection :: net.Connection, soFar :: Text) -> Result => <
   chunk == ""
     ? NotOk(soFar)
     : (splitAt < accumulated.length
-        ? Ok(accumulated.slice(0, splitAt))
+        ? Ok(accumulated)
         : receiveHead(connection, accumulated))
 >
 
-~ `core.http`'s connection handler: the Quilon half of the `http.@serve` lowering, called
-~ once per accepted connection by the fixed-shape thunk codegen builds over `handler`. Reads
-~ the request head, parses it, calls `handler`, and writes the reply — a malformed request
-~ line answers 400 instead. A peer that closes before a head ever completes gets no reply,
-~ there being no request to answer. Nothing here closes the connection: the runtime does
-~ that once this function returns, the same as any other `net.@tcpServe` handler.
-serveConnection = (connection :: net.Connection, handler :: (Request) -> Response) -> $ => <
-  receiveHead(connection, "") ?
-    | NotOk(_)    => $
-    | Ok(head)    => (Request.parse(head) ?
-        | Ok(request) => connection.@write(handler(request).wire())
-        | NotOk(_)    => connection.@write(Response.reply(BadRequest).wire()))
+~ Check `accumulated`'s body progress (`bodyProgress`'s native, through
+~ `classifyBodyProgress`) and, while it reads `Incomplete`, read one more chunk and try
+~ again: `Complete`/`TooLarge`/`Malformed` all return as they are, `Incomplete` reads
+~ through the local `readMore` closure (so the read happens only on that one path,
+~ recursing back into `readBody` itself with the chunk appended) — mirrors `receiveHead`'s
+~ own read-then-check shape, one function rather than a caller/loop split: `readMore` calls
+~ `readBody`, its own enclosing function, which top-to-bottom name resolution allows (it is
+~ in scope for its own body) the way it would not for two top-level functions calling each
+~ other. An empty read means the peer closed before a complete body arrived, which reads as
+~ `Malformed` — no complete body to answer, and the connection is already dead either way.
+~
+~ ponytail: rescans `accumulated` (up to `maxBodySize`) from byte zero on every recursion —
+~ quadratic in the number of reads. Fine for the small bodies examples and tests carry; a
+~ body anywhere near the 16 MiB default cap wants an incremental reader that carries the
+~ chunk decoder's own position across calls instead of restarting it, before this sees
+~ real traffic.
+readBody = (
+  connection :: net.Connection, accumulated :: Text, transferEncoding :: Text,
+  contentLength :: Text, maxBodySize :: Num
+) -> BodyProgress => <
+  progress = classifyBodyProgress(accumulated, transferEncoding, contentLength, maxBodySize)
+  readMore = () -> BodyProgress => <
+    chunk = connection.@read()
+    chunk == ""
+      ? Malformed("connection closed before the body finished arriving")
+      : readBody(connection, accumulated + chunk, transferEncoding, contentLength, maxBodySize)
+  >
+  progress ?
+    | Incomplete => readMore()
+    | _          => progress
 >
 
-~ `http.@serve(address, handler) -> net.Server`: compiler-lowered, like `net.@tcpServe` —
-~ a Quilon body here would launch the accept loop as part of THIS function's own block,
-~ which the block-scope join would wait on before this function could return the `Server`
-~ handle. Its lowering (`src/codegen/generator/calls.rs`'s `serve` arm) calls the very same
-~ runtime entry `net.@tcpServe` does, with `serveConnection` filled in as the connection
-~ handler — the whole reason `serveConnection` is written above in ordinary Quilon. The
-~ mention of `serveConnection` below is never actually run (this body is inert, like every
-~ other `@` primitive's) — it exists so the reachability pass, which does not know about
-~ codegen's own call to `serveConnection` by name, still keeps it emitted whenever a
-~ program calls `@serve`.
+~ Finish handling `request`, once its head has parsed successfully: a method that carries a
+~ body and declares one of the two framing headers has it read (`readBody`); anything else
+~ — a nullary method, or a body-carrying one given neither header — calls `handler` on
+~ `request` exactly as parsed, its `Body` empty. `TooLarge` answers `413`; `Malformed` and
+~ `Incomplete` (which cannot actually occur here — `readBody` only ever returns it while
+~ still recursing) both answer `400`, `handler` never called either way.
+answer = (
+  connection :: net.Connection, accumulated :: Text, request :: Request,
+  handler :: (Request) -> Response, options :: ServerOptions
+) -> $ => <
+  transferEncoding = request.headers().value("transfer-encoding")
+  contentLength = request.headers().value("content-length")
+  request.method.carriesBody() && (transferEncoding != "" || contentLength != "")
+    ? (readBody(connection, accumulated, transferEncoding, contentLength, options.maxBodySize) ?
+        | Complete(body) =>
+            connection.@write(handler(
+              request.attachBody(body, request.headers().value("content-type"))).wire())
+        | TooLarge     => connection.@write(Response.reply(ContentTooLarge).wire())
+        | Malformed(_) => connection.@write(Response.reply(BadRequest).wire())
+        | Incomplete   => connection.@write(Response.reply(BadRequest).wire()))
+    : connection.@write(handler(request).wire())
+>
+
+~ `core.http`'s connection handler: the Quilon half of the `http.@serve` lowering, called
+~ once per accepted connection by the fixed-shape thunk codegen builds over `handler` and
+~ `options`. Reads the request head, parses it, reads the body a body-carrying method's own
+~ framing header declares (`answer`; neither header means no body to read), calls `handler`,
+~ and writes the reply — a malformed request line, an oversized body, or malformed chunked
+~ framing answers 413/400 instead. A peer that closes before a head ever completes gets no
+~ reply, there being no request to answer. Nothing here closes the connection: the runtime
+~ does that once this function returns, the same as any other `net.@tcpServe` handler.
+serveConnection = (
+  connection :: net.Connection, handler :: (Request) -> Response, options :: ServerOptions
+) -> $ => <
+  receiveHead(connection, "") ?
+    | NotOk(_)        => $
+    | Ok(accumulated) =>
+        (Request.parse(accumulated.slice(0, blankLineIndex(accumulated)), "") ?
+          | NotOk(_)    => connection.@write(Response.reply(BadRequest).wire())
+          | Ok(request) => answer(connection, accumulated, request, handler, options))
+>
+
+~ `http.@serve(address, handler) -> net.Server`, `options` defaulted to
+~ `ServerOptions.default()`. Compiler-lowered, like `net.@tcpServe` — a Quilon body here
+~ would launch the accept loop as part of THIS function's own block, which the block-scope
+~ join would wait on before this function could return the `Server` handle. Its lowering
+~ (`src/codegen/generator/calls.rs`'s `serve` arm) calls the very same runtime entry
+~ `net.@tcpServe` does, with `serveConnection` filled in as the connection handler and
+~ `options.maxBodySize` bundled alongside it — the whole reason `serveConnection` is
+~ written above in ordinary Quilon. The mention of `serveConnection` below is never
+~ actually run (this body is inert, like every other `@` primitive's) — it exists so the
+~ reachability pass, which does not know about codegen's own call to `serveConnection` by
+~ name, still keeps it emitted whenever a program calls `@serve`.
 >> @serve = (address :: Text, handler :: (Request) -> Response) -> net.Server => <
-  serveConnection(net.Connection { handle = 0 }, handler)
+  serveConnection(net.Connection { handle = 0 }, handler, ServerOptions.default())
+  net.Server { handle = 0 }
+>
+
+~ `http.@serve(address, handler, options)`: as above, with `options.maxBodySize` governing
+~ how large a request body this server accepts before answering `413` and closing.
+>> @serve = (
+  address :: Text, handler :: (Request) -> Response, options :: ServerOptions
+) -> net.Server => <
+  serveConnection(net.Connection { handle = 0 }, handler, options)
   net.Server { handle = 0 }
 >
 
@@ -1464,10 +1625,19 @@ test.describe("Response's server-side constructors", () => <
     expect(Response { raw = "HTTP/1.1 200 OK\r\n\r\n" }.wire(), equals("HTTP/1.1 200 OK\r\n\r\n")))
 >)
 
-~ Parse a request head the case knows is well-formed. `assert`, not `expect`: an
-~ unparseable fixture is a broken test rather than a failed case.
+~ Parse a request head with no body the case knows is well-formed. `assert`, not `expect`:
+~ an unparseable fixture is a broken test rather than a failed case.
 parsedRequest = (head :: Text) -> Request => <
-  candidate = Request.parse(head)
+  candidate = Request.parse(head, "")
+  assert(candidate, isOk())
+  candidate ?
+    | Ok(request) => request
+    | NotOk(_)    => Request { method = Get, url = "", options = RequestOptions.default() }
+>
+
+~ `parsedRequest`, with `body` given to `Request.parse` too.
+parsedRequestWithBody = (head :: Text, body :: Text) -> Request => <
+  candidate = Request.parse(head, body)
   assert(candidate, isOk())
   candidate ?
     | Ok(request) => request
@@ -1481,7 +1651,7 @@ test.describe("Request.parse", () => <
     expect(request.url, equals("/pantry"))
   >)
 
-  test.it("parses a POST's method with an empty body, never reading one", () => <
+  test.it("parses a POST's method with an empty body when none is given", () => <
     request = parsedRequest("POST /pantry HTTP/1.1\r\nContent-Length: 4")
     request.method ?
       | Post(body) => expect(body.content, equals(""))
@@ -1495,10 +1665,10 @@ test.describe("Request.parse", () => <
   >)
 
   test.it("rejects a request line with fewer than two fields", () =>
-    expect(Request.parse("GET"), isNotOk()))
+    expect(Request.parse("GET", ""), isNotOk()))
 
   test.it("rejects an unrecognized method token", () =>
-    expect(Request.parse("FETCH /pantry HTTP/1.1"), isNotOk()))
+    expect(Request.parse("FETCH /pantry HTTP/1.1", ""), isNotOk()))
 
   test.it("reads path() and params() off a bare target with no scheme or host", () => <
     bare = Request { method = Get, url = "/pantry?x=1", options = RequestOptions.default() }
@@ -1509,5 +1679,28 @@ test.describe("Request.parse", () => <
   test.it("reads path() off a bare root target", () => <
     root = Request { method = Get, url = "/", options = RequestOptions.default() }
     expect(root.path(), equals("/"))
+  >)
+
+  test.it("attaches a body's content to a body-carrying method", () => <
+    request = parsedRequestWithBody(
+      "POST /orders HTTP/1.1\r\nContent-Type: text/plain\r\nContent-Length: 5", "beans")
+    expect(request.method.payload().content, equals("beans"))
+  >)
+
+  test.it("attaches the request's own content-type header to the body", () => <
+    request = parsedRequestWithBody(
+      "POST /orders HTTP/1.1\r\nContent-Type: text/plain\r\nContent-Length: 5", "beans")
+    expect(request.method.payload().contentType, equals("text/plain"))
+  >)
+
+  test.it("reads a body's content type as empty when the request carries none", () => <
+    request = parsedRequestWithBody("POST /orders HTTP/1.1\r\nContent-Length: 5", "beans")
+    expect(request.method.payload().contentType, equals(""))
+  >)
+
+  test.it("ignores a body given to a bodiless method", () => <
+    request = parsedRequestWithBody("GET /pantry HTTP/1.1", "beans")
+    expect(request.method.token(), equals("GET"))
+    expect(request.method.payload().content, equals(""))
   >)
 >)

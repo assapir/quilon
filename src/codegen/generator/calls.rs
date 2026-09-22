@@ -224,6 +224,15 @@ impl<'ctx> CodeGenerator<'ctx> {
             return self.generate_frame_body(arguments);
         }
 
+        // `core.http`'s native body-PROGRESS primitive — `frameBody`'s server-side
+        // sibling, resolved the same way and ahead of the same dispatch chain.
+        if !member_call
+            && (function_name == "core.http.bodyProgress"
+                || (function_name == "bodyProgress" && self.frame_body_from_corelib))
+        {
+            return self.generate_body_progress(arguments);
+        }
+
         // The `.` form resolves against the receiver's type alone, ahead of everything the
         // top-level namespace holds — the order the checker resolved the call in.
         let method_callee = self
@@ -741,14 +750,21 @@ impl<'ctx> CodeGenerator<'ctx> {
                 let handle = Self::call_result_to_basic(call)?;
                 self.build_handle_record(handle)
             }
-            // `http.@serve(address, handler)`: the HTTP server layer. Lowers to the exact
-            // same runtime entry `tcpServe` does, with `core.http.serveConnection` (ordinary
-            // Quilon, over `handler`) as the connection handler instead of `handler` itself —
-            // see `emit_http_serve_handler_thunk`.
+            // `http.@serve(address, handler)` / `http.@serve(address, handler, options)`:
+            // the HTTP server layer. Lowers to the exact same runtime entry `tcpServe`
+            // does, with `core.http.serveConnection` (ordinary Quilon, over `handler` and
+            // `options.maxBodySize`) as the connection handler instead of `handler`
+            // itself — see `emit_http_serve_handler_thunk`. Overloaded on arity like
+            // `Server.kill`, so no single `expect_arity` check applies here.
             "serve" => {
                 const NAME: &str = "core.http.@serve";
                 const CALL_FAILED: &str = "Failed to call core.http.@serve";
-                Self::expect_arity(NAME, arguments, false, 2)?;
+                if arguments.len() != 2 && arguments.len() != 3 {
+                    return Err(format!(
+                        "{NAME} expects 2 or 3 arguments, got {}",
+                        arguments.len()
+                    ));
+                }
                 let address_value = self.generate_expression(&arguments[0])?;
                 let BasicValueEnum::StructValue(_) = address_value else {
                     return Err(format!("{NAME} expects a Text address"));
@@ -760,7 +776,28 @@ impl<'ctx> CodeGenerator<'ctx> {
                     return Err(format!("{NAME} expects a closure handler"));
                 };
 
-                let bundle = self.bundle_closure(closure, "http_serve_bundle")?;
+                // `ServerOptions.maxBodySize`, read straight off the third argument's own
+                // field the way `handle_field` reads `Connection`/`Server`'s — or, for the
+                // two-argument form, `ServerOptions.default()`'s own field, called for real
+                // rather than mirrored as a second constant here: `ServerOptions.default()`
+                // is itself a callable, documented part of the exported surface, so a
+                // hand-copied literal could drift from it silently. `core.http.@serve`'s
+                // own two-argument inert placeholder body already calls it, which is what
+                // keeps `core.http.ServerOptions_default` reachable regardless of which
+                // arity a program actually calls.
+                let max_body_size = match arguments.get(2) {
+                    Some(options_argument) => {
+                        let BasicValueEnum::FloatValue(value) =
+                            self.generate_field_access(options_argument, "maxBodySize")?
+                        else {
+                            return Err(format!("{NAME} expects a ServerOptions options argument"));
+                        };
+                        value
+                    }
+                    None => self.default_max_body_size()?,
+                };
+
+                let bundle = self.bundle_http_serve_closure(closure, max_body_size)?;
 
                 let thunk = self.emit_http_serve_handler_thunk()?;
                 let thunk_ptr = thunk.as_global_value().as_pointer_value();
@@ -881,12 +918,13 @@ impl<'ctx> CodeGenerator<'ctx> {
         Ok(handle)
     }
 
-    /// Build a `{ handle :: Num }` handle record (`Connection`/`Server`) on the GC heap
-    /// around `handle` and return a pointer to it — the compiler-lowered counterpart of an
-    /// ordinary record literal, for wherever a runtime intrinsic hands back a raw id that
-    /// Quilon code sees as one of these two handle types. Shape-only: both types have the
-    /// identical one-`Num`-field layout, so this needs no type name to pick between them —
-    /// the call site's own inferred return type is what tells Quilon code which one it is.
+    /// Build a `{ handle :: Num }`-shaped record (`Connection`/`Server`, or `http.@serve`'s
+    /// own `ServerOptions`) on the GC heap around `handle` and return a pointer to it — the
+    /// compiler-lowered counterpart of an ordinary record literal, for wherever codegen
+    /// needs to hand Quilon code one of these single-`Num`-field types without going
+    /// through its own constructor. Shape-only: every caller's type has the identical
+    /// one-`Num`-field layout, so this needs no type name to pick between them — the call
+    /// site's own inferred type is what tells Quilon code which one it is.
     fn build_handle_record(
         &mut self,
         handle: BasicValueEnum<'ctx>,
@@ -1036,14 +1074,143 @@ impl<'ctx> CodeGenerator<'ctx> {
         Ok(function)
     }
 
+    /// `ServerOptions.default()`'s own `maxBodySize` (16 MiB), for the two-argument
+    /// `http.@serve(address, handler)` call: calls the real corelib function
+    /// (`core.http.ServerOptions_default`, always reachable — see the `serve` arm's own
+    /// doc) and reads its one field directly, the shape `build_handle_record` already
+    /// establishes for every `{ Num }` record this codegen builds, rather than a literal
+    /// that could drift from the Quilon-level default it is supposed to mirror.
+    fn default_max_body_size(&mut self) -> Result<inkwell::values::FloatValue<'ctx>, String> {
+        let default_fn = self
+            .module
+            .get_function("core.http.ServerOptions_default")
+            .ok_or_else(|| "core.http.ServerOptions_default not found".to_string())?;
+        let null_receiver = self.context.ptr_type(AddressSpace::default()).const_null();
+        let BasicValueEnum::PointerValue(default_options) =
+            self.emit_call(default_fn, &[null_receiver.into()])?
+        else {
+            return Err("core.http.ServerOptions_default must return a record".to_string());
+        };
+        let field_ty = self
+            .context
+            .struct_type(&[self.context.f64_type().into()], false);
+        let field_ptr = self
+            .builder
+            .build_struct_gep(field_ty, default_options, 0, "default_max_body_size_field")
+            .map_err(ctx("Failed to GEP ServerOptions.default()'s field"))?;
+        let value = self
+            .builder
+            .build_load(self.context.f64_type(), field_ptr, "default_max_body_size")
+            .map_err(ctx("Failed to load ServerOptions.default()'s field"))?;
+        Ok(value.into_float_value())
+    }
+
+    /// The `{ ptr fn, ptr env, f64 maxBodySize }` bundle `http.@serve`'s lowering carries to
+    /// its handler thunk: the ordinary `{ ptr, ptr }` closure bundle
+    /// [`Self::bundle_closure`] builds for every other runtime entry, plus the
+    /// `ServerOptions` cap `serveConnection` needs alongside `handler` — bundled together
+    /// since the runtime's fixed-shape thunk takes exactly one environment pointer.
+    fn http_serve_bundle_type(&self) -> inkwell::types::StructType<'ctx> {
+        let ptr = self.context.ptr_type(AddressSpace::default());
+        self.context.struct_type(
+            &[ptr.into(), ptr.into(), self.context.f64_type().into()],
+            false,
+        )
+    }
+
+    /// Build the bundle [`Self::http_serve_bundle_type`] describes, over `closure`'s own
+    /// `{ ptr fn, ptr env }` and `max_body_size`, and return the pointer — the `http.@serve`
+    /// counterpart of [`Self::bundle_closure`].
+    fn bundle_http_serve_closure(
+        &mut self,
+        closure: inkwell::values::StructValue<'ctx>,
+        max_body_size: inkwell::values::FloatValue<'ctx>,
+    ) -> Result<PointerValue<'ctx>, String> {
+        let real_fn = self
+            .builder
+            .build_extract_value(closure, 0, "handler_fn")
+            .map_err(ctx("Failed to extract the handler function"))?;
+        let real_env = self
+            .builder
+            .build_extract_value(closure, 1, "handler_env")
+            .map_err(ctx("Failed to extract the handler environment"))?;
+        let bundle_ty = self.http_serve_bundle_type();
+        // GC-heap allocated (`alloc_box`), not a stack alloca: `__tcp_serve_launch` keeps
+        // this pointer for as long as the server runs and dereferences it once per
+        // accepted connection, potentially long after `@serve`'s own call site has left
+        // the top of the stack — a stack slot would not outlive that the way a launch's
+        // closure/site value already must, and does, via the GC heap elsewhere.
+        let bundle = self.alloc_box(bundle_ty.into())?;
+        let fn_gep = self
+            .builder
+            .build_struct_gep(bundle_ty, bundle, 0, "http_serve_bundle_fn")
+            .map_err(ctx("Failed to build GEP for the http serve bundle's fn"))?;
+        self.builder
+            .build_store(fn_gep, real_fn)
+            .map_err(ctx("Failed to store the http serve bundle's fn"))?;
+        let env_gep = self
+            .builder
+            .build_struct_gep(bundle_ty, bundle, 1, "http_serve_bundle_env")
+            .map_err(ctx("Failed to build GEP for the http serve bundle's env"))?;
+        self.builder
+            .build_store(env_gep, real_env)
+            .map_err(ctx("Failed to store the http serve bundle's env"))?;
+        let cap_gep = self
+            .builder
+            .build_struct_gep(bundle_ty, bundle, 2, "http_serve_bundle_cap")
+            .map_err(ctx("Failed to build GEP for the http serve bundle's cap"))?;
+        self.builder
+            .build_store(cap_gep, max_body_size)
+            .map_err(ctx("Failed to store the http serve bundle's cap"))?;
+        Ok(bundle)
+    }
+
+    /// The reverse of [`Self::bundle_http_serve_closure`], run inside the handler thunk:
+    /// load the bundle at `bundle` and split it into the handler's real function/environment
+    /// pointers and the `maxBodySize` `ServerOptions` cap.
+    fn unpack_http_serve_bundle(
+        &mut self,
+        bundle: PointerValue<'ctx>,
+    ) -> Result<
+        (
+            PointerValue<'ctx>,
+            PointerValue<'ctx>,
+            inkwell::values::FloatValue<'ctx>,
+        ),
+        String,
+    > {
+        let bundle_ty = self.http_serve_bundle_type();
+        let loaded = self
+            .builder
+            .build_load(bundle_ty, bundle, "http_serve_bundle")
+            .map_err(ctx("Failed to load the http serve bundle"))?
+            .into_struct_value();
+        let real_fn = self
+            .builder
+            .build_extract_value(loaded, 0, "real_fn")
+            .map_err(ctx("Failed to extract the handler function"))?
+            .into_pointer_value();
+        let real_env = self
+            .builder
+            .build_extract_value(loaded, 1, "real_env")
+            .map_err(ctx("Failed to extract the handler environment"))?
+            .into_pointer_value();
+        let max_body_size = self
+            .builder
+            .build_extract_value(loaded, 2, "max_body_size")
+            .map_err(ctx("Failed to extract maxBodySize"))?
+            .into_float_value();
+        Ok((real_fn, real_env, max_body_size))
+    }
+
     /// A top-level trampoline `i8 (double connectionId, ptr bundle) -> i8`, the `http.@serve`
     /// counterpart of [`Self::emit_tcp_serve_handler_thunk`]: it builds the `Connection` the
     /// same way, but instead of calling the bundle's own function pointer directly, it
-    /// reconstructs the bundled `(Request) -> Response` closure and hands it to
-    /// `core.http.serveConnection` — the "connection handler filled in" the `@serve`
-    /// lowering gives `net.@tcpServe`'s own runtime entry point. `serveConnection` is
-    /// ordinary Quilon (parses the request, calls `handler`, writes the reply), so nothing
-    /// about the HTTP protocol lives in codegen.
+    /// reconstructs the bundled `(Request) -> Response` closure and `ServerOptions` and
+    /// hands both to `core.http.serveConnection` — the "connection handler filled in" the
+    /// `@serve` lowering gives `net.@tcpServe`'s own runtime entry point. `serveConnection`
+    /// is ordinary Quilon (parses the request, reads its body, calls `handler`, writes the
+    /// reply), so nothing about the HTTP protocol lives in codegen.
     fn emit_http_serve_handler_thunk(&mut self) -> Result<FunctionValue<'ctx>, String> {
         const NAME: &str = "__http_serve_handler_thunk";
         if let Some(existing) = self.module.get_function(NAME) {
@@ -1067,7 +1234,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         let bundle = function.get_nth_param(1).unwrap().into_pointer_value();
 
         let connection = self.build_handle_record(connection_id.into())?;
-        let (real_fn, real_env) = self.unpack_closure_bundle(bundle, "http_serve_bundle")?;
+        let (real_fn, real_env, max_body_size) = self.unpack_http_serve_bundle(bundle)?;
 
         let closure_ty = self.closure_struct_type();
         let handler_closure = self
@@ -1080,11 +1247,18 @@ impl<'ctx> CodeGenerator<'ctx> {
             .map_err(ctx("Failed to build the handler closure"))?
             .into_struct_value();
 
+        // `ServerOptions` has the identical one-`Num`-field layout `Connection`/`Server`
+        // do, so the same shape-only builder produces it.
+        let options = self.build_handle_record(max_body_size.into())?;
+
         let serve_connection = self
             .module
             .get_function("core.http.serveConnection")
             .ok_or_else(|| "core.http.serveConnection not found".to_string())?;
-        let result = self.emit_call(serve_connection, &[connection, handler_closure.into()])?;
+        let result = self.emit_call(
+            serve_connection,
+            &[connection, handler_closure.into(), options],
+        )?;
         let BasicValueEnum::IntValue(result) = result else {
             return Err("core.http.serveConnection must return $".to_string());
         };

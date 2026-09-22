@@ -28,7 +28,7 @@ checkReply = (reply :: http.Response, expectedStatus :: Num, expectedBody :: Tex
   http.Request.post(
     "http://127.0.0.1:9048/counter", http.Body { content = "beans", contentType = "text/plain" }
   ).send() ?
-    | Ok(reply)    => checkReply(reply, 201, "stocked ")
+    | Ok(reply)    => checkReply(reply, 201, "stocked beans")
     | NotOk(error) => test.failAt(error)
 
   stand.kill(1)

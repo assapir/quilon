@@ -77,7 +77,7 @@ checkReply = (reply :: http.Response, expectedStatus :: Num, expectedBody :: Tex
   http.Request.post(
     "http://{address}/pantry", http.Body {{ content = "beans", contentType = "text/plain" }}
   ).send() ?
-    | Ok(reply)    => checkReply(reply, 201, "stocked ")
+    | Ok(reply)    => checkReply(reply, 201, "stocked beans")
     | NotOk(error) => test.failAt(error)
 
   0
@@ -269,4 +269,142 @@ fn aot_http_serve_answers_then_kill_stops_the_server() {
         "native AOT: the server's own process exits 0 once kill has settled the accept loop"
     );
     let _ = std::fs::remove_file(&binary);
+}
+
+/// A server whose handler echoes a POST's body back as the reply (`Created` carrying
+/// exactly `body.content`), built with the three-argument `http.@serve` so `max_body_size`
+/// governs how large a request body it accepts before answering `413` — the same
+/// atomic-global `/quit` shape `program` above uses for the raw layer's own tests.
+fn body_echo_program(address: &str, max_body_size: u64) -> String {
+    format!(
+        r#"
+<< core.http
+<< core.net
+
+@server := net.Server {{ handle = 0 }}
+
+killAndReply = () -> http.Response => <
+  server.kill(1)
+  http.Response.reply(http.OK, "bye")
+>
+
+echo = (request :: http.Request) -> http.Response => <
+  request.method ?
+    | http.Post(body) => http.Response.reply(http.Created, body.content)
+    | _                => http.Response.reply(http.MethodNotAllowed)
+>
+
+hummus = (request :: http.Request) -> http.Response => <
+  request.path() == "/quit" ? killAndReply() : echo(request)
+>
+
+^ = () -> Num => <
+  server := http.@serve(
+    "{address}", request => hummus(request),
+    http.ServerOptions {{ maxBodySize = {max_body_size} }})
+  0
+>
+"#
+    )
+}
+
+/// Spawn `body_echo_program` under the JIT with `max_body_size`, wait for it to start
+/// listening, run `drive` against it with raw sockets, then quit and wait for a clean
+/// exit — the shape every body-cap/framing test below shares.
+fn run_body_echo_server(max_body_size: u64, drive: impl FnOnce(&str, u16)) {
+    let port = free_port();
+    let quilon = env!("CARGO_BIN_EXE_quilon");
+    let file = common::temp_ql(
+        "http_serve_body_echo",
+        &body_echo_program(&format!("127.0.0.1:{port}"), max_body_size),
+    );
+
+    let child = Command::new(quilon)
+        .args(["run", file.to_str().unwrap()])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn quilon run");
+
+    wait_until_listening("127.0.0.1", port);
+    drive("127.0.0.1", port);
+
+    let mut quitter = connect_with_timeout("127.0.0.1", port).expect("connect to send quit");
+    quitter
+        .write_all(b"GET /quit HTTP/1.1\r\nHost: shop\r\nConnection: close\r\n\r\n")
+        .expect("write the quit request");
+    drop(quitter);
+
+    assert_eq!(
+        wait_bounded(child, Duration::from_secs(15)),
+        0,
+        "the server's own process exits 0 once kill has settled the accept loop"
+    );
+    let _ = std::fs::remove_file(&file);
+}
+
+#[test]
+fn jit_http_serve_rejects_a_body_over_the_cap_and_malformed_chunked_framing() {
+    run_body_echo_server(10, |host, port| {
+        // A declared `Content-Length` past the cap is rejected the moment the head
+        // arrives — no need to send the 999 bytes it claims for the check to run.
+        let over_cap = send_raw(
+            host,
+            port,
+            b"POST /orders HTTP/1.1\r\nHost: shop\r\nContent-Length: 999\r\nConnection: close\r\n\r\n",
+        );
+        assert!(
+            over_cap.starts_with("HTTP/1.1 413 Content Too Large\r\n"),
+            "over-cap reply: {over_cap}"
+        );
+
+        let malformed = send_raw(
+            host,
+            port,
+            b"POST /orders HTTP/1.1\r\nHost: shop\r\nTransfer-Encoding: chunked\r\n\
+              Connection: close\r\n\r\nZZ\r\nhello\r\n0\r\n\r\n",
+        );
+        assert!(
+            malformed.starts_with("HTTP/1.1 400 Bad Request\r\n"),
+            "malformed chunked reply: {malformed}"
+        );
+    });
+}
+
+#[test]
+fn jit_http_serve_reads_a_content_length_and_a_chunked_body_under_a_raised_cap() {
+    run_body_echo_server(16, |host, port| {
+        // 15 bytes, one under the 16-byte cap this server raised to — the same body a
+        // 10-byte cap (the test above) would have rejected outright.
+        let content_length_reply = send_raw(
+            host,
+            port,
+            b"POST /orders HTTP/1.1\r\nHost: shop\r\nContent-Length: 15\r\n\
+              Connection: close\r\n\r\nextra falafel!!",
+        );
+        assert!(
+            content_length_reply.starts_with("HTTP/1.1 201 Created\r\n"),
+            "content-length reply: {content_length_reply}"
+        );
+        assert!(
+            content_length_reply.ends_with("extra falafel!!"),
+            "content-length reply: {content_length_reply}"
+        );
+
+        let chunked_reply = send_raw(
+            host,
+            port,
+            b"POST /orders HTTP/1.1\r\nHost: shop\r\nTransfer-Encoding: chunked\r\n\
+              Connection: close\r\n\r\n6\r\nhummus\r\n0\r\n\r\n",
+        );
+        assert!(
+            chunked_reply.starts_with("HTTP/1.1 201 Created\r\n"),
+            "chunked reply: {chunked_reply}"
+        );
+        assert!(
+            chunked_reply.ends_with("hummus"),
+            "chunked reply: {chunked_reply}"
+        );
+    });
 }
