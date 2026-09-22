@@ -269,6 +269,15 @@ hummus = (request :: http.Request) -> http.Response => <
 a target with no scheme or host (`/pantry?x=1`) has an authority of zero length, so the path
 starts at its very first character.
 
+### HEAD requests
+
+A `HEAD` request's reply carries no body on the wire, whatever `handler` returned — only
+the status line, headers, and `content-length`, unchanged from what a `GET` handled the
+same way would have sent. A handler answering `Head` writes an ordinary
+`Response.reply(status, body, headers)` exactly as it would for `Get`; the connection
+handler is what drops `body`'s own bytes before writing, since `content-length` still has
+to name the size a `GET` reply would have carried.
+
 ### Request bodies
 
 A body-carrying method (`Post`, `Put`, `Query`, `Patch`) whose request declares

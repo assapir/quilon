@@ -972,12 +972,19 @@ serveRequests = (
   connection :: net.Connection, leftover :: Text, handler :: (Request) -> Response,
   options :: ServerOptions
 ) -> $ => <
-  ~ Write `response` and either stop (this request, or `response` itself, asked for
-  ~ close — or the request line was HTTP/1.0) or restart the loop from `nextLeftover`.
+  ~ Write `response` — its body bytes dropped for a HEAD request, whose own
+  ~ `content-length` still names the size a GET's own reply would have carried, exactly
+  ~ what `handler` built it with — and either stop (this request, or `response` itself,
+  ~ asked for close — or the request line was HTTP/1.0) or restart the loop from
+  ~ `nextLeftover`.
   continueUnlessClosing = (
     http10 :: Bool, request :: Request, response :: Response, nextLeftover :: Text
   ) -> $ => <
-    connection.@write(response.wire())
+    wireBytes = response.wire()
+    connection.@write(
+      request.method.token() == "HEAD"
+        ? wireBytes.slice(0, blankLineEnd(wireBytes))
+        : wireBytes)
     shouldCloseAfter(http10, request, response)
       ? $
       : serveRequests(connection, nextLeftover, handler, options)

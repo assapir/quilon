@@ -38,6 +38,7 @@ killAndReply = () -> http.Response => <
 answer = (request :: http.Request) -> http.Response => <
   request.method ?
     | http.Get        => http.Response.reply(http.OK, "chickpeas: plenty")
+    | http.Head       => http.Response.reply(http.OK, "chickpeas: plenty")
     | http.Post(body) => http.Response.reply(http.Created, "stocked " + body.content)
     | _               => http.Response.reply(http.MethodNotAllowed)
 >
@@ -532,6 +533,27 @@ fn jit_http_serve_closes_after_one_response_for_an_http10_request() {
         // so the request line alone must end the connection after this one reply.
         let reply = send_raw(host, port, b"GET /pantry HTTP/1.0\r\nHost: shop\r\n\r\n");
         assert!(reply.starts_with("HTTP/1.1 200 OK\r\n"), "reply: {reply}");
+    });
+}
+
+#[test]
+fn jit_http_serve_head_reply_carries_no_body_but_the_correct_content_length() {
+    run_hummus_server(|host, port| {
+        // `Connection: close` so `send_raw`'s read-to-EOF proves there is nothing past the
+        // blank line at all — a body-bearing reply of the same length would not end there.
+        let reply = send_raw(
+            host,
+            port,
+            b"HEAD /pantry HTTP/1.1\r\nHost: shop\r\nConnection: close\r\n\r\n",
+        );
+        assert!(reply.starts_with("HTTP/1.1 200 OK\r\n"), "reply: {reply}");
+        // "chickpeas: plenty" is 17 bytes — the same content-length a GET of the same
+        // handler would send, even though HEAD's own reply carries none of those bytes.
+        assert!(
+            reply.contains("content-length: 17\r\n"),
+            "reply: {reply}"
+        );
+        assert!(reply.ends_with("\r\n\r\n"), "reply carried a body: {reply}");
     });
 }
 
