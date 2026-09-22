@@ -114,6 +114,11 @@ impl TypeChecker {
             }
         }
 
+        // Runs last, once every top-level binding's mutability and atomicity is settled
+        // (a handler defined above the global it touches still needs that global's own
+        // declaration checked first) — see `fiber_sharing`.
+        self.check_fiber_sharing(program)?;
+
         Ok(std::mem::take(&mut self.type_table))
     }
 

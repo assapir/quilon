@@ -163,7 +163,8 @@ its name relative to the first block (`` ```quilon title="lib/util.qn" ``).
 | QN347 | atomic binding declared without `:=` |
 | QN348 | atomic binding used with `@` after its declaration |
 | QN349 | atomic binding reassignment waits on a deferred value |
-| QN350 | unresolved `Result` payload |
+| QN350 | `:=` value shared across fibers |
+| QN351 | unresolved `Result` payload |
 | QN400 | code generation failed |
 | QN401 | native build failed |
 | QN500 | assertion failed |
@@ -1170,7 +1171,36 @@ bump = () -> $ => <
 ^ = () -> $ => < bump() >
 ```
 
-### QN350 — unresolved `Result` payload
+### QN350 — `:=` value shared across fibers
+
+A non-atomic `:=` value — a top-level binding, or a local of the block the call sits in —
+is read or written by the `handler` argument of `net.@tcpServe`, or by anything `handler`
+calls transitively. `handler` runs on its own fiber per connection, so every non-atomic
+`:=` value it reaches is shared with whichever fiber declared it.
+
+```quilon ignore
+<< core.net
+
+hits := 0
+^ = () -> Num => <
+  net.@tcpServe("127.0.0.1:9048", connection => < hits := hits + 1 >)
+  0
+>
+```
+
+Bind it atomically:
+
+```quilon
+<< core.net
+
+@hits := 0
+^ = () -> Num => <
+  net.@tcpServe("127.0.0.1:9048", connection => < hits := hits + 1 >)
+  0
+>
+```
+
+### QN351 — unresolved `Result` payload
 
 A function's bare `:: Result` parameter is matched with a payload binding (`Ok(x)`, not
 `Ok(_)`), and the function is called nowhere — so nothing tells the checker what `x`'s real

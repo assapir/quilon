@@ -62,6 +62,7 @@ impl TypeError {
             TypeError::InvalidPayloadType { .. } => Code::InvalidPayloadType,
             TypeError::AtomicBindingNotMutable { .. } => Code::AtomicBindingNotMutable,
             TypeError::AtomicBindingUsedBare { .. } => Code::AtomicBindingUsedBare,
+            TypeError::SharedAcrossFibers { .. } => Code::SharedAcrossFibers,
             TypeError::UnresolvedResultPayload { .. } => Code::UnresolvedResultPayload,
         }
     }
@@ -203,6 +204,9 @@ impl TypeError {
                 "`@` marks the declaration only — read or reassign it bare: `{name}`, \
                  `{name} := …`"
             )),
+            TypeError::SharedAcrossFibers { name, touch, .. } => diagnostic
+                .label(touch, Some(format!("`{name}` touched here")))
+                .help(format!("declare it `@{name} := …`")),
             TypeError::UnresolvedResultPayload { function, .. } => diagnostic.help(format!(
                 "call `{function}` with a concrete `Ok(...)`/`NotOk(...)` argument, or match \
                  the producing call directly instead of forwarding it through a parameter"
@@ -263,6 +267,7 @@ impl TypeError {
             | TypeError::InvalidPayloadType { span, .. }
             | TypeError::AtomicBindingNotMutable { span, .. }
             | TypeError::AtomicBindingUsedBare { span, .. }
+            | TypeError::SharedAcrossFibers { span, .. }
             | TypeError::UnresolvedResultPayload { span, .. } => span,
         }
     }
@@ -756,6 +761,16 @@ impl std::fmt::Display for TypeError {
                     f,
                     "`{name}` is used bare after its `@` declaration — `@` marks the \
                      declaration only"
+                )
+            }
+            TypeError::SharedAcrossFibers {
+                name, primitive, ..
+            } => {
+                write!(
+                    f,
+                    "`{name}` is a `:=` binding, and the handler passed to `{primitive}` \
+                     runs on its own fiber and reaches it; a `:=` value reachable from \
+                     more than one fiber must be declared atomic"
                 )
             }
             TypeError::UnresolvedResultPayload {

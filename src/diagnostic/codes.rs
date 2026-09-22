@@ -124,7 +124,8 @@ codes! {
     AtomicBindingNotMutable = 347 => "atomic binding declared without `:=`",
     AtomicBindingUsedBare = 348 => "atomic binding used with `@` after its declaration",
     AtomicReassignmentForced = 349 => "atomic binding reassignment waits on a deferred value",
-    UnresolvedResultPayload = 350 => "unresolved `Result` payload",
+    SharedAcrossFibers = 350 => "`:=` value shared across fibers",
+    UnresolvedResultPayload = 351 => "unresolved `Result` payload",
 
     // Family 4 — codegen and build
     CodegenFailed = 400 => "code generation failed",

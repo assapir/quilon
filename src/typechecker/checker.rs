@@ -19,6 +19,7 @@ mod declarations;
 mod env;
 mod errors;
 mod exprs;
+mod fiber_sharing;
 mod overloads;
 mod patterns;
 mod sums;
@@ -388,6 +389,20 @@ pub enum TypeError {
     /// atomic binding.
     AtomicBindingUsedBare {
         name: String,
+        span: Span,
+    },
+    /// A `:=` value reachable from more than one fiber: a non-atomic top-level binding, or
+    /// a `:=` local of the enclosing block, read or written by code that runs on its own
+    /// fiber — the `handler` argument of a primitive like `net.@tcpServe`, and everything
+    /// reachable from it by calls (see
+    /// `docs/concurrency/README.md#sharing-state-across-fibers`). `span` is the launching
+    /// call (`net.@tcpServe(...)`, the sharing point); `touch` is where inside the
+    /// handler's reach the binding is read or written; `primitive` names the call, for the
+    /// message.
+    SharedAcrossFibers {
+        name: String,
+        primitive: &'static str,
+        touch: Span,
         span: Span,
     },
     /// A bare `:: Result` parameter is matched with a payload binding, but `function` is
