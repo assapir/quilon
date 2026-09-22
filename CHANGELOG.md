@@ -11,9 +11,10 @@ All notable changes to Quilon are documented here.
   the next request off the same connection — carrying over a pipelined request's own bytes
   if they already arrived — unless the request or the reply asked for `Connection: close`,
   the request line named `HTTP/1.0`, or the next read comes back empty (a peer close or an
-  idle connection). `Response.reply`'s generated `Connection` header now defaults to
-  `keep-alive` (a program setting its own still wins); a `HEAD` reply carries no body but
-  keeps the `content-length` a `GET` handled the same way would have sent. A new
+  idle connection). The connection handler sets each reply's own `Connection` header to
+  match that decision (`close`/`keep-alive`) before writing it, unless a program already
+  set one on the `Response` it returned; a `HEAD` reply carries no body but keeps the
+  `content-length` a `GET` handled the same way would have sent. A new
   **`ServerOptions.idleTimeout :: Num`** field (5 seconds by default, matching Node) closes
   a connection with nothing arriving for that long, backed by a new runtime overload,
   **`Connection.@read(seconds :: Num) -> Text`**, that gives up (yielding `""`, the same as

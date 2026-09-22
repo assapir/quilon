@@ -220,20 +220,19 @@ off the same connection, carrying over any bytes a pipelined next request sent a
 the one answered. The loop ends — the connection closes — the moment any of these is true:
 
 - The request's own `Connection` header says `close`.
-- The reply `handler` returned carries its own `Connection: close` — an explicit header a
-  handler sets itself; `Response.reply`'s own generated default (below) is `keep-alive`.
-- The request line names `HTTP/1.0`: keep-alive is not that version's own default the way
-  it is HTTP/1.1's, so a bare HTTP/1.0 request gets one response and a close.
+- The reply carries its own `Connection: close` — a header `handler` set itself, read back
+  off the `Response` it returned.
+- The request line names `HTTP/1.0`: keep-alive is not that version's own default, so a
+  bare HTTP/1.0 request gets one response and a close.
 - The next read off the connection returns no bytes at all — the peer closed, or
   `ServerOptions.idleTimeout` (below) passed with nothing arriving.
 
-`Response.reply`'s own generated `Connection` header (below) is always `keep-alive`: the
-constructor has no request to read a wish off, so it advertises the connection staying
-open, the same default a modern HTTP/1.1 server uses absent a reason not to. The loop
-above, not that header, closes the connection afterward — a request that closes
-still gets a reply carrying `Connection: keep-alive`, since the server intends to keep
-every OTHER connection open and this response's own bytes are unaffected by why this one
-particular connection is ending.
+The reply's own `Connection` header says which: `close` in every case above, `keep-alive`
+otherwise. `Response.reply` writes no `Connection` header of its own — `statusReply`
+generates only `content-length` — so the connection handler sets one on every reply
+before writing it, using the rule above. A `Connection` header `handler` set explicitly on
+the `Response` it returned takes precedence over the rule and stays exactly as written —
+an escape hatch for a handler that wants to announce a close of its own.
 
 An idle connection — one with no request bytes arriving, whether waiting on a fresh request
 or partway through one — closes once `ServerOptions.idleTimeout` seconds pass, the same
@@ -332,14 +331,15 @@ hummus = (request :: http.Request) -> http.Response => <
 | `Response.reply(code :: Num) -> Response` | `reply(Status.parse(code))`. |
 | `Response.reply(code :: Num, body :: Text) -> Response` | `reply(Status.parse(code), body)`. |
 | `Response.reply(code :: Num, body :: Text, headers :: Headers) -> Response` | `reply(Status.parse(code), body, headers)`. |
-| `wire() -> Text` | The reply's raw text (`it.raw`) — what `serveConnection` writes to the connection. |
+| `wire() -> Text` | The reply's raw text (`it.raw`). |
 
-Every constructor above sends **only** the headers it was given, plus two generated ones:
-`content-length`, counted in bytes (`Text.size`), and `connection: keep-alive` — see
-[Keep-alive](#keep-alive) for what decides whether the connection stays open. A
-`content-type` comes from the three-argument overload — a program sets its own, the way it
-sets any other header. `Response.reply(OK, "x")` sends exactly
-`HTTP/1.1 200 OK\r\ncontent-length: 1\r\nconnection: keep-alive\r\n\r\nx`.
+Every constructor above sends **only** the headers it was given, plus one generated one:
+`content-length`, counted in bytes (`Text.size`). The connection handler adds a
+`Connection` header of its own before writing a reply to the wire — see
+[Keep-alive](#keep-alive) — so `wire()`'s own text carries one only when a program set it
+itself. A `content-type` comes from the three-argument overload — a program sets its own,
+the way it sets any other header. `Response.reply(OK, "x").wire()` is exactly
+`HTTP/1.1 200 OK\r\ncontent-length: 1\r\n\r\nx`.
 
 A program wanting a record literal built entirely by hand writes `http.Response { raw =
 "..." }` directly, the same escape hatch the client side already offers.

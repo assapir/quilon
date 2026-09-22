@@ -546,18 +546,14 @@ fn jit_http_serve_keeps_a_connection_alive_for_a_second_request() {
 fn jit_http_serve_closes_after_a_request_that_asks_for_connection_close() {
     run_hummus_server(|host, port| {
         // `send_raw` reads to EOF: it only returns if the server actually closes after
-        // this one reply, despite that reply's own header defaulting to keep-alive — the
-        // request's own wish is what ends it, exactly as `shouldCloseAfter` decides.
+        // this one reply — and the reply's own header must say so too.
         let reply = send_raw(
             host,
             port,
             b"GET /pantry HTTP/1.1\r\nHost: shop\r\nConnection: close\r\n\r\n",
         );
         assert!(reply.starts_with("HTTP/1.1 200 OK\r\n"), "reply: {reply}");
-        assert!(
-            reply.contains("connection: keep-alive\r\n"),
-            "reply: {reply}"
-        );
+        assert!(reply.contains("connection: close\r\n"), "reply: {reply}");
     });
 }
 
@@ -565,9 +561,11 @@ fn jit_http_serve_closes_after_a_request_that_asks_for_connection_close() {
 fn jit_http_serve_closes_after_one_response_for_an_http10_request() {
     run_hummus_server(|host, port| {
         // No `Connection` header at all: HTTP/1.0's own default is close, not keep-alive,
-        // so the request line alone must end the connection after this one reply.
+        // so the request line alone must end the connection after this one reply — and
+        // the reply's own header must say so too.
         let reply = send_raw(host, port, b"GET /pantry HTTP/1.0\r\nHost: shop\r\n\r\n");
         assert!(reply.starts_with("HTTP/1.1 200 OK\r\n"), "reply: {reply}");
+        assert!(reply.contains("connection: close\r\n"), "reply: {reply}");
     });
 }
 

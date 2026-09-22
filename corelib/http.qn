@@ -301,10 +301,15 @@ blankLineEnd = (raw :: Text) -> Num => <
   start == raw.length ? raw.length : start + 2
 >
 
+~ `text`'s first line, its own line ending kept — `linesAfterFirst`'s own counterpart, the
+~ two together splitting `text` at its first newline without walking every line the way
+~ `.split("\n")` does to reach just the one.
+firstLine = (text :: Text) -> Text => < text.slice(0, foundOrEnd(text, "\n")) >
+
 ~ Whether `head`'s request line names HTTP/1.0 — keep-alive is not that version's own
-~ default (unlike HTTP/1.1's), so `serveConnection`'s loop ends after one response rather
-~ than reading a second request an HTTP/1.0 peer has no reason to expect it to look for.
-isHttp10Request = (head :: Text) -> Bool => < head.split("\n")[0].contains("HTTP/1.0") >
+~ default, so `serveConnection`'s loop ends after one response rather than reading a
+~ second request an HTTP/1.0 peer has no reason to expect it to look for.
+isHttp10Request = (head :: Text) -> Bool => < firstLine(head).contains("HTTP/1.0") >
 
 ~ Everything in `text` after its first line, or `""` when `text` carries no second line at
 ~ all. Shared by `Response.headers()` and `Request.parse` — a status line and a request
@@ -550,13 +555,12 @@ linesAfterFirst = (text :: Text) -> Text => <
 
 ~ The wire text every `Response` constructor below builds: a status line, exactly the
 ~ headers it was given (no `content-type` added), then `content-length` counted in BYTES,
-~ a `connection` line, a blank line, and `body`. `keepAlive` decides that line's own value
-~ (`keep-alive` or `close`) — the one place either spelling is written, so
-~ `Response.reply` and `closingReply` below can never disagree on the wording.
-statusReply = (status :: Status, body :: Text, headers :: Headers, keepAlive :: Bool) -> Text => <
+~ a blank line, and `body` — no `connection` line: `serveRequests`'s own loop is where the
+~ request that will read this reply is known, so that is where the header belongs (see
+~ `continueUnlessClosing`).
+statusReply = (status :: Status, body :: Text, headers :: Headers) -> Text => <
   "HTTP/1.1 `status.code()` `status.text()`\r\n" + headers.wire()
-    + "content-length: `body.size`\r\nconnection: " + (keepAlive ? "keep-alive" : "close")
-    + "\r\n\r\n" + body
+    + "content-length: `body.size`\r\n\r\n" + body
 >
 
 ~ A reply: the raw response text, read through the methods below.
@@ -574,13 +578,9 @@ statusReply = (status :: Status, body :: Text, headers :: Headers, keepAlive :: 
   blankLine = () -> Num => < blankLineIndex(it.raw) >
 
   ~ A reply carrying `status`, `body`, and exactly `headers` alongside the generated ones.
-  ~ `statusReply`'s own `keepAlive` is always true here: a bare `Response.reply` call has
-  ~ no request to read a wish off, so it defaults to advertising keep-alive, the way a
-  ~ modern HTTP/1.1 server does absent a reason not to. `serveConnection`'s own loop is
-  ~ what actually decides whether to keep the connection open afterward — see
-  ~ `shouldCloseAfter` — and `closingReply` below is `answer`'s own escape hatch for the
-  ~ responses that must not.
-  reply = (status :: Status, body :: Text, headers :: Headers) -> Response => < Response { raw = statusReply(status, body, headers, true) } >,
+  ~ No `connection` header of its own: `serveRequests`'s loop inserts one when it writes
+  ~ this reply to the wire, since only it knows whether the connection is staying open.
+  reply = (status :: Status, body :: Text, headers :: Headers) -> Response => < Response { raw = statusReply(status, body, headers) } >,
   ~ A reply carrying `status` and `body`, with no headers beyond the generated ones.
   reply = (status :: Status, body :: Text) -> Response => < Response.reply(status, body, Headers.empty()) >,
   ~ An empty-body reply carrying `status`.
@@ -920,16 +920,6 @@ readBody = (
     | _          => progress
 >
 
-~ A server-generated reply that always closes the connection afterward — the
-~ malformed-request-line, oversized-body, and malformed-framing responses below write when
-~ there is no request left worth answering further on this connection. `Response.reply`'s
-~ own default (see its own doc) is keep-alive; this is the one caller that wants the
-~ opposite, so it goes straight to `statusReply` rather than through the public
-~ constructor.
-closingReply = (status :: Status) -> Response => <
-  Response { raw = statusReply(status, "", Headers.empty(), false) }
->
-
 ~ Everything past this request's own head (and body, for a body-carrying method) already
 ~ sitting in `accumulated` — the start of a pipelined next request, if its bytes arrived
 ~ alongside this one's. Only meaningful for a BODILESS request: a body-carrying one's own
@@ -950,12 +940,37 @@ leftoverAfterHead = (accumulated :: Text) -> Text => <
 ~ Whether `serveConnection`'s loop ends after writing `response` to `request`: an HTTP/1.0
 ~ request, one that asked for `Connection: close` itself, or one whose response — built by
 ~ `handler`, so read back off it rather than threaded in some other way — carries
-~ `Connection: close` of its own (an explicit override; `Response.reply`'s own default is
-~ keep-alive, so an ordinary handler response never trips this).
+~ `Connection: close` of its own (an explicit override; `statusReply` writes no
+~ `connection` header on its own, so an ordinary handler response never trips this).
 shouldCloseAfter = (http10 :: Bool, request :: Request, response :: Response) -> Bool => <
   http10
     || request.headers().value("connection").trim().toLower() == "close"
     || response.headers().value("connection").trim().toLower() == "close"
+>
+
+~ `wireBytes` with a `connection: value` header inserted right before its own blank line —
+~ `blankLineIndex(wireBytes)` lands exactly where the last header line's own text ends
+~ (its line ending is what the blank line's own leading `\r\n` doubles as), so the new
+~ header's `\r\n` plus that same shared one is exactly one line ending each, and what
+~ `blankLineIndex` found (the blank line itself, unchanged) still follows right after.
+~ Only ever called on wire bytes `core.http` itself built (always CRLF); never on an
+~ arbitrary `Response { raw = ... }` escape hatch that might use another convention.
+insertConnectionHeader = (wireBytes :: Text, value :: Text) -> Text => <
+  insertAt = blankLineIndex(wireBytes)
+  wireBytes.slice(0, insertAt) + "\r\nconnection: " + value
+    + wireBytes.slice(insertAt, wireBytes.length)
+>
+
+~ The wire bytes `serveRequests` writes for `response`, answering `request`: `response`'s
+~ own `connection` header left alone if `handler` already gave it one (an explicit
+~ override), otherwise `connection: close`/`keep-alive` inserted to match
+~ `shouldCloseAfter`'s own decision.
+finalReplyWire = (http10 :: Bool, request :: Request, response :: Response) -> Text => <
+  wireBytes = response.wire()
+  response.headers().has("connection")
+    ? wireBytes
+    : insertConnectionHeader(
+        wireBytes, shouldCloseAfter(http10, request, response) ? "close" : "keep-alive")
 >
 
 ~ `core.http`'s connection handler: the Quilon half of the `http.@serve` lowering, called
@@ -972,19 +987,18 @@ serveRequests = (
   connection :: net.Connection, leftover :: Text, handler :: (Request) -> Response,
   options :: ServerOptions
 ) -> $ => <
-  ~ Write `response` — its body bytes dropped for a HEAD request, whose own
-  ~ `content-length` still names the size a GET's own reply would have carried, exactly
-  ~ what `handler` built it with — and either stop (this request, or `response` itself,
-  ~ asked for close — or the request line was HTTP/1.0) or restart the loop from
-  ~ `nextLeftover`.
+  ~ Write `response` (via `finalReplyWire`, its own `connection` header set to match
+  ~ `shouldCloseAfter`'s decision), its body bytes dropped for a HEAD request whose own
+  ~ `content-length` still names the size a GET's own reply would have carried. Then
+  ~ either stop (per that same decision) or restart the loop from `nextLeftover`.
   continueUnlessClosing = (
     http10 :: Bool, request :: Request, response :: Response, nextLeftover :: Text
   ) -> $ => <
-    wireBytes = response.wire()
+    finalWire = finalReplyWire(http10, request, response)
     connection.@write(
       request.method.token() == "HEAD"
-        ? wireBytes.slice(0, blankLineEnd(wireBytes))
-        : wireBytes)
+        ? finalWire.slice(0, blankLineEnd(finalWire))
+        : finalWire)
     shouldCloseAfter(http10, request, response)
       ? $
       : serveRequests(connection, nextLeftover, handler, options)
@@ -1009,9 +1023,9 @@ serveRequests = (
           connection, accumulated, transferEncoding, contentLength, options.maxBodySize,
           options.idleTimeout) ?
             | Complete(body) => finishWithBody(body)
-            | TooLarge     => connection.@write(closingReply(ContentTooLarge).wire())
-            | Malformed(_) => connection.@write(closingReply(BadRequest).wire())
-            | Incomplete   => connection.@write(closingReply(BadRequest).wire()))
+            | TooLarge     => connection.@write(Response.reply(ContentTooLarge).wire())
+            | Malformed(_) => connection.@write(Response.reply(BadRequest).wire())
+            | Incomplete   => connection.@write(Response.reply(BadRequest).wire()))
       : continueUnlessClosing(http10, request, handler(request), leftoverAfterHead(accumulated))
   >
 
@@ -1019,7 +1033,7 @@ serveRequests = (
     | NotOk(_)        => $
     | Ok(accumulated) =>
         (Request.parse(accumulated.slice(0, blankLineIndex(accumulated)), "") ?
-          | NotOk(_)    => connection.@write(closingReply(BadRequest).wire())
+          | NotOk(_)    => connection.@write(Response.reply(BadRequest).wire())
           | Ok(request) => handleParsedRequest(accumulated, isHttp10Request(accumulated), request))
 >
 
@@ -1681,22 +1695,19 @@ test.describe("Status", () => <
 >)
 
 test.describe("Response's server-side constructors", () => <
-  test.it("reply writes the exact bytes: status line, content-length, connection, body", () =>
-    expect(Response.reply(OK, "x").wire(), equals(
-      "HTTP/1.1 200 OK\r\ncontent-length: 1\r\nconnection: keep-alive\r\n\r\nx")))
+  test.it("reply writes the exact bytes: status line, content-length, body — no connection header", () => <
+    built = Response.reply(OK, "x").wire()
+    expect(built, equals("HTTP/1.1 200 OK\r\ncontent-length: 1\r\n\r\nx"))
+    expect(built, not(contains("connection")))
+  >)
 
   test.it("reply with a Status and a body writes that status's own reason phrase", () =>
     expect(Response.reply(Created, "stocked chickpeas").wire(), equals(
-      "HTTP/1.1 201 Created\r\ncontent-length: 17\r\nconnection: keep-alive\r\n\r\nstocked chickpeas")))
+      "HTTP/1.1 201 Created\r\ncontent-length: 17\r\n\r\nstocked chickpeas")))
 
   test.it("reply with only a Status writes an empty body", () =>
     expect(Response.reply(MethodNotAllowed).wire(), equals(
-      "HTTP/1.1 405 Method Not Allowed\r\ncontent-length: 0\r\nconnection: keep-alive\r\n\r\n")))
-
-  test.it("reply defaults to keep-alive; closingReply always closes", () => <
-    expect(Response.reply(OK, "x").headers().value("connection"), equals("keep-alive"))
-    expect(closingReply(BadRequest).headers().value("connection"), equals("close"))
-  >)
+      "HTTP/1.1 405 Method Not Allowed\r\ncontent-length: 0\r\n\r\n")))
 
   test.it("reply takes a Num code too, writing the exact same bytes as the Status overload", () =>
     expect(Response.reply(405).wire(), equals(Response.reply(MethodNotAllowed).wire())))
@@ -1854,17 +1865,78 @@ test.describe("leftoverAfterHead", () => <
 test.describe("shouldCloseAfter", () => <
   plainRequest = parsedRequest("GET /a HTTP/1.1")
   closeWishRequest = parsedRequest("GET /a HTTP/1.1\r\nConnection: close")
-  keepAliveResponse = Response.reply(OK, "x")
+  plainResponse = Response.reply(OK, "x")
+  explicitCloseHeaders := Headers.empty()
+  explicitCloseHeaders.add("Connection", "close")
+  explicitCloseResponse = Response.reply(BadRequest, "", explicitCloseHeaders)
 
   test.it("closes after an HTTP/1.0 request regardless of either side's own header", () =>
-    expect(shouldCloseAfter(true, plainRequest, keepAliveResponse), equals(true)))
+    expect(shouldCloseAfter(true, plainRequest, plainResponse), equals(true)))
 
   test.it("keeps going when neither side asked to close and the request is HTTP/1.1", () =>
-    expect(shouldCloseAfter(false, plainRequest, keepAliveResponse), equals(false)))
+    expect(shouldCloseAfter(false, plainRequest, plainResponse), equals(false)))
 
   test.it("closes when the request itself asked for Connection: close", () =>
-    expect(shouldCloseAfter(false, closeWishRequest, keepAliveResponse), equals(true)))
+    expect(shouldCloseAfter(false, closeWishRequest, plainResponse), equals(true)))
 
   test.it("closes when the response carries its own Connection: close", () =>
-    expect(shouldCloseAfter(false, plainRequest, closingReply(BadRequest)), equals(true)))
+    expect(shouldCloseAfter(false, plainRequest, explicitCloseResponse), equals(true)))
+>)
+
+test.describe("insertConnectionHeader", () => <
+  test.it("inserts a keep-alive header right before the blank line", () =>
+    expect(
+      insertConnectionHeader("HTTP/1.1 200 OK\r\ncontent-length: 1\r\n\r\nx", "keep-alive"),
+      equals("HTTP/1.1 200 OK\r\ncontent-length: 1\r\nconnection: keep-alive\r\n\r\nx")))
+
+  test.it("inserts a close header the same way", () =>
+    expect(
+      insertConnectionHeader("HTTP/1.1 200 OK\r\ncontent-length: 1\r\n\r\nx", "close"),
+      equals("HTTP/1.1 200 OK\r\ncontent-length: 1\r\nconnection: close\r\n\r\nx")))
+
+  test.it("inserts after any headers the reply already carries", () => <
+    headers := Headers.empty()
+    headers.add("X-A", "b")
+    built = Response.reply(OK, "x", headers).wire()
+    expect(insertConnectionHeader(built, "close"), equals(
+      "HTTP/1.1 200 OK\r\nx-a: b\r\ncontent-length: 1\r\nconnection: close\r\n\r\nx"))
+  >)
+
+  test.it("inserts correctly for an empty body", () =>
+    expect(
+      insertConnectionHeader("HTTP/1.1 405 Method Not Allowed\r\ncontent-length: 0\r\n\r\n", "close"),
+      equals("HTTP/1.1 405 Method Not Allowed\r\ncontent-length: 0\r\nconnection: close\r\n\r\n")))
+>)
+
+test.describe("finalReplyWire", () => <
+  test.it("a request asking to close gets a reply whose header says close", () => <
+    request = parsedRequest("GET /a HTTP/1.1\r\nConnection: close")
+    response = Response.reply(OK, "x")
+    written = finalReplyWire(false, request, response)
+    expect(Response { raw = written }.headers().value("connection"), equals("close"))
+  >)
+
+  test.it("an HTTP/1.0 request gets a reply whose header says close", () => <
+    request = parsedRequest("GET /a HTTP/1.0")
+    response = Response.reply(OK, "x")
+    written = finalReplyWire(true, request, response)
+    expect(Response { raw = written }.headers().value("connection"), equals("close"))
+  >)
+
+  test.it("an ordinary HTTP/1.1 request with no close wish gets a keep-alive reply", () => <
+    request = parsedRequest("GET /a HTTP/1.1")
+    response = Response.reply(OK, "x")
+    written = finalReplyWire(false, request, response)
+    expect(Response { raw = written }.headers().value("connection"), equals("keep-alive"))
+  >)
+
+  test.it("leaves an explicit connection header handler set alone", () => <
+    request = parsedRequest("GET /a HTTP/1.1")
+    headers := Headers.empty()
+    headers.add("Connection", "keep-alive")
+    response = Response.reply(OK, "x", headers)
+    ~ HTTP/1.0 would otherwise force `close`, but the handler's own header wins.
+    written = finalReplyWire(true, request, response)
+    expect(Response { raw = written }.headers().value("connection"), equals("keep-alive"))
+  >)
 >)

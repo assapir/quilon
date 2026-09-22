@@ -590,13 +590,15 @@ fn importing_core_http_contributes_exactly_this_surface() {
         // own `blankLine` too).
         "core.http.blankLineIndex",
         "core.http.blankLineEnd",
+        "core.http.firstLine",
         "core.http.isHttp10Request",
         "core.http.foundOrEnd",
         "core.http.linesAfterFirst",
         "core.http.statusReply",
-        "core.http.closingReply",
         "core.http.leftoverAfterHead",
         "core.http.shouldCloseAfter",
+        "core.http.insertConnectionHeader",
+        "core.http.finalReplyWire",
         "core.http.classifyBodyProgress",
         "core.http.receiveHead",
         "core.http.readBody",
@@ -1554,6 +1556,8 @@ fn the_corelib_http_suite_passes_when_the_module_is_the_file_named() {
         "isHttp10Request",
         "leftoverAfterHead",
         "shouldCloseAfter",
+        "insertConnectionHeader",
+        "finalReplyWire",
     ] {
         assert!(
             out.stdout.contains(group),
@@ -1562,7 +1566,7 @@ fn the_corelib_http_suite_passes_when_the_module_is_the_file_named() {
         );
     }
     assert!(
-        out.stdout.contains("146 passed, 0 failed"),
+        out.stdout.contains("153 passed, 0 failed"),
         "unexpected summary:\n{}",
         out.stdout
     );
