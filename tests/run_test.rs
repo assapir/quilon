@@ -1452,6 +1452,103 @@ fn aot_array_of_results_unifies_variant_payloads() {
     assert_eq!(code, 3, "a native build must exit 3 on the same program");
 }
 
+/// A bare `:: Result` parameter's payload is pinned from what its one caller passes:
+/// `classify` matches `result` directly and binds `Ok(text)`, and the checker recovers
+/// `Text` from `classify(Ok("hi"))` rather than leaving it generic. "hi".length = 2.
+#[test]
+fn run_result_parameter_payload_pinned_from_a_call_site() {
+    let src = r#"
+        Progress = Done(Text) / Broken(Text)
+
+        classify = (result :: Result) -> Progress => <
+          result ?
+            | Ok(text) => Done(text)
+            | NotOk(_) => Broken("stop")
+        >
+        ^ = () -> Num => <
+          classify(Ok("hi")) ?
+            | Done(text)   => text.length
+            | Broken(text) => text.length
+        >
+    "#;
+    assert_exit(src, 2);
+}
+
+/// AOT: the same pinning holds through a native build, not just the JIT.
+#[test]
+fn aot_result_parameter_payload_pinned_from_a_call_site() {
+    if !tool_available("clang") {
+        eprintln!("skipping the native Result-parameter-pinning check: clang is not on PATH");
+        return;
+    }
+    let src = r#"
+        Progress = Done(Text) / Broken(Text)
+
+        classify = (result :: Result) -> Progress => <
+          result ?
+            | Ok(text) => Done(text)
+            | NotOk(_) => Broken("stop")
+        >
+        ^ = () -> Num => <
+          classify(Ok("hi")) ?
+            | Done(text)   => text.length
+            | Broken(text) => text.length
+        >
+    "#;
+    let (code, _) = build_and_run_native("result_parameter_payload_pinning", src);
+    assert_eq!(code, 2, "a native build must exit 2 on the same program");
+}
+
+/// A `Result`'s payload also crosses an OVERLOADED callee: the one-argument `make`'s
+/// return type is refined from its own body (`Ok(Thing)`), so a call to it through the
+/// two-argument overload sees the real payload instead of the opaque annotation.
+/// "a" + "b" = "ab", length 2.
+#[test]
+fn run_result_payload_pinned_through_an_overloaded_callee() {
+    let src = r#"
+        Thing = { name :: Text }
+
+        make = (name :: Text) -> Result => < Ok(Thing { name = name }) >
+        make = (name :: Text, suffix :: Text) -> Result => <
+          make(name) ?
+            | Ok(thing)    => Ok(Thing { name = thing.name + suffix })
+            | NotOk(error) => NotOk(error)
+        >
+        ^ = () -> Num => <
+          make("a", "b") ?
+            | Ok(thing) => thing.name.length
+            | NotOk(_)  => 0
+        >
+    "#;
+    assert_exit(src, 2);
+}
+
+/// AOT: the overloaded-callee refinement holds through a native build too.
+#[test]
+fn aot_result_payload_pinned_through_an_overloaded_callee() {
+    if !tool_available("clang") {
+        eprintln!("skipping the native overloaded-callee check: clang is not on PATH");
+        return;
+    }
+    let src = r#"
+        Thing = { name :: Text }
+
+        make = (name :: Text) -> Result => < Ok(Thing { name = name }) >
+        make = (name :: Text, suffix :: Text) -> Result => <
+          make(name) ?
+            | Ok(thing)    => Ok(Thing { name = thing.name + suffix })
+            | NotOk(error) => NotOk(error)
+        >
+        ^ = () -> Num => <
+          make("a", "b") ?
+            | Ok(thing) => thing.name.length
+            | NotOk(_)  => 0
+        >
+    "#;
+    let (code, _) = build_and_run_native("result_payload_overloaded_callee", src);
+    assert_eq!(code, 2, "a native build must exit 2 on the same program");
+}
+
 #[test]
 fn nested_sum_as_sum_payload_is_accepted() {
     // A declared sum may be another sum's payload, embedded by value (it is declared

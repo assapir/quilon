@@ -1,0 +1,23 @@
+~ Passing a `Result` into a helper that matches it. `judge`'s parameter is a bare
+~ `:: Result` — the annotation alone carries no payload type — so the checker pins
+~ `act`'s payload from what the one call below actually passes: `Ok(Text)`. The bound
+~ `text` then carries that real `Text` into `Cheer`'s own field, where the caller reads
+~ it back at its real type.
+~ Run: cargo run -- run examples/result_helper.qn   (exits 0; assertions abort)
+
+Reaction = Cheer(Text) / Boo(Text)
+
+judge = (act :: Result) -> Reaction => <
+  act ?
+    | Ok(text) => Cheer(text)
+    | NotOk(_) => Boo("come back next season")
+>
+
+^ = () -> $ => <
+  verdict = judge(Ok("a flamingo on a unicycle")) ?
+    | Cheer(text) => text
+    | Boo(text)   => text
+
+  assert(verdict, equals("a flamingo on a unicycle"))
+  assert(verdict.length, equals(24))
+>

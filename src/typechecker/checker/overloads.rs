@@ -367,6 +367,34 @@ impl TypeChecker {
         Ok(())
     }
 
+    /// Refine an overload member's GENERIC return annotation — in practice only
+    /// `-> Result`, whose `Ok(T)`/`NotOk(E)` slots are type variables — to `refined`, the
+    /// type its own body just proved. Mirrors `check_function_declaration`'s refinement
+    /// of a plain function's `env` binding, applied to the member's registered `ret`
+    /// instead: a plain function's callers read its refined type straight from `env`, but
+    /// an overload member's callers read `resolve_overload`'s `ret` field, which needs
+    /// the same correction so a call to it sees the real payload (`Ok("x")` => `Text`)
+    /// instead of the opaque annotation.
+    pub(super) fn refine_overload_return_type(
+        &mut self,
+        name: &str,
+        parameter_types: &[Type],
+        refined: Type,
+    ) {
+        if let Some(set) = self.overloads.get_mut(name)
+            && let Some(member) = set.iter_mut().find(|overload| {
+                overload.parameters.len() == parameter_types.len()
+                    && overload
+                        .parameters
+                        .iter()
+                        .zip(parameter_types)
+                        .all(|(a, b)| types_match(a, b))
+            })
+        {
+            member.ret = Some(refined);
+        }
+    }
+
     /// Record a user overload member's classified result aliasing on the member whose
     /// parameter types these are, once its body has been checked.
     pub(super) fn set_overload_result_aliasing(

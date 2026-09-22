@@ -163,6 +163,7 @@ its name relative to the first block (`` ```quilon title="lib/util.qn" ``).
 | QN347 | atomic binding declared without `:=` |
 | QN348 | atomic binding used with `@` after its declaration |
 | QN349 | atomic binding reassignment waits on a deferred value |
+| QN350 | unresolved `Result` payload |
 | QN400 | code generation failed |
 | QN401 | native build failed |
 | QN500 | assertion failed |
@@ -1168,6 +1169,24 @@ bump = () -> $ => <
 >
 ^ = () -> $ => < bump() >
 ```
+
+### QN350 — unresolved `Result` payload
+
+A function's bare `:: Result` parameter is matched with a payload binding (`Ok(x)`, not
+`Ok(_)`), and the function is called nowhere — so nothing tells the checker what `x`'s real
+type is. A `Result`'s payload type comes from the arguments callers actually pass; with no
+caller, it is unconstrained.
+
+```quilon ignore
+describe = (result :: Result) -> Text => <
+  result ? | Ok(text) => text | NotOk(_) => "none"
+>
+^ = () -> Num => < 0 >
+```
+
+Call it somewhere with a concrete `Ok(...)`/`NotOk(...)` argument, so its payload has a real
+type to bind, or match the producing call directly instead of forwarding it through a
+parameter.
 
 ## Code generation and build
 

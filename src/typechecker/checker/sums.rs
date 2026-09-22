@@ -4,6 +4,9 @@
 //! Part of the type checker; see `super` for the `TypeChecker` state these methods
 //! run against.
 
+use crate::ast::walk::try_for_each_subexpression;
+use std::ops::ControlFlow;
+
 use super::*;
 
 impl TypeChecker {
@@ -248,6 +251,274 @@ impl TypeChecker {
             ),
             Type::Set(elem) => Type::Set(Box::new(self.resolve_type(elem))),
             _ => ty.clone(),
+        }
+    }
+
+    /// After the whole program is checked, pin the payload type of a `Result`-typed
+    /// PARAMETER that stays the raw, unspecialized built-in type through its own
+    /// declaration (`resolve_type` gives every bare `:: Result` the same generic
+    /// `Ok(T)`/`NotOk(E)` shape) but is matched directly in its function's body. The
+    /// source is the same one [`Self::check_constructor_call`] draws from for a
+    /// constructor's own result — every caller's argument at that position, already
+    /// type-checked and sitting in the oracle by now, since a plain function's callers
+    /// (there is no hoisting) are always checked at or after its own declaration.
+    ///
+    /// Two callers disagreeing over a position's payload is a `TypeMismatch` at the
+    /// second one. A parameter whose function is called nowhere, with a body that still
+    /// binds a payload identifier, is `UnresolvedResultPayload` — reported rather than
+    /// left for codegen to default. A parameter that IS called, but never with a
+    /// concrete payload at some position (only the OTHER variant is ever passed), keeps
+    /// that position `Generic` — exactly the existing, sound "unconstructed variant"
+    /// case a local binding's own construction sites already leave generic.
+    ///
+    /// Overloaded functions are skipped: their return-type equivalent of this gap is
+    /// closed instead by [`Self::refine_overload_return_type`], which runs per member as
+    /// its own body is checked — a parameter has no analogous per-member registration to
+    /// refine, so it is pinned here, once, after every call site is known.
+    ///
+    /// This teaches the ORACLE (what codegen reads) the bound payload's real type; it does
+    /// not re-run the checker's own first pass over the body, which already resolved
+    /// every call/operator inside it against the STILL-generic parameter. So the payload
+    /// binding itself must stay in a position `Generic` already tolerates at that first
+    /// pass — a sum constructor argument (`Done(text)`, checked for compatibility, which a
+    /// `Generic` always satisfies) — not one requiring an EXACT overload match against it
+    /// (`text + "!"`, a `Text` method call): those fail at the first pass before this ever
+    /// runs, with the ordinary `NoMatchingOverload`/`UnknownMember` a `Generic` operand
+    /// gets anywhere else. A caller that needs the payload for more than that passes it to
+    /// a match on the producing call directly, or extracts it again from an already-pinned
+    /// return value (see `examples/result_helper.qn`).
+    pub(super) fn pin_result_parameters(&mut self, program: &Program) -> Result<(), TypeError> {
+        for item in &program.items {
+            let Item::FunctionDeclaration(declaration) = item else {
+                continue;
+            };
+            if declaration.is_inert_corelib_placeholder()
+                || self.overloaded_names.contains(&declaration.name)
+            {
+                continue;
+            }
+            for (index, parameter) in declaration.parameters.iter().enumerate() {
+                let Some(annotation) = &parameter.type_annotation else {
+                    continue;
+                };
+                if !is_unspecialized_result(&self.resolve_type(annotation)) {
+                    continue;
+                }
+                let sites = result_parameter_matches(&declaration.body, &parameter.name);
+                if sites.is_empty() {
+                    continue;
+                }
+                self.pin_one_result_parameter(program, declaration, index, &sites)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// [`Self::pin_result_parameters`]'s per-parameter work: fold every caller's argument
+    /// at `index` into a pinned `Ok`/`NotOk` payload, then teach every matched site in
+    /// `sites` that pinned type.
+    fn pin_one_result_parameter(
+        &mut self,
+        program: &Program,
+        declaration: &FunctionDeclaration,
+        index: usize,
+        sites: &[ResultParameterMatch],
+    ) -> Result<(), TypeError> {
+        use crate::ast::{NOT_OK, OK, RESULT_TYPE_NAME, SumVariant};
+
+        // Only a variant some site actually BINDS needs a single, agreed-on payload type —
+        // a discarded payload (`Ok(_)`) never reads its value, so callers may legitimately
+        // pass it different concrete types at every call (`okTag`-style dispatch on the tag
+        // alone). Unifying a position nothing binds would reject that as a false conflict.
+        let needs_ok = sites.iter().any(|site| site.ok_binding.is_some());
+        let needs_not_ok = sites.iter().any(|site| site.not_ok_binding.is_some());
+
+        let mut ok_pin: Option<Type> = None;
+        let mut not_ok_pin: Option<Type> = None;
+        let mut called = false;
+        for call in calls_to(program, &declaration.name) {
+            let Expression::Call { arguments, .. } = call else {
+                unreachable!("calls_to only ever returns Call expressions")
+            };
+            if index >= arguments.len() {
+                continue;
+            }
+            called = true;
+            let argument = &arguments[index];
+            let Some(Type::Sum { name, variants }) = self.type_table.get(argument.span()).cloned()
+            else {
+                continue;
+            };
+            if name != RESULT_TYPE_NAME {
+                continue;
+            }
+            if needs_ok && let Some(variant) = variants.iter().find(|v| v.name == OK) {
+                unify_result_pin(&mut ok_pin, &variant.fields[0], argument.span())?;
+            }
+            if needs_not_ok && let Some(variant) = variants.iter().find(|v| v.name == NOT_OK) {
+                unify_result_pin(&mut not_ok_pin, &variant.fields[0], argument.span())?;
+            }
+        }
+
+        if !called {
+            let unbound = sites
+                .iter()
+                .find_map(|site| site.ok_binding.as_ref().or(site.not_ok_binding.as_ref()));
+            return match unbound {
+                Some(span) => Err(TypeError::UnresolvedResultPayload {
+                    function: declaration.name.clone(),
+                    parameter: declaration.parameters[index].name.clone(),
+                    span: span.clone(),
+                }),
+                None => Ok(()),
+            };
+        }
+
+        if ok_pin.is_none() && not_ok_pin.is_none() {
+            return Ok(());
+        }
+
+        let pinned = Type::Sum {
+            name: RESULT_TYPE_NAME.to_string(),
+            variants: vec![
+                SumVariant {
+                    name: OK.to_string(),
+                    fields: vec![ok_pin.unwrap_or_else(|| Type::Generic {
+                        name: "T".to_string(),
+                    })],
+                },
+                SumVariant {
+                    name: NOT_OK.to_string(),
+                    fields: vec![not_ok_pin.unwrap_or_else(|| Type::Generic {
+                        name: "E".to_string(),
+                    })],
+                },
+            ],
+        };
+        for site in sites {
+            self.type_table
+                .insert(site.scrutinee_span.clone(), pinned.clone());
+        }
+        Ok(())
+    }
+}
+
+/// Whether `ty` is the built-in `Result` exactly as declared — both payload positions
+/// still the raw type variable, meaning no caller or constructor has specialized it yet
+/// (a parameter's bare `:: Result` annotation always resolves to this).
+fn is_unspecialized_result(ty: &Type) -> bool {
+    matches!(ty, Type::Sum { name, variants }
+        if name == crate::ast::RESULT_TYPE_NAME
+            && variants
+                .iter()
+                .all(|v| v.fields.iter().all(|f| matches!(f, Type::Generic { .. }))))
+}
+
+/// One `?`/`|` match, within a function's body, whose SCRUTINEE is a bare read of one of
+/// the function's own `Result`-typed parameters — what [`pin_result_parameters`] looks
+/// for. `ok_binding`/`not_ok_binding` are the payload sub-pattern's own span, when that
+/// arm binds a name (`Ok(text)`) rather than discarding the payload (`Ok(_)`); matching a
+/// DERIVED value (a call, a field, a renamed local) is out of reach for this pass —
+/// matching the producing call directly, or annotating, still works.
+struct ResultParameterMatch {
+    scrutinee_span: Span,
+    ok_binding: Option<Span>,
+    not_ok_binding: Option<Span>,
+}
+
+/// Every `Match` expression in `body` whose scrutinee is a bare read of `parameter_name`.
+fn result_parameter_matches(body: &Expression, parameter_name: &str) -> Vec<ResultParameterMatch> {
+    use crate::ast::{NOT_OK, OK};
+
+    let mut sites = Vec::new();
+    let _: ControlFlow<()> = try_for_each_subexpression(body, &mut |expression| {
+        if let Expression::Match {
+            expression: scrutinee,
+            arms,
+            ..
+        } = expression
+            && let Expression::Identifier { name, span } = scrutinee.as_ref()
+            && name == parameter_name
+        {
+            let mut site = ResultParameterMatch {
+                scrutinee_span: span.clone(),
+                ok_binding: None,
+                not_ok_binding: None,
+            };
+            for arm in arms {
+                if let Pattern::Constructor {
+                    name: constructor,
+                    arguments,
+                    ..
+                } = &arm.pattern
+                    && let [Pattern::Identifier { span: binding, .. }] = arguments.as_slice()
+                {
+                    match constructor.as_str() {
+                        OK => site.ok_binding = Some(binding.clone()),
+                        NOT_OK => site.not_ok_binding = Some(binding.clone()),
+                        _ => {}
+                    }
+                }
+            }
+            sites.push(site);
+        }
+        ControlFlow::Continue(())
+    });
+    sites
+}
+
+/// Every plain (non-member) call to `name` anywhere in `program` — a top-level function
+/// body, a global's initializer, or a type's method body — as the call expression itself,
+/// so its arguments' spans are ready-made oracle keys.
+fn calls_to<'a>(program: &'a Program, name: &str) -> Vec<&'a Expression> {
+    let mut calls = Vec::new();
+    let mut visit = |expression: &'a Expression| {
+        let _: ControlFlow<()> = try_for_each_subexpression(expression, &mut |e| {
+            if let Expression::Call {
+                function,
+                member_call: false,
+                ..
+            } = e
+                && let Expression::Identifier { name: callee, .. } = function.as_ref()
+                && callee == name
+            {
+                calls.push(e);
+            }
+            ControlFlow::Continue(())
+        });
+    };
+    for item in &program.items {
+        match item {
+            Item::FunctionDeclaration(declaration) => visit(&declaration.body),
+            Item::VariableDeclaration(declaration) => visit(&declaration.value),
+            Item::TypeDeclaration(declaration) => {
+                for method in declaration.type_definition.methods() {
+                    visit(&method.body);
+                }
+            }
+        }
+    }
+    calls
+}
+
+/// Fold a caller-supplied field type into `pinned`: the first concrete type wins, a later
+/// caller must agree with it exactly (a `TypeMismatch` at ITS argument — the
+/// disagreement's own site), and a still-generic field (a caller forwarding an equally
+/// unpinned value) teaches nothing.
+fn unify_result_pin(pinned: &mut Option<Type>, field: &Type, span: &Span) -> Result<(), TypeError> {
+    if matches!(field, Type::Generic { .. }) {
+        return Ok(());
+    }
+    match pinned {
+        Some(existing) if existing != field => Err(TypeError::TypeMismatch {
+            expected: Box::new(existing.clone()),
+            got: Box::new(field.clone()),
+            span: span.clone(),
+        }),
+        Some(_) => Ok(()),
+        None => {
+            *pinned = Some(field.clone());
+            Ok(())
         }
     }
 }

@@ -99,6 +99,11 @@ And a `-> Result` whose branches are `Ok(Text)` / `NotOk(Text)` — the `getEnv`
 shape — carries **both** arms' payloads. (See `examples/result.qn` and
 `examples/result_payload.qn`.)
 
+A bare `:: Result` **parameter** works the same way in the other direction: matching it
+directly and binding a payload (`Ok(text) => …`) pins that payload's type from every call
+site passing the parameter a concrete argument, so passing `text` on as a constructor
+argument (`Done(text)`) carries its real type across. (See `examples/result_helper.qn`.)
+
 Every `Result` shares **one uniform layout** regardless of its payload, so a `Result`
 carrying *any* payload — `Num`, `Text`, `[]Text`, a composite — passes through a generic
 `(r :: Result)` parameter or return. This is what lets the `isOk()` / `isNotOk()`

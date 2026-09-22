@@ -390,6 +390,15 @@ pub enum TypeError {
         name: String,
         span: Span,
     },
+    /// A bare `:: Result` parameter is matched with a payload binding, but `function` is
+    /// called nowhere in the program — so no caller's argument teaches the checker the
+    /// payload's real type (see `sums::pin_result_parameters`). `parameter` and `span`
+    /// name the binding left unconstrained.
+    UnresolvedResultPayload {
+        function: String,
+        parameter: String,
+        span: Span,
+    },
 }
 
 /// What the position a lambda sits in states about its type — the target of **contextual

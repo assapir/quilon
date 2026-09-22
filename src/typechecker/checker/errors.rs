@@ -62,6 +62,7 @@ impl TypeError {
             TypeError::InvalidPayloadType { .. } => Code::InvalidPayloadType,
             TypeError::AtomicBindingNotMutable { .. } => Code::AtomicBindingNotMutable,
             TypeError::AtomicBindingUsedBare { .. } => Code::AtomicBindingUsedBare,
+            TypeError::UnresolvedResultPayload { .. } => Code::UnresolvedResultPayload,
         }
     }
 
@@ -202,6 +203,10 @@ impl TypeError {
                 "`@` marks the declaration only — read or reassign it bare: `{name}`, \
                  `{name} := …`"
             )),
+            TypeError::UnresolvedResultPayload { function, .. } => diagnostic.help(format!(
+                "call `{function}` with a concrete `Ok(...)`/`NotOk(...)` argument, or match \
+                 the producing call directly instead of forwarding it through a parameter"
+            )),
             _ => diagnostic,
         }
     }
@@ -257,7 +262,8 @@ impl TypeError {
             | TypeError::FunctionTypedField { span, .. }
             | TypeError::InvalidPayloadType { span, .. }
             | TypeError::AtomicBindingNotMutable { span, .. }
-            | TypeError::AtomicBindingUsedBare { span, .. } => span,
+            | TypeError::AtomicBindingUsedBare { span, .. }
+            | TypeError::UnresolvedResultPayload { span, .. } => span,
         }
     }
 }
@@ -750,6 +756,17 @@ impl std::fmt::Display for TypeError {
                     f,
                     "`{name}` is used bare after its `@` declaration — `@` marks the \
                      declaration only"
+                )
+            }
+            TypeError::UnresolvedResultPayload {
+                function,
+                parameter,
+                ..
+            } => {
+                write!(
+                    f,
+                    "`{parameter}`'s payload is unresolved: `{function}` is called nowhere, so \
+                     no caller's argument teaches this binding its real type"
                 )
             }
         }

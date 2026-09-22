@@ -244,6 +244,19 @@ All notable changes to Quilon are documented here.
   a read of one exactly like a read of a deferred local. A store into such a global still
   never forces — `@testimony := io.@readStdin()` stays accepted. See
   `docs/concurrency/README.md` and `examples/deferred_global.qn`. Closes #445.
+- **A `Result`'s payload type now crosses a function boundary through a bare `:: Result`
+  parameter, not just a return.** Matching such a parameter directly and binding its
+  payload (`Ok(text) => …`) used to leave the binding's type unresolved — nothing pinned
+  it — so codegen defaulted it to `Num`'s representation regardless of the real payload,
+  failing with an internal error the moment it was stored anywhere sized for that real
+  type. The checker now pins the payload from every call site's concrete argument at that
+  position (two callers disagreeing is a `TypeMismatch` at the second one; a parameter
+  called nowhere, with a body that still binds a payload, is the new
+  [QN350](docs/tooling/errors.md#qn350--unresolved-result-payload) instead of a silent
+  default), and the same gap in a call through an OVERLOADED function is closed by
+  refining that member's own registered return type from its body, the way a plain
+  function's already was. See `docs/types/sum-types.md` and `examples/result_helper.qn`.
+  Closes #469. Closes #468.
 
 ## 0.11.0 "Rackham" — 2026-09-08
 

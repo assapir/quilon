@@ -187,6 +187,41 @@ fn test_sum_type_result_match() {
 }
 
 #[test]
+fn test_result_parameter_disagreeing_callers_is_a_type_mismatch() {
+    // A bare `:: Result` parameter's payload is pinned from what callers pass at that
+    // position; a second caller disagreeing with the first is a `TypeMismatch` at the
+    // second call, the same rule a constructor's own argument already enforces.
+    assert!(matches!(
+        check_ok(
+            "classify = (result :: Result) -> Text => <\n  \
+               result ? | Ok(text) => text | NotOk(_) => \"none\"\n\
+             >\n\
+             ^ = () -> Num => <\n  \
+               a = classify(Ok(\"hi\"))\n  \
+               b = classify(Ok(5))\n  \
+               0\n\
+             >"
+        ),
+        Err(TypeError::TypeMismatch { .. })
+    ));
+}
+
+#[test]
+fn test_result_parameter_never_called_with_a_bound_payload_is_rejected() {
+    // Nothing calls `classify`, so no caller's argument teaches the checker `text`'s
+    // real type — reported rather than left for codegen to default to `Num`.
+    assert!(matches!(
+        check_ok(
+            "classify = (result :: Result) -> Text => <\n  \
+               result ? | Ok(text) => text | NotOk(_) => \"none\"\n\
+             >\n\
+             ^ = () -> Num => < 0 >"
+        ),
+        Err(TypeError::UnresolvedResultPayload { .. })
+    ));
+}
+
+#[test]
 fn test_constructor_pattern_on_a_non_sum_scrutinee_is_rejected() {
     // A constructor pattern dispatches on a variant tag, which a `Num` has none of.
     assert!(matches!(

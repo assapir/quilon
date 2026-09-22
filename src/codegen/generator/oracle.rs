@@ -38,17 +38,26 @@ impl<'ctx> CodeGenerator<'ctx> {
     ///     `generate_record` returns the alloca), not the struct by value. A `Named` keeps
     ///     the `type_to_llvm` lowering, which already answers by-pointer for a named record
     ///     and the tagged-union struct for a named sum.
-    ///   - `Generic` — a payload type variable that survived to a read site (e.g. a match
-    ///     whose result type was taken from a never-constructed variant's generic arm)
-    ///     has no concrete LLVM type; it falls back to the canonical numeric payload
-    ///     representation `f64`, matching how generic/unknown payloads are materialized
-    ///     elsewhere (`payload_slot_type`). This keeps such a program compiling (it did
-    ///     before the oracle existed) rather than erroring in `type_to_llvm`.
+    ///   - `Generic` — a bare, still-unspecialized payload type variable reaching a read
+    ///     site here names a real gap: every OTHER site that reads a `Result` payload's
+    ///     type first filters `Generic` out in favor of a concrete one wherever it has a
+    ///     choice (`scrutinee_payload_types` in `matching.rs`, the slot-picking in
+    ///     `payload_slot_types`), falling back to a hardcoded `f64` of their own only for
+    ///     a position NOTHING ever constructs (sound — that slot is provably never read).
+    ///     A bare `Generic` landing HERE instead means some position the checker never
+    ///     pinned reached codegen anyway, so it is reported rather than silently sized as
+    ///     `Num` — the historical default this replaces, and the class of bug that
+    ///     defaulting caused (`docs/tooling/errors.md`'s `QN400`, an internal error, is a
+    ///     truthful report of that gap; a wrong-but-compiling `f64` was not).
     pub(super) fn value_repr_type(&self, ty: &Type) -> Result<BasicTypeEnum<'ctx>, String> {
         match ty {
             Type::Array(_) => Ok(self.ptr_len_struct_type().into()),
             Type::Record(_) => Ok(self.context.ptr_type(AddressSpace::default()).into()),
-            Type::Generic { .. } => Ok(self.context.f64_type().into()),
+            Type::Generic { name } => Err(format!(
+                "internal error: an unresolved payload type variable (`{name}`) reached \
+                 codegen directly — the checker must pin every `Result` payload it binds \
+                 before this point"
+            )),
             _ => self.type_to_llvm(ty),
         }
     }

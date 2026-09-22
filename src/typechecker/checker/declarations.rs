@@ -86,6 +86,11 @@ impl TypeChecker {
         // return annotation is one nothing calls — reported at its definition.
         self.report_unannotated_overload_member()?;
 
+        // Every call site is known now too, so a bare `:: Result` parameter matched
+        // directly in its own function's body can be pinned from what callers actually
+        // pass it — see `sums::pin_result_parameters`.
+        self.pin_result_parameters(program)?;
+
         // Validate the `^` entry point's parameter signature up front, so `quilon check`
         // and `quilon run`/`build` all reject an unsupported form with the SAME clear
         // diagnostic (rather than passing the check and failing later in codegen).
@@ -1196,14 +1201,26 @@ impl TypeChecker {
             // function that only returns `Ok(text)` — still strictly more informative).
             // This mirrors `check_match` preferring a concrete arm type over a generic
             // one and introduces no generics (the annotation still stands as the
-            // compatibility check). A concrete annotation is left exactly as written,
-            // and an overloaded member keeps its per-member registered return.
-            if !is_overloaded && annotated_type.contains_generic() {
-                let refined = Type::Function {
-                    parameters: parameter_types.clone(),
-                    return_type: Box::new(body_type.clone()),
-                };
-                let _ = self.env.update_type(&declaration.name, refined);
+            // compatibility check). A concrete annotation is left exactly as written.
+            // An OVERLOADED member refines the same way, but on its own registered
+            // `ret` (`resolve_overload` reads that, not `env`) — without this, a call
+            // resolving through an overload set never saw the refinement a plain
+            // function's callers already got, which is the gap a same-named overloaded
+            // producer of a `Result` left open.
+            if annotated_type.contains_generic() {
+                if is_overloaded {
+                    self.refine_overload_return_type(
+                        &declaration.name,
+                        &parameter_types,
+                        body_type.clone(),
+                    );
+                } else {
+                    let refined = Type::Function {
+                        parameters: parameter_types.clone(),
+                        return_type: Box::new(body_type.clone()),
+                    };
+                    let _ = self.env.update_type(&declaration.name, refined);
+                }
             }
         } else if is_overloaded {
             // An overload member's return type is its annotation, never its inferred body
