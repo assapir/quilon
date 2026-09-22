@@ -412,6 +412,26 @@ fn test_result_parameter_via_a_whole_signature_annotation_is_rejected() {
 }
 
 #[test]
+fn test_result_parameter_of_a_nested_whole_signature_declaration_is_rejected() {
+    // `classify`'s whole-signature `:: (Result) -> Text` form works the same way
+    // whether it's declared at the top level or, as here, inside another function's
+    // body — `nested_function_candidates` must carry a nested `FunctionDeclaration`'s
+    // `declared_parameters()` through exactly like a top-level one's.
+    assert!(matches!(
+        check_ok(
+            "outer = () -> Num => <\n  \
+               classify :: (Result) -> Text = (result) => <\n    \
+                 result ? | Ok(text) => text | NotOk(_) => \"none\"\n  \
+               >\n  \
+               classify(Ok(\"hi\")).length\n\
+             >\n\
+             ^ = () -> Num => < outer() >"
+        ),
+        Err(TypeError::UnresolvedResultPayload { .. })
+    ));
+}
+
+#[test]
 fn test_result_parameter_renamed_before_matching_is_still_rejected() {
     // `renamed` is a direct copy of `result` (`renamed = result`, no transformation) —
     // matching it must still be attributed back to `result`'s own unresolved payload,
@@ -443,6 +463,29 @@ fn test_result_parameter_of_a_nested_bound_lambda_is_named_correctly() {
         ),
         Err(TypeError::UnresolvedResultPayload { function, .. })
             if function == "helper"
+    ));
+}
+
+#[test]
+fn test_result_parameter_of_a_locally_declared_types_method_is_rejected() {
+    // `Box` is declared INSIDE `outer`'s body, not at the program's top level —
+    // `unwrap`'s bare `:: Result` parameter is still checked, exactly like a
+    // top-level type's method would be.
+    assert!(matches!(
+        check_ok(
+            "outer = () -> Num => <\n  \
+               Box = {\n    \
+                 value :: Num,\n    \
+                 unwrap = (result :: Result) -> Text => <\n      \
+                   result ? | Ok(text) => text | NotOk(_) => \"none\"\n    \
+                 >\n  \
+               }\n  \
+               b = Box { value = 1 }\n  \
+               b.unwrap(Ok(\"hi\")).length\n\
+             >\n\
+             ^ = () -> Num => < outer() >"
+        ),
+        Err(TypeError::UnresolvedResultPayload { .. })
     ));
 }
 

@@ -468,6 +468,19 @@ fn nested_function_candidates(body: &Expression) -> Vec<NestedDeclaration<'_>> {
                                 body,
                             });
                         }
+                        // A type declared locally (inside a function's own body) has
+                        // methods exactly like a top-level one's — each is its own
+                        // candidate, never a method has a whole-signature form.
+                        Statement::Item(Item::TypeDeclaration(declaration)) => {
+                            for method in declaration.type_definition.methods() {
+                                candidates.push(NestedDeclaration {
+                                    name: method.name.clone(),
+                                    parameters: &method.parameters,
+                                    declared: None,
+                                    body: &method.body,
+                                });
+                            }
+                        }
                         _ => {}
                     }
                 }
@@ -592,6 +605,18 @@ fn first_bound_span(
                             if nested.parameters.iter().any(|p| is_alias(&p.name)) =>
                         {
                             shadows.push(nested.span.clone());
+                        }
+                        // A locally-declared type's method, same as a nested function's
+                        // own parameter above — each method is checked as its own
+                        // candidate (see `nested_function_candidates`), so a match
+                        // inside one that reuses this name must not also be attributed
+                        // to the enclosing declaration's parameter.
+                        Statement::Item(Item::TypeDeclaration(declaration)) => {
+                            for method in declaration.type_definition.methods() {
+                                if method.parameters.iter().any(|p| is_alias(&p.name)) {
+                                    shadows.push(method.span.clone());
+                                }
+                            }
                         }
                         // A nested function's or a local `=`/`:=` binding's own NAME
                         // rebinds it from that declaration onward, through the rest of
