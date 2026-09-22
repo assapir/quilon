@@ -265,7 +265,7 @@ All notable changes to Quilon are documented here.
   type. The checker now pins the payload from every call site's concrete argument at that
   position (two callers disagreeing is a `TypeMismatch` at the second one; a parameter
   called nowhere, with a body that still binds a payload, is the new
-  [QN350](docs/tooling/errors.md#qn350--unresolved-result-payload) instead of a silent
+  [QN351](docs/tooling/errors.md#qn351--unresolved-result-payload) instead of a silent
   default), and the same gap in a call through an OVERLOADED function is closed by
   refining that member's own registered return type from its body, the way a plain
   function's already was. See `docs/types/sum-types.md` and `examples/result_helper.qn`.
