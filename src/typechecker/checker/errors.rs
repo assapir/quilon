@@ -782,8 +782,8 @@ impl std::fmt::Display for TypeError {
                 write!(
                     f,
                     "`{parameter}`'s payload is unresolved: `{function}`'s bare `:: Result` \
-                     parameter carries no payload type of its own, and this binding reads it \
-                     as something concrete"
+                     parameter carries no payload type of its own, this binding reads it as \
+                     something concrete, and no caller can teach `{function}` its real type"
                 )
             }
         }

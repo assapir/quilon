@@ -405,12 +405,16 @@ pub enum TypeError {
         touch: Span,
         span: Span,
     },
-    /// A bare `:: Result` PARAMETER (of `function` — a top-level function, a method, or
-    /// a `:=`/`=`-bound lambda) is matched directly and its payload is bound (`Ok(x)`,
-    /// not `Ok(_)`): nothing about the parameter's own declaration says what `x`'s real
-    /// type is, and the checker does not infer it from callers (see
-    /// `sums::reject_unresolved_result_parameters`'s doc comment for why). `parameter`
-    /// and `span` name the binding left unresolved.
+    /// A bare `:: Result` PARAMETER (of `function`) is matched directly and its payload
+    /// is bound (`Ok(x)`, not `Ok(_)`), and no payload type could be worked out for it:
+    /// nothing about the parameter's own declaration says what `x`'s real type is, and
+    /// either `function` is a method or an overload member — with no resolvable call
+    /// site to pin one from at all — or `function` (a plain function or a `:=`/`=`-bound
+    /// lambda, at any nesting depth) is referenced nowhere in the whole program, so no
+    /// caller could ever teach it one either (see `sums::pin_result_parameters`'s doc
+    /// comment for the full rule, including why a referenced-but-uninformed position is
+    /// left generic instead of reported here). `parameter` and `span` name the binding
+    /// left unresolved.
     UnresolvedResultPayload {
         function: String,
         parameter: String,

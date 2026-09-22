@@ -1,25 +1,29 @@
-~ A `Result` matched where it is produced, not forwarded into a helper's own bare
-~ `:: Result` parameter for the helper to match: such a parameter carries no payload
-~ type of its own, so a match that binds it there is rejected (QN351) rather than
-~ guessed at. `judge` returns a `Result`; `^` matches that call directly and hands
-~ `announce` the ALREADY-EXTRACTED, concrete `Text` — never the raw `Result` itself.
+~ A bare `:: Result` PARAMETER carries no payload type of its own — every `:: Result`
+~ annotation is the same unspecialized `Ok(T)`/`NotOk(E)` shape — so a match inside
+~ `judge` that binds its payload (`Ok(text) => …`, not `Ok(_)`) has that payload's type
+~ pinned from `judge`'s own callers' arguments instead, the same way a constructor call
+~ (`Ok("x")`) specializes its own. Both calls below pass a `Text` payload, so `result`
+~ is pinned to `Result[Ok(Text), NotOk(Text)]`, and `Cheer(text)`/`Boo(text)` build their
+~ record from the real `Text` representation rather than a default that would only be
+~ sound for `Num`.
 ~ Run: cargo run -- run examples/result_helper.qn   (exits 0; assertions abort)
 
-judge = (act :: Text) -> Result => <
-  act == "" ? NotOk("nobody to judge") : Ok(act + " wins!")
+Verdict = Cheer(Text) / Boo(Text)
+
+judge = (result :: Result) -> Verdict => <
+  result ?
+    | Ok(text)    => Cheer(text)
+    | NotOk(text) => Boo(text)
 >
 
-announce = (verdict :: Text) -> Text => < "Ladies and gentlemen: " + verdict >
-
 ^ = () -> $ => <
-  message = judge("a flamingo on a unicycle") ?
-    | Ok(verdict) => announce(verdict)
-    | NotOk(reason) => reason
+  cheer = judge(Ok("a seal on a skateboard")) ?
+    | Cheer(text) => "the crowd cheers: " + text
+    | Boo(text)   => "the crowd boos: " + text
+  assert(cheer, equals("the crowd cheers: a seal on a skateboard"))
 
-  assert(message, equals("Ladies and gentlemen: a flamingo on a unicycle wins!"))
-
-  silence = judge("") ?
-    | Ok(verdict) => announce(verdict)
-    | NotOk(reason) => reason
-  assert(silence, equals("nobody to judge"))
+  boo = judge(NotOk("stage fright")) ?
+    | Cheer(text) => "the crowd cheers: " + text
+    | Boo(text)   => "the crowd boos: " + text
+  assert(boo, equals("the crowd boos: stage fright"))
 >

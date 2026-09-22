@@ -98,13 +98,19 @@ And a `-> Result` whose branches are `Ok(Text)` / `NotOk(Text)` — the `getEnv`
 shape — carries **both** arms' payloads. (See `examples/result.qn` and
 `examples/result_payload.qn`.)
 
-A bare `:: Result` **parameter** does not carry this the other way: every bare `:: Result`
-annotation is the same unspecialized `Ok(T)`/`NotOk(E)` shape, so matching such a
-parameter directly and binding its payload (`Ok(x) => …`) is
-[QN351](../tooling/errors.md#qn351--unresolved-result-payload) — nothing about the
-parameter's own declaration says what `x`'s real type is. Match the call that produces
-the `Result` directly instead, and pass the extracted payload on to a helper. (See
-`examples/result_helper.qn`.)
+A bare `:: Result` **parameter** carries no payload type of its own — every bare
+`:: Result` annotation is the same unspecialized `Ok(T)`/`NotOk(E)` shape — so matching
+one directly and binding its payload (`Ok(x) => …`) has that type pinned from the
+declaration's own callers instead: each direct call's argument at that position teaches
+the payload type, the same way a constructor call (`Ok("x")`) specializes its own. Two
+callers disagreeing over the payload is a type mismatch at the second one. (See
+`examples/result_helper.qn`.) A method's or an overloaded function's own `Result`
+parameter has no such call site to pin from — a member call's argument can't be
+attributed to one receiver-independent signature, and a bare call to an overloaded name
+doesn't say which member it fills — so matching one of those is
+[QN351](../tooling/errors.md#qn351--unresolved-result-payload); the fix is the same
+either way: match the call that produces the `Result` directly, and pass the extracted
+payload on to a helper.
 
 Every `Result` shares **one uniform layout** regardless of its payload, so a `Result`
 carrying *any* payload — `Num`, `Text`, `[]Text`, a composite — passes through a generic

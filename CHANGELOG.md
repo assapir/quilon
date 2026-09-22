@@ -279,23 +279,28 @@ All notable changes to Quilon are documented here.
   a read of one exactly like a read of a deferred local. A store into such a global still
   never forces — `@testimony := io.@readStdin()` stays accepted. See
   `docs/concurrency/README.md` and `examples/deferred_global.qn`. Closes #445.
-- **A bare `:: Result` parameter matched directly and bound (`Ok(x) => …`, not `Ok(_)`)
-  is now a checker error instead of a silent, sometimes-crashing default.** Every bare
-  `:: Result` annotation is the same unspecialized `Ok(T)`/`NotOk(E)` shape, so nothing
-  about the parameter's own declaration says what `x`'s real type is; matching one used
-  to leave the binding's type unresolved and let codegen default it to `Num`'s
-  representation regardless of the real payload, failing with an internal error — or,
-  forwarded one call further before being read, a runtime crash. The new
-  [QN351](docs/tooling/errors.md#qn351--unresolved-result-payload) rejects the match
-  outright, naming the fix: match the call that produces the `Result` directly, and pass
-  the extracted payload — not the whole `Result` — to a helper. This applies uniformly
-  to a top-level function's, a method's, and a `:=`/`=`-bound lambda's parameter, at any
-  nesting depth, and to a payload never bound at all (`Ok(_)`, dispatching on the tag
-  alone) not at all. A `Result`'s payload type crossing a function boundary through its
-  RETURN remains inferred, including through an OVERLOADED function: that overload
-  member's own registered return type is now refined from its body the way a plain
-  function's `env` binding already was, closing the matching gap where a call through an
-  overload set previously lost the payload a direct call already kept. See
+- **A bare `:: Result` parameter matched directly and bound (`Ok(x) => …`, not `Ok(_)`) now
+  has its payload pinned from its own callers, instead of silently defaulting to `Num`'s
+  representation and sometimes crashing at codegen.** Every bare `:: Result` annotation is
+  the same unspecialized `Ok(T)`/`NotOk(E)` shape, so nothing about the parameter's own
+  declaration says what a bound payload's real type is; the checker now reads it off every
+  direct call site's already-checked argument instead, the same way a constructor call
+  (`Ok("x")`) specializes its own payload — two callers disagreeing over a position's
+  payload is a type mismatch at the second one, and a bound position no direct call informs
+  is left generic (the historical, sound-for-`Num` default an unconstructed local variant's
+  own slot already gets), rather than rejected. This covers a top-level function's, a
+  `:=`/`=`-bound lambda's, and a nested function or lambda's parameter, at any nesting
+  depth. A method's or an overloaded function's own parameter has no such call site to pin
+  from at all — a member call's argument can't be attributed to one receiver-independent
+  signature, and a bare call to an overloaded name doesn't say which member it fills — so
+  those, and any declaration referenced nowhere in the whole program, still raise the new
+  [QN351](docs/tooling/errors.md#qn351--unresolved-result-payload), naming the fix: match
+  the call that produces the `Result` directly, or annotate the payload instead of matching
+  the whole `Result` inside an unreachable helper. A `Result`'s payload type crossing a
+  function boundary through its RETURN remains inferred, including through an OVERLOADED
+  function: that overload member's own registered return type is now refined from its body
+  the way a plain function's `env` binding already was, closing the matching gap where a
+  call through an overload set previously lost the payload a direct call already kept. See
   `docs/types/sum-types.md` and `examples/result_helper.qn`. Closes #469. Closes #468.
 - **A match arm's binding is no longer corrupted by a nested match inside it reusing the
   same name.** `| Ok(body) => (second ? | Ok(body) => body | NotOk(reason) => reason) +
