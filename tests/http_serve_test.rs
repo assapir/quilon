@@ -136,35 +136,56 @@ fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
         .position(|window| window == needle)
 }
 
-/// Read exactly one HTTP response off `stream` — the keep-alive tests' own counterpart of
-/// `send_raw`, which cannot be used once a connection outlives its first response: reads
-/// until the head's blank line, then exactly `Content-Length` more bytes (every reply this
-/// suite's own handlers write is a short, non-chunked body), leaving anything further —
-/// a pipelined second response, or nothing yet — sitting in the socket for the next call.
-fn read_one_response(stream: &mut TcpStream) -> String {
-    let mut buffer = Vec::new();
-    let mut chunk = [0u8; 4096];
-    loop {
-        if let Some(head_end) = find_subslice(&buffer, b"\r\n\r\n") {
-            let head = String::from_utf8_lossy(&buffer[..head_end]);
-            let content_length: usize = head
-                .split("\r\n")
-                .find_map(|line| {
-                    let (name, value) = line.split_once(':')?;
-                    name.trim()
-                        .eq_ignore_ascii_case("content-length")
-                        .then(|| value.trim().parse().ok())
-                        .flatten()
-                })
-                .unwrap_or(0);
-            let total_needed = head_end + 4 + content_length;
-            if buffer.len() >= total_needed {
-                return String::from_utf8_lossy(&buffer[..total_needed]).into_owned();
-            }
+/// Reads HTTP responses one at a time off a persistent connection — the keep-alive tests'
+/// own counterpart of `send_raw`, which cannot be used once a connection outlives its
+/// first response. Keeps its own read buffer across calls: a server fast enough to answer
+/// two pipelined requests before this side's next `read()` call can land both replies in
+/// one `TcpStream::read` — a fresh buffer per call would silently drop the second reply's
+/// own bytes, and the read for it would then wait on a socket nothing more is coming on.
+struct ResponseReader<'a> {
+    stream: &'a mut TcpStream,
+    buffer: Vec<u8>,
+}
+
+impl<'a> ResponseReader<'a> {
+    fn new(stream: &'a mut TcpStream) -> Self {
+        Self {
+            stream,
+            buffer: Vec::new(),
         }
-        let read = stream.read(&mut chunk).expect("read one response");
-        assert!(read > 0, "connection closed before a full response arrived");
-        buffer.extend_from_slice(&chunk[..read]);
+    }
+
+    /// Read exactly one HTTP response: until the head's blank line, then exactly
+    /// `Content-Length` more bytes (every reply this suite's own handlers write is a
+    /// short, non-chunked body). Anything past that stays in `self.buffer` for the next
+    /// call, whether it arrived just now or on an earlier read.
+    fn next_response(&mut self) -> String {
+        let mut chunk = [0u8; 4096];
+        loop {
+            if let Some(head_end) = find_subslice(&self.buffer, b"\r\n\r\n") {
+                let head = String::from_utf8_lossy(&self.buffer[..head_end]);
+                let content_length: usize = head
+                    .split("\r\n")
+                    .find_map(|line| {
+                        let (name, value) = line.split_once(':')?;
+                        name.trim()
+                            .eq_ignore_ascii_case("content-length")
+                            .then(|| value.trim().parse().ok())
+                            .flatten()
+                    })
+                    .unwrap_or(0);
+                let total_needed = head_end + 4 + content_length;
+                if self.buffer.len() >= total_needed {
+                    let response =
+                        String::from_utf8_lossy(&self.buffer[..total_needed]).into_owned();
+                    self.buffer.drain(..total_needed);
+                    return response;
+                }
+            }
+            let read = self.stream.read(&mut chunk).expect("read one response");
+            assert!(read > 0, "connection closed before a full response arrived");
+            self.buffer.extend_from_slice(&chunk[..read]);
+        }
     }
 }
 
@@ -492,11 +513,13 @@ fn run_hummus_server(drive: impl FnOnce(&str, u16)) {
 fn jit_http_serve_keeps_a_connection_alive_for_a_second_request() {
     run_hummus_server(|host, port| {
         let mut stream = connect_with_timeout(host, port).expect("connect to the server");
+        let mut reader = ResponseReader::new(&mut stream);
 
-        stream
+        reader
+            .stream
             .write_all(b"GET /pantry HTTP/1.1\r\nHost: shop\r\n\r\n")
             .expect("write the first request");
-        let first = read_one_response(&mut stream);
+        let first = reader.next_response();
         assert!(
             first.starts_with("HTTP/1.1 200 OK\r\n"),
             "first reply: {first}"
@@ -507,10 +530,11 @@ fn jit_http_serve_keeps_a_connection_alive_for_a_second_request() {
         );
 
         // The same connection, a second request: only possible if the server kept it open.
-        stream
+        reader
+            .stream
             .write_all(b"GET /pantry HTTP/1.1\r\nHost: shop\r\n\r\n")
             .expect("write the second request");
-        let second = read_one_response(&mut stream);
+        let second = reader.next_response();
         assert!(
             second.starts_with("HTTP/1.1 200 OK\r\n"),
             "second reply: {second}"
@@ -569,6 +593,7 @@ fn jit_http_serve_head_reply_carries_no_body_but_the_correct_content_length() {
 fn jit_http_serve_answers_two_pipelined_requests_in_one_write() {
     run_hummus_server(|host, port| {
         let mut stream = connect_with_timeout(host, port).expect("connect to the server");
+        let mut reader = ResponseReader::new(&mut stream);
         let both = [
             &b"GET /pantry HTTP/1.1\r\nHost: shop\r\n\r\n"[..],
             &b"GET /pantry HTTP/1.1\r\nHost: shop\r\n\r\n"[..],
@@ -576,17 +601,20 @@ fn jit_http_serve_answers_two_pipelined_requests_in_one_write() {
         .concat();
         // Both requests in ONE write: the second's bytes arrive before the first response
         // is written, so the server must pick them up from `leftoverAfterHead` rather than
-        // a fresh read.
-        stream
+        // a fresh read. A server fast enough may likewise answer both before this side
+        // reads at all, landing both replies in one `read()` — `ResponseReader`'s own
+        // buffer is what keeps the second reply's bytes from being dropped on the floor.
+        reader
+            .stream
             .write_all(&both)
             .expect("write both requests in one go");
 
-        let first = read_one_response(&mut stream);
+        let first = reader.next_response();
         assert!(
             first.starts_with("HTTP/1.1 200 OK\r\n"),
             "first reply: {first}"
         );
-        let second = read_one_response(&mut stream);
+        let second = reader.next_response();
         assert!(
             second.starts_with("HTTP/1.1 200 OK\r\n"),
             "second reply: {second}"

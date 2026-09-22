@@ -301,9 +301,11 @@ pub extern "C" fn __connection_read_with_timeout_launch(
     seconds: f64,
 ) -> QlSlice {
     let id = connection_id as u64;
-    // A negative or NaN `seconds` (a program's own bug) reads as "already due" rather than
-    // parking forever or underflowing the deadline arithmetic.
-    let deadline = Instant::now() + Duration::from_secs_f64(seconds.max(0.0));
+    // `bounded_duration`, not a bare `Duration::from_secs_f64`: `seconds` is ordinary
+    // Quilon arithmetic (`1.0 / 0.0` is infinity, not a language error), and that call
+    // panics — taking the whole server down — on a value that is not finite, the same
+    // risk `Server.kill`'s own grace period already guards against.
+    let deadline = Instant::now() + bounded_duration(seconds);
     launch_deferred_text(move || read_connection_once_with_deadline(id, deadline))
 }
 
@@ -374,26 +376,27 @@ fn wake_accept_loop(server: &ServerState) {
     let _ = TcpStream::connect(target);
 }
 
-/// The largest grace period `Server.kill` honors. Far longer than any reasonable use, but
+/// The largest deadline this module honors for a caller-supplied `seconds` — `Server.kill`'s
+/// grace period, and `Connection.@read`'s timeout. Far longer than any reasonable use, but
 /// a concrete bound: `seconds` is ordinary Quilon arithmetic (`1.0 / 0.0` is infinity, not
 /// a language error), and `Duration::from_secs_f64` panics on a value that is not finite
 /// or overflows `Duration` — clamping into this range before ever calling it keeps a wild
 /// `seconds` from taking the whole process down with it.
-const MAX_KILL_SECONDS: f64 = 1_000_000_000.0;
+const MAX_DEADLINE_SECONDS: f64 = 1_000_000_000.0;
 
 /// `seconds` as a `Duration`, never panicking: NaN and a negative value both become "no
-/// wait", and an infinite or overflowing value is capped at [`MAX_KILL_SECONDS`].
-fn kill_grace_period(seconds: f64) -> Duration {
+/// wait", and an infinite or overflowing value is capped at [`MAX_DEADLINE_SECONDS`].
+fn bounded_duration(seconds: f64) -> Duration {
     let bounded = if seconds.is_nan() {
         0.0
     } else if !seconds.is_finite() {
         if seconds.is_sign_positive() {
-            MAX_KILL_SECONDS
+            MAX_DEADLINE_SECONDS
         } else {
             0.0
         }
     } else {
-        seconds.clamp(0.0, MAX_KILL_SECONDS)
+        seconds.clamp(0.0, MAX_DEADLINE_SECONDS)
     };
     Duration::from_secs_f64(bounded)
 }
@@ -416,7 +419,7 @@ fn wait_for_in_flight(server: &ServerState, seconds: f64) {
         HANDLER_FIBER_SERVER.with(|handlers| handlers.borrow().get(&fiber_id).copied())
     }) == Some(identity);
     let floor = usize::from(calling_fiber_is_this_servers_own_handler);
-    let deadline = Instant::now() + kill_grace_period(seconds);
+    let deadline = Instant::now() + bounded_duration(seconds);
     while server.in_flight.get() > floor && Instant::now() < deadline {
         sleep(TICK);
     }
@@ -906,10 +909,12 @@ mod tests {
     }
 
     #[test]
-    fn kill_grace_period_never_panics_on_a_non_finite_or_absurd_seconds() {
+    fn bounded_duration_never_panics_on_a_non_finite_or_absurd_seconds() {
         // `seconds` is ordinary Quilon Num arithmetic — `1.0 / 0.0` is infinity, not a
         // language error — so none of these may reach `Duration::from_secs_f64`'s own
-        // panic conditions (negative, not finite, or overflowing `Duration`).
+        // panic conditions (negative, not finite, or overflowing `Duration`). Shared by
+        // `Server.kill`'s grace period and `Connection.@read`'s timeout, so one test
+        // covers both callers.
         for seconds in [
             f64::NAN,
             f64::INFINITY,
@@ -919,7 +924,7 @@ mod tests {
             0.0,
             5.0,
         ] {
-            let _ = kill_grace_period(seconds);
+            let _ = bounded_duration(seconds);
         }
     }
 }
