@@ -492,47 +492,11 @@ fn nested_function_candidates(body: &Expression) -> Vec<NestedDeclaration<'_>> {
     candidates
 }
 
-/// Every name in `body` that is a DIRECT copy of `parameter_name` — a local `=`/`:=`
-/// binding whose own value is a bare read of an already-known alias (starting from
-/// `parameter_name` itself), chased transitively (`renamed = result` then
-/// `renamedAgain = renamed` both count). This is the one piece of the checker's own
-/// scope-aware resolution [`first_bound_span`] borrows, and only for this one narrow
-/// shape (a same-named identifier copied straight across an `=`/`:=`, not through a
-/// call, a ternary, or any other transformation) — those remain out of reach for this
-/// pass, same as before. Capped at a handful of iterations: a real alias chain is a
-/// couple of names deep at most, and a program that somehow keeps introducing new
-/// aliases from this set forever is not a shape this pass needs to chase further.
-fn direct_aliases_of(body: &Expression, parameter_name: &str) -> std::collections::HashSet<String> {
-    let mut aliases = std::collections::HashSet::new();
-    aliases.insert(parameter_name.to_string());
-    for _ in 0..8 {
-        let mut grew = false;
-        let _: ControlFlow<()> = try_for_each_subexpression(body, &mut |expression| {
-            if let Expression::Block { statements, .. } = expression {
-                for statement in statements {
-                    if let Statement::Item(Item::VariableDeclaration(local)) = statement
-                        && let Expression::Identifier { name, .. } = &local.value
-                        && aliases.contains(name)
-                        && aliases.insert(local.name.clone())
-                    {
-                        grew = true;
-                    }
-                }
-            }
-            ControlFlow::Continue(())
-        });
-        if !grew {
-            break;
-        }
-    }
-    aliases
-}
-
 /// The span of the first payload binding (`Ok(x)`/`NotOk(x)`, not `Ok(_)`) on a direct
-/// match of `parameter_name`, OR ONE OF ITS DIRECT ALIASES (see [`direct_aliases_of`]),
-/// anywhere in `body` — [`TypeChecker::reject_if_bound_and_unresolved`]'s evidence that
-/// this parameter's payload is read as something concrete, with nothing in this pass
-/// able to say what.
+/// match of `parameter_name`, or a name that is a DIRECT copy of it (`renamed = result`,
+/// chased transitively), anywhere in `body` — [`TypeChecker::reject_if_bound_and_unresolved`]'s
+/// evidence that this parameter's payload is read as something concrete, with nothing in
+/// this pass able to say what.
 ///
 /// This is a PURELY LOCAL check — nothing here reads a caller, another declaration, or
 /// the type any OTHER expression carries — so unlike a whole-program call scan, nothing
@@ -555,8 +519,20 @@ fn first_bound_span(
 ) -> Option<Span> {
     use crate::ast::{NOT_OK, OK};
 
-    let aliases = direct_aliases_of(body, parameter_name);
-    let is_alias = |name: &str| aliases.contains(name);
+    // Every name that is a DIRECT copy of `parameter_name` — a local `=`/`:=` binding
+    // whose own value is a bare read of an already-known alias, chased transitively
+    // (`renamed = result` then `renamedAgain = renamed` both count). This is the one
+    // piece of the checker's own scope-aware resolution this pass borrows, and only for
+    // this one narrow shape (a same-named identifier copied straight across an `=`/`:=`,
+    // not through a call, a ternary, or any other transformation) — those remain out of
+    // reach for this pass, same as before. Grown IN PLACE during the single walk below,
+    // rather than in a separate pre-pass: `try_for_each_subexpression` visits a block's
+    // statements in the order they are written, and — since names resolve top to bottom
+    // — an alias-introducing declaration always precedes anything that could read it, so
+    // by the time the walk reaches a later statement every alias it could depend on is
+    // already in this set.
+    let mut aliases = std::collections::HashSet::new();
+    aliases.insert(parameter_name.to_string());
 
     let mut found: Vec<Span> = Vec::new();
     let mut shadows: Vec<Span> = Vec::new();
@@ -568,7 +544,7 @@ fn first_bound_span(
                 ..
             } if matches!(
                 scrutinee.as_ref(),
-                Expression::Identifier { name, .. } if is_alias(name)
+                Expression::Identifier { name, .. } if aliases.contains(name)
             ) =>
             {
                 let Expression::Identifier { span, .. } = scrutinee.as_ref() else {
@@ -592,7 +568,7 @@ fn first_bound_span(
             }
             Expression::Lambda {
                 parameters, span, ..
-            } if parameters.iter().any(|p| is_alias(&p.name)) => {
+            } if parameters.iter().any(|p| aliases.contains(&p.name)) => {
                 shadows.push(span.clone());
             }
             Expression::Block { statements, span } => {
@@ -602,7 +578,7 @@ fn first_bound_span(
                         // that function's whole span (its body, but also the function
                         // literal itself — nothing outside can reach in either way).
                         Statement::Item(Item::FunctionDeclaration(nested))
-                            if nested.parameters.iter().any(|p| is_alias(&p.name)) =>
+                            if nested.parameters.iter().any(|p| aliases.contains(&p.name)) =>
                         {
                             shadows.push(nested.span.clone());
                         }
@@ -613,7 +589,7 @@ fn first_bound_span(
                         // to the enclosing declaration's parameter.
                         Statement::Item(Item::TypeDeclaration(declaration)) => {
                             for method in declaration.type_definition.methods() {
-                                if method.parameters.iter().any(|p| is_alias(&p.name)) {
+                                if method.parameters.iter().any(|p| aliases.contains(&p.name)) {
                                     shadows.push(method.span.clone());
                                 }
                             }
@@ -623,7 +599,7 @@ fn first_bound_span(
                         // THIS block (statements execute in the order written, and nest
                         // no further scope of their own).
                         Statement::Item(Item::FunctionDeclaration(nested))
-                            if is_alias(&nested.name) =>
+                            if aliases.contains(&nested.name) =>
                         {
                             shadows.push(Span {
                                 start: nested.span.start,
@@ -631,23 +607,23 @@ fn first_bound_span(
                                 file: span.file,
                             });
                         }
-                        // Excludes the very declarations `direct_aliases_of` followed to
-                        // build `aliases` in the first place (`renamed = result`): that
-                        // introduces a new alias, it does not shadow one — only a local
-                        // whose OWN name is an alias AND whose value ISN'T itself a bare
-                        // read of one (a genuine rebind, `result := Ok(5)`) shadows it.
-                        Statement::Item(Item::VariableDeclaration(local))
-                            if is_alias(&local.name)
-                                && !matches!(
-                                    &local.value,
-                                    Expression::Identifier { name, .. } if is_alias(name)
-                                ) =>
-                        {
-                            shadows.push(Span {
-                                start: local.span.start,
-                                end: span.end,
-                                file: span.file,
-                            });
+                        // A bare `newName = anAlias` copy grows `aliases` instead of
+                        // shadowing anything — it introduces a second name for the SAME
+                        // value, leaving the original untouched. Anything else reusing
+                        // an alias's name (`result := Ok(5)`) is a genuine rebind and
+                        // shadows it from here on.
+                        Statement::Item(Item::VariableDeclaration(local)) => {
+                            if let Expression::Identifier { name, .. } = &local.value
+                                && aliases.contains(name)
+                            {
+                                aliases.insert(local.name.clone());
+                            } else if aliases.contains(&local.name) {
+                                shadows.push(Span {
+                                    start: local.span.start,
+                                    end: span.end,
+                                    file: span.file,
+                                });
+                            }
                         }
                         _ => {}
                     }

@@ -412,6 +412,25 @@ fn test_result_parameter_via_a_whole_signature_annotation_is_rejected() {
 }
 
 #[test]
+fn test_result_parameter_alias_chain_of_several_hops_is_still_rejected() {
+    // `a`, `b`, and `c` are each a direct copy of the previous, chasing back to
+    // `result` — the alias set grows within one walk, top to bottom, so a chain isn't
+    // just a single rename away from escaping detection.
+    assert!(matches!(
+        check_ok(
+            "classify = (result :: Result) -> Text => <\n  \
+               a = result\n  \
+               b = a\n  \
+               c = b\n  \
+               c ? | Ok(text) => text | NotOk(_) => \"none\"\n\
+             >\n\
+             ^ = () -> Num => < classify(Ok(\"hi\")).length >"
+        ),
+        Err(TypeError::UnresolvedResultPayload { .. })
+    ));
+}
+
+#[test]
 fn test_result_parameter_of_a_nested_whole_signature_declaration_is_rejected() {
     // `classify`'s whole-signature `:: (Result) -> Text` form works the same way
     // whether it's declared at the top level or, as here, inside another function's
