@@ -19,7 +19,10 @@ checkReply = (reply :: http.Response, expectedStatus :: Num, expectedBody :: Tex
 >
 
 ^ = () -> Num => <
-  stand = http.@serve("127.0.0.1:9048", request => hummus(request))
+  ~ A 1 MiB request body cap and a 2-second idle timeout, down from the 16 MiB/5-second defaults.
+  stand = http.@serve(
+    "127.0.0.1:9048", request => hummus(request),
+    http.ServerOptions { maxBodySize = 1024 * 1024, idleTimeout = 2 })
 
   http.Request.get("http://127.0.0.1:9048/counter").send() ?
     | Ok(reply)    => checkReply(reply, 200, "chickpeas: plenty")
