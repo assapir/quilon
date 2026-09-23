@@ -68,7 +68,7 @@ Quilon, reached through the connection the accept loop hands the handler.
 |--------|--------|
 | `server.kill(seconds :: Num) -> $` | Stop accepting, wait up to `seconds` for in-flight handlers to finish, then close any connection still open and the listener itself. Parks the calling fiber until every one of that has happened. |
 | `server.kill() -> $` | `kill` with the default 5-second grace period. |
-| `server.address() -> Address` | The address this server actually bound. Binding port `0` takes any free port the OS assigns, and this is how a program learns which one. |
+| `server.address() -> Address` | The address this server bound. Binding port `0` takes any free port the OS assigns, and this is how a program learns which one. |
 
 `net.Address`, `server.address()`'s own value:
 
