@@ -228,10 +228,9 @@ fn test_result_parameter_disagreeing_callers_is_a_type_mismatch() {
 
 #[test]
 fn test_result_parameter_never_referenced_with_a_bound_payload_is_rejected() {
-    // `classify` is referenced nowhere in the program at all — a truly dead
-    // declaration, whose payload no caller (direct or otherwise) could ever teach this
-    // pass — so its bound payload is reported rather than left for codegen to default
-    // to `Num`.
+    // `classify` is called nowhere in the program at all, so no caller ever
+    // demonstrates `Ok`'s payload type — and `text` is READ (returned), so this is
+    // rejected rather than left for codegen to default to `Num`.
     assert!(matches!(
         check_ok(
             "classify = (result :: Result) -> Text => <\n  \
@@ -244,42 +243,20 @@ fn test_result_parameter_never_referenced_with_a_bound_payload_is_rejected() {
 }
 
 #[test]
-fn test_result_parameter_bound_but_uninformed_and_fed_into_a_concrete_constructor_is_rejected() {
-    // `judge` is called only with `Ok(...)`, so its `NotOk` position is never informed
-    // by a direct caller — but its own binding is passed straight into `Boo`, whose
-    // field is a concrete `Text`, not `Num`. Left `Generic`, this would reach codegen
-    // as an `f64` stored into a `Text` slot (`coerce_payload`'s own internal error) —
-    // caught here instead, at check time, naming the binding.
+fn test_result_parameter_bound_and_read_but_never_demonstrated_by_a_caller_is_rejected() {
+    // `judge` is called only with `Ok(...)`, so its `NotOk` position is never
+    // demonstrated by any direct caller — and its own binding is READ (passed on to
+    // `describe`), so nothing says what its real type is. The specific thing the
+    // binding is used FOR doesn't matter under this rule (a constructor argument, a
+    // plain call, a record field, arithmetic, …) — any read of an undemonstrated
+    // payload is rejected uniformly.
     assert!(matches!(
         check_ok(
-            "Verdict = Cheer(Text) / Boo(Text)\n\
-             judge = (result :: Result) -> Verdict => <\n  \
-               result ?\n    \
-                 | Ok(text)    => Cheer(text)\n    \
-                 | NotOk(text2) => Boo(text2)\n\
-             >\n\
-             ^ = () -> Num => <\n  \
-               judge(Ok(\"hi\")) ? | Cheer(t) => t.length | Boo(t) => t.length\n\
-             >"
-        ),
-        Err(TypeError::UnresolvedResultPayload { .. })
-    ));
-}
-
-#[test]
-fn test_result_parameter_bound_but_uninformed_and_fed_into_a_concrete_function_call_is_rejected() {
-    // The same danger as the constructor case above, but the uninformed binding is
-    // passed to a PLAIN function (`shout`) whose own parameter is a concrete `Text`,
-    // not a sum-variant constructor. Left `Generic`, this would reach codegen as an
-    // `f64` argument against a function expecting `{ ptr, i64 }` — an LLVM module
-    // verification failure, not a silent mismatch.
-    assert!(matches!(
-        check_ok(
-            "shout = (text :: Text) -> Text => < text + \"!\" >\n\
+            "describe = (text :: Text) -> Text => < \"got: \" + text >\n\
              judge = (result :: Result) -> Text => <\n  \
                result ?\n    \
                  | Ok(text)     => text\n    \
-                 | NotOk(text2) => shout(text2)\n\
+                 | NotOk(text2) => describe(text2)\n\
              >\n\
              ^ = () -> Num => < judge(Ok(\"hi\")).length >"
         ),
@@ -288,61 +265,17 @@ fn test_result_parameter_bound_but_uninformed_and_fed_into_a_concrete_function_c
 }
 
 #[test]
-fn test_result_parameter_bound_but_uninformed_and_fed_into_a_named_constructor_field_is_rejected() {
-    // The same danger again, through a NAMED type's own constructor rather than a
-    // sum-variant one: `Box`'s `note` field is a concrete `Text`, and codegen's
-    // `generate_record` builds the record from its field VALUES' own types, so a
-    // `Generic`-defaulted `text2` would give this record a different runtime layout
-    // than `Box`'s declared shape — corrupting the whole value, not just one argument.
-    assert!(matches!(
+fn test_result_parameter_bound_but_never_read_is_accepted_even_when_never_demonstrated() {
+    // `x` is bound (`Ok(x)`, not `Ok(_)`) but never READ anywhere in its own arm — the
+    // arm's whole body is the literal `0`, which never touches `x` — so no caller
+    // needs to demonstrate `Ok`'s payload type at all. Binding a name is not itself a
+    // read; only a later USE of it is.
+    assert!(
         check_ok(
-            "Box = { note :: Text, count :: Num }\n\
-             judge = (result :: Result) -> Box => <\n  \
-               result ?\n    \
-                 | Ok(text)     => Box { note = \"ok\", count = 1 }\n    \
-                 | NotOk(text2) => Box { note = text2, count = 2 }\n\
+            "classify = (result :: Result) -> Num => <\n  \
+               result ? | Ok(x) => 0 | NotOk(_) => 1\n\
              >\n\
-             ^ = () -> Num => <\n  \
-               judge(Ok(\"hi\")).count\n\
-             >"
-        ),
-        Err(TypeError::UnresolvedResultPayload { .. })
-    ));
-}
-
-#[test]
-fn test_result_parameter_forwarded_into_another_result_parameter_is_not_falsely_rejected() {
-    // Regression: `slot_is_unsafe_for_generic` once treated ANY non-`Generic`,
-    // non-`Num` slot as dangerous, including a slot that is ITSELF a `Result` — but
-    // `Result` always packs into its own uniform `{ ptr, i64 }` layout regardless of
-    // payload, so forwarding an equally-unpinned payload into another `:: Result`
-    // parameter (here, `peel`'s own recursive call) forces no real representation
-    // decision and must stay the accepted forwarding gap, not a new rejection.
-    assert!(
-        check_ok(
-            "peel = (r :: Result) -> Num => <\n  \
-           r ? | Ok(inner) => peel(inner) | NotOk(e) => 0\n\
-         >\n\
-         relay = (r :: Result) -> Num => < peel(r) >\n\
-         ^ = () -> Num => < 0 >"
-        )
-        .is_ok()
-    );
-}
-
-#[test]
-fn test_result_parameter_forwarded_into_a_constructors_result_field_is_not_falsely_rejected() {
-    // The same exemption through a user sum-variant constructor whose OWN declared
-    // field is `Result`, not a genuinely concrete type.
-    assert!(
-        check_ok(
-            "Wrapper = Wrap(Result) / Empty\n\
-         useWrap = (w :: Wrapper) -> Num => < 1 >\n\
-         peel = (r :: Result) -> Num => <\n  \
-           r ? | Ok(inner) => useWrap(Wrap(inner)) | NotOk(e) => 0\n\
-         >\n\
-         relay = (r :: Result) -> Num => < peel(r) >\n\
-         ^ = () -> Num => < 0 >"
+             ^ = () -> Num => < classify(NotOk(\"unused\")) >"
         )
         .is_ok()
     );
@@ -380,8 +313,8 @@ fn test_result_parameter_shadow_of_an_unrelated_sibling_local_does_not_hide_a_re
 fn test_result_parameter_of_a_method_is_rejected() {
     // A method's calls are member calls (`recv.name(...)`), which carry no
     // receiver-independent argument to pin from — so a method's bare `:: Result`
-    // parameter is always `UnresolvedResultPayload` when bound, whether or not it is
-    // ever called (unlike a plain function's, pinned above).
+    // parameter has no pin at all, ever, and a READ of its bound payload is
+    // unconditionally `UnresolvedResultPayload`, no direct caller possible either way.
     assert!(matches!(
         check_ok(
             "Box = {\n  \
@@ -400,10 +333,33 @@ fn test_result_parameter_of_a_method_is_rejected() {
 }
 
 #[test]
+fn test_result_parameter_of_a_method_bound_but_unread_is_accepted() {
+    // The SAME method as above, but its `Ok` binding is never read (the arm's whole
+    // body is a literal) — a method's parameter has no pin at all just like the read
+    // case, but with nothing reading the payload, no type is needed either.
+    assert!(
+        check_ok(
+            "Box = {\n  \
+               value :: Num,\n  \
+               unwrap = (result :: Result) -> Num => <\n    \
+                 result ? | Ok(text) => 0 | NotOk(_) => 1\n  \
+               >\n\
+             }\n\
+             ^ = () -> Num => <\n  \
+               b = Box { value = 1 }\n  \
+               b.unwrap(Ok(\"hi\"))\n\
+             >"
+        )
+        .is_ok()
+    );
+}
+
+#[test]
 fn test_result_parameter_of_an_overloaded_function_is_rejected() {
     // A bare call to an overloaded name doesn't say which member's parameter the
-    // argument fills, so an overload member's bare `:: Result` parameter is rejected
-    // the same unconditional way a method's is.
+    // argument fills, so an overload member's bare `:: Result` parameter has no pin
+    // at all either — a READ of its bound payload is unconditionally
+    // `UnresolvedResultPayload`, the same way a method's is.
     assert!(matches!(
         check_ok(
             "handle = (result :: Result) -> Text => <\n  \
@@ -417,20 +373,21 @@ fn test_result_parameter_of_an_overloaded_function_is_rejected() {
 }
 
 #[test]
-fn test_result_parameter_only_self_recursive_is_left_generic_not_rejected() {
-    // `loopy`'s only reference is its own self-recursive call, which counts as
-    // "referenced" — so it is not the "referenced nowhere" case, and its unpinned
-    // position is left generic rather than rejected (`loopy` is in fact never invoked
-    // from `^`, so the position is genuinely never read here).
-    assert!(
+fn test_result_parameter_only_self_recursive_with_a_read_binding_is_rejected() {
+    // `loopy`'s only caller is its own self-recursive call, which forwards `result`
+    // rather than passing a concrete `Ok`/`NotOk` argument — so `Ok`'s payload is
+    // never demonstrated by ANY caller, direct or indirect. Since `t` IS read (it's
+    // the whole `Ok` arm's body), this is rejected: self-recursion is not a caller
+    // that can teach this pass anything.
+    assert!(matches!(
         check_ok(
             "loopy = (result :: Result) -> Text => <\n  \
                result ? | Ok(t) => t | NotOk(_) => loopy(result)\n\
              >\n\
              ^ = () -> Num => < 0 >"
-        )
-        .is_ok()
-    );
+        ),
+        Err(TypeError::UnresolvedResultPayload { .. })
+    ));
 }
 
 #[test]
@@ -615,9 +572,9 @@ fn test_result_parameter_renamed_before_matching_is_still_pinned() {
 
 #[test]
 fn test_result_parameter_of_a_never_referenced_nested_bound_lambda_is_named_correctly() {
-    // `helper` is a `:=`-bound lambda declared INSIDE `outer`'s body, referenced
-    // nowhere at all — the diagnostic must still name it `helper`, not the generic
-    // "a lambda" an anonymous callback would get.
+    // `helper` is a `:=`-bound lambda declared INSIDE `outer`'s body, called nowhere at
+    // all — the diagnostic must still name it `helper`, not the generic "a lambda" an
+    // anonymous callback would get.
     assert!(matches!(
         check_ok(
             "outer = () -> Num => <\n  \

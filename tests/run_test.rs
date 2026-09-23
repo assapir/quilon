@@ -1292,7 +1292,10 @@ fn run_match_arm_binding_shadowed_by_nested_ok_arm_leaves_outer_binding_intact()
     // each stash either a `walnut` (`Ok`) or an excuse (`NotOk`); the second squirrel's
     // stash is checked from inside the first's `Ok` arm, reusing `walnut` — and the first
     // squirrel's own `walnut` (10) must still read as 10 once the inner match (20) is done:
-    // 20 + 10 = 30.
+    // 20 + 10 = 30. Every bound-and-read position is demonstrated by SOME direct call: a
+    // throwaway first call passes `first`'s `NotOk` and `second`'s `Ok` (both `Num`, the
+    // one payload type this program ever reads either position as), before the real call
+    // whose own result is the exit code.
     let src = r#"
 tallySquirrels = (first :: Result, second :: Result) -> Num => <
   first ?
@@ -1302,7 +1305,10 @@ tallySquirrels = (first :: Result, second :: Result) -> Num => <
     | NotOk(sulk) => sulk
 >
 
-^ = () -> Num => < tallySquirrels(Ok(10), NotOk(20)) >
+^ = () -> Num => <
+  tallySquirrels(NotOk(0), Ok(0))
+  tallySquirrels(Ok(10), NotOk(20))
+>
 "#;
     assert_exit(src, 30);
 }
@@ -1313,7 +1319,9 @@ fn run_match_arm_binding_shadowed_by_nested_notok_arm_leaves_outer_binding_intac
     // `NotOk` one. Two grumpy cats each either purr (`Ok`) or hiss a `complaint`
     // (`NotOk`); the second cat's mood is checked from inside the first's `NotOk` arm,
     // reusing `complaint` — and the first cat's own `complaint` (7) must still read as 7
-    // once the inner match (3) is done: 3 + 7 = 10.
+    // once the inner match (3) is done: 3 + 7 = 10. Every bound-and-read position is
+    // demonstrated by SOME direct call: a throwaway first call passes `first`'s `Ok` and
+    // `second`'s `Ok`, before the real call whose own result is the exit code.
     let src = r#"
 tallyCats = (first :: Result, second :: Result) -> Num => <
   first ?
@@ -1323,7 +1331,10 @@ tallyCats = (first :: Result, second :: Result) -> Num => <
         | NotOk(complaint) => complaint) + complaint
 >
 
-^ = () -> Num => < tallyCats(NotOk(7), NotOk(3)) >
+^ = () -> Num => <
+  tallyCats(Ok(0), Ok(0))
+  tallyCats(NotOk(7), NotOk(3))
+>
 "#;
     assert_exit(src, 10);
 }
@@ -1597,64 +1608,39 @@ fn reject_result_parameter_never_referenced_with_a_bound_payload() {
 }
 
 /// A bare `:: Result` parameter called with only ONE variant (here, only `Ok`) still
-/// binds the OTHER variant's payload and passes it straight into a sum-variant
-/// constructor whose field is a concrete, non-`Num` type: left `Generic`, that binding
-/// would reach codegen as `Num`'s `f64` stored into a `Text` slot — an internal error
-/// (`coerce_payload`) that a clean compile should never let through. Caught here
-/// instead, at check time.
+/// binds AND READS the OTHER variant's payload (passed on to `describe`): no caller
+/// ever demonstrates `NotOk`'s payload type, so nothing says what the read value's real
+/// type is — reported at check time rather than left for codegen to default to `Num`.
 #[test]
-fn reject_result_parameter_bound_but_uninformed_variant_fed_into_a_concrete_constructor() {
+fn reject_result_parameter_bound_and_read_but_never_demonstrated_by_a_caller() {
     let src = r#"
-        Verdict = Cheer(Text) / Boo(Text)
-
-        judge = (result :: Result) -> Verdict => <
-          result ?
-            | Ok(text)     => Cheer(text)
-            | NotOk(text2) => Boo(text2)
-        >
-        ^ = () -> Num => <
-          judge(Ok("hi")) ? | Cheer(t) => t.length | Boo(t) => t.length
-        >
-    "#;
-    assert_type_error_code(src, Code::UnresolvedResultPayload);
-}
-
-/// The same danger, but the uninformed binding flows into a PLAIN function's own
-/// concrete parameter instead of a sum-variant constructor: left `Generic`, `shout`
-/// would receive an `f64` where it expects `{ ptr, i64 }` — an LLVM module verification
-/// failure, not a silent mismatch.
-#[test]
-fn reject_result_parameter_bound_but_uninformed_variant_fed_into_a_concrete_function_call() {
-    let src = r#"
-        shout = (text :: Text) -> Text => < text + "!" >
+        describe = (text :: Text) -> Text => < "got: " + text >
 
         judge = (result :: Result) -> Text => <
           result ?
             | Ok(text)     => text
-            | NotOk(text2) => shout(text2)
+            | NotOk(text2) => describe(text2)
         >
         ^ = () -> Num => < judge(Ok("hi")).length >
     "#;
     assert_type_error_code(src, Code::UnresolvedResultPayload);
 }
 
-/// The same danger through a NAMED type's own constructor: codegen builds a record
-/// literal's struct from its field VALUES' own types (`generate_record`), so a
-/// `Generic`-defaulted field would give `Box` a different runtime layout than every
-/// read site expects — a corrupted value rather than one mismatched call argument.
+/// The same undemonstrated `NotOk` position, but its binding is never READ (the arm's
+/// whole body is a literal) — binding a payload is not itself a use of it, so no caller
+/// needs to demonstrate its type at all, and this compiles and runs normally.
+/// "hi".length = 2.
 #[test]
-fn reject_result_parameter_bound_but_uninformed_variant_fed_into_a_named_constructor_field() {
+fn run_result_parameter_bound_but_unread_needs_no_caller_to_demonstrate_it() {
     let src = r#"
-        Box = { note :: Text, count :: Num }
-
-        judge = (result :: Result) -> Box => <
+        judge = (result :: Result) -> Text => <
           result ?
-            | Ok(text)     => Box { note = "ok", count = 1 }
-            | NotOk(text2) => Box { note = text2, count = 2 }
+            | Ok(text)     => text
+            | NotOk(text2) => "unused"
         >
-        ^ = () -> Num => < judge(Ok("hi")).count >
+        ^ = () -> Num => < judge(Ok("hi")).length >
     "#;
-    assert_type_error_code(src, Code::UnresolvedResultPayload);
+    assert_exit(src, 2);
 }
 
 /// A `Result`'s payload also crosses an OVERLOADED callee: the one-argument `make`'s

@@ -207,11 +207,11 @@ impl TypeError {
             TypeError::SharedAcrossFibers { name, touch, .. } => diagnostic
                 .label(touch, Some(format!("`{name}` touched here")))
                 .help(format!("declare it `@{name} := …`")),
-            TypeError::UnresolvedResultPayload { .. } => diagnostic.help(
-                "match the call that produces this `Result` directly, and pass the \
-                 extracted payload — not the whole `Result` — to a helper"
-                    .to_string(),
-            ),
+            TypeError::UnresolvedResultPayload { variant, .. } => diagnostic.help(format!(
+                "pass a caller argument shaped `{variant}(...)` so this parameter's payload \
+                 has a real type, or bind it with `_` (or simply leave it unread) since \
+                 nothing here needs its value"
+            )),
             _ => diagnostic,
         }
     }
@@ -777,13 +777,14 @@ impl std::fmt::Display for TypeError {
             TypeError::UnresolvedResultPayload {
                 function,
                 parameter,
+                variant,
                 ..
             } => {
                 write!(
                     f,
-                    "`{parameter}`'s payload is unresolved: `{function}`'s bare `:: Result` \
-                     parameter carries no payload type of its own, this binding reads it as \
-                     something concrete, and no caller can teach `{function}` its real type"
+                    "`{parameter}`'s `{variant}` payload is unresolved: this binding reads it, \
+                     but no caller of `{function}` ever passes a `{parameter}` argument shaped \
+                     `{variant}(...)`, so nothing says what its real type is"
                 )
             }
         }

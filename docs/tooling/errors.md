@@ -1218,20 +1218,18 @@ Bind it atomically:
 
 ### QN351 — unresolved `Result` payload
 
-A bare `:: Result` parameter — of a function or a `:=`/`=`-bound lambda, at any nesting
-depth — is matched directly and its payload is bound (`Ok(x)`, not `Ok(_)`), but its
-payload type can't be worked out. The parameter's own declaration carries no payload type
-of its own (every bare `:: Result` is the same unspecialized `Ok(T)`/`NotOk(E)` shape), so
-the checker instead reads it off the declaration's own callers. This is reported when that
-isn't possible: the declaration is never referenced anywhere in the program at all, so no
-caller can ever teach it a payload type; or it IS referenced, but the binding is passed
-straight into a sum-variant constructor, a named type's own constructor, or a plain
-function whose slot there is a concrete type other than `Num` — a mismatch that would
-otherwise reach codegen as an internal error or a corrupted value. (A method's or an
-overloaded function's own `Result` parameter has no such call site to pin from either way —
-a member call's argument can't be attributed to one receiver-independent signature, and a
-bare call to an overloaded name doesn't say which member it fills — so those raise this
-same error unconditionally, whether or not the name is otherwise called.)
+A bare `:: Result` parameter's own declaration carries no payload type — every bare
+`:: Result` annotation is the same unspecialized `Ok(T)`/`NotOk(E)` shape. Matching one
+directly and BINDING a variant's payload (`Ok(x)`, not `Ok(_)`) pins that variant's type
+from a direct caller's own argument instead, the same way a constructor call (`Ok("x")`)
+specializes its own. A variant no caller ever demonstrates has no payload type at all —
+and a READ of its binding (any use of it, anywhere in that match arm, not merely binding
+it) then has nothing to type-check against, which this reports. Binding it WITHOUT
+reading it needs no type and is always accepted, whether or not any caller ever
+demonstrates that variant. A method's or an overloaded function's own `Result` parameter
+has no call site to pin from EITHER way — a member call's argument can't be attributed to
+one receiver-independent signature, and a bare call to an overloaded name doesn't say
+which member it fills — so a read there is `UnresolvedResultPayload` unconditionally.
 
 ```quilon ignore
 describe = (result :: Result) -> Text => <
@@ -1240,16 +1238,16 @@ describe = (result :: Result) -> Text => <
 ^ = () -> Num => < 0 >
 ```
 
-Match the call that produces the `Result` directly instead, and pass the extracted
-payload — not the whole `Result` — to a helper:
+Nothing calls `describe`, so no caller ever demonstrates `Ok`'s payload — and `text` is
+read (returned). Pass it a `Result` whose `Ok` a direct call demonstrates:
 
 ```quilon
-describe = (text :: Text) -> Text => < "it says: " + text >
+describe = (result :: Result) -> Text => <
+  result ? | Ok(text) => text | NotOk(_) => "none"
+>
 ^ = () -> $ => <
-  message = Ok("home") ?
-    | Ok(text) => describe(text)
-    | NotOk(_) => "?"
-  assert(message, equals("it says: home"))
+  message = describe(Ok("home"))
+  assert(message, equals("home"))
 >
 ```
 

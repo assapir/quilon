@@ -1,11 +1,11 @@
 ~ A bare `:: Result` PARAMETER carries no payload type of its own — every `:: Result`
 ~ annotation is the same unspecialized `Ok(T)`/`NotOk(E)` shape — so a match inside
-~ `judge` that binds its payload (`Ok(text) => …`, not `Ok(_)`) has that payload's type
-~ pinned from `judge`'s own callers' arguments instead, the same way a constructor call
-~ (`Ok("x")`) specializes its own. Both calls below pass a `Text` payload, so `result`
-~ is pinned to `Result[Ok(Text), NotOk(Text)]`, and `Cheer(text)`/`Boo(text)` build their
-~ record from the real `Text` representation rather than a default that would only be
-~ sound for `Num`.
+~ `judge` that binds AND READS its payload (`Ok(text) => …`, not `Ok(_)`) needs a
+~ caller to demonstrate what that payload really is: this pass reads it off the
+~ argument a direct call passes, the same way a constructor call (`Ok("x")`)
+~ specializes its own. Both calls below pass a `Text` payload, so `result` is pinned to
+~ `Result[Ok(Text), NotOk(Text)]`, and `Cheer(text)`/`Boo(text)` build their record
+~ from the real `Text` payload each call demonstrated.
 ~ Run: cargo run -- run examples/result_helper.qn   (exits 0; assertions abort)
 
 Verdict = Cheer(Text) / Boo(Text)

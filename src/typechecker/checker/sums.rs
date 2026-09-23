@@ -6,7 +6,6 @@
 
 use crate::ast::Statement;
 use crate::ast::walk::try_for_each_subexpression;
-use std::collections::HashSet;
 use std::ops::ControlFlow;
 
 use super::*;
@@ -266,16 +265,22 @@ impl TypeChecker {
     /// The payload is pinned from every DIRECT call site's already-checked argument type
     /// at that position — the same source [`Self::check_constructor_call`] draws from
     /// for a constructor's own result. Two callers disagreeing over a position's payload
-    /// is a `TypeMismatch` at the second one. A bound position no direct call informs is
-    /// left `Generic` (the historical, sound-for-`Num` default an unconstructed local
-    /// variant's own slot already gets) rather than rejected, UNLESS the declaration's
-    /// name is referenced NOWHERE in the whole program at all — a truly dead
-    /// declaration, where `UnresolvedResultPayload` is reported instead of silently
-    /// deferring to that default. A method's or an overload member's own bound
-    /// parameter carries no such call site to pin from at all (a member call's argument
-    /// can't be attributed to one receiver-independent signature, and a bare call to an
-    /// overloaded name doesn't say which member it fills), so it is
-    /// `UnresolvedResultPayload` unconditionally.
+    /// is a `TypeMismatch` at the second one.
+    ///
+    /// A variant NO caller demonstrates has no payload type at all — full stop, whether
+    /// the declaration is called elsewhere without informing that specific variant, or
+    /// never called at all. A match arm that binds AND READS that payload — any use of
+    /// the bound name, anywhere in the arm's own body, honoring shadowing (see
+    /// [`is_payload_read`]) — is `UnresolvedResultPayload`, naming the function, the
+    /// parameter, and the unresolved variant. Binding it WITHOUT reading it (`Ok(x) =>
+    /// 0`, never touching `x`) or discarding it outright (`Ok(_)`) needs no payload type
+    /// at all and is accepted either way — nothing ever observes its representation, so
+    /// a function dispatched on the tag alone (`okTag`-style, every call passing a
+    /// different concrete payload) is untouched. A method's or an overload member's own
+    /// parameter has no call site to pin from AT ALL (a member call's argument can't be
+    /// attributed to one receiver-independent signature, and a bare call to an
+    /// overloaded name doesn't say which member it fills) — every read there follows
+    /// this SAME rule unconditionally, since no caller could ever inform it either way.
     ///
     /// This design is narrower than it once was: pinning from a whole-program,
     /// name-keyed scan of call sites went through several review rounds, each finding a
@@ -285,9 +290,7 @@ impl TypeChecker {
     /// scoping every match/shadow check to purely LOCAL, per-declaration information
     /// (nothing here reads what ANOTHER declaration's body contains) and reserving the
     /// whole-program scan strictly for reading a DIRECT call's own, already-checked
-    /// argument type. A position no site ever BINDS (`Ok(_)` / `NotOk(_)`) needs no
-    /// payload type at all, so a function dispatched on the tag alone (`okTag`-style,
-    /// every call passing a different concrete payload) is untouched either way.
+    /// argument type.
     ///
     /// A `Result`'s payload type crossing a function boundary through its RETURN,
     /// including an OVERLOADED function's, is a different, already-sound mechanism —
@@ -295,50 +298,13 @@ impl TypeChecker {
     /// own-`env`-binding refinement — since a function's return is pinned from its OWN
     /// body, never from a caller.
     ///
-    /// A bound position no direct call informs is rejected instead of left `Generic`
-    /// when the binding itself is passed straight into a sum-variant constructor, a
-    /// NAMED type's own constructor (`Box { note = text2, … }`), or a plain function,
-    /// whose slot there is concrete and isn't `Num` (see
-    /// [`Self::pin_one_result_parameter`] and `flows_into_a_non_num_constructor`) — each
-    /// a shape with a REGISTERED, checkable declared type to compare against. Left
-    /// `Generic`, a sum-variant or plain-call argument reaches codegen as `Num`'s `f64`
-    /// against a differently-shaped slot, a caught internal error (`coerce_payload`, or
-    /// LLVM's own module verification); a named constructor's OWN struct is instead
-    /// BUILT from its field values' actual types (`generate_record`), so a `Generic`
-    /// field there silently gives the whole record a DIFFERENT runtime layout than
-    /// every read site expects — corrupting memory rather than erroring cleanly, which
-    /// is exactly why this shape is checked here too rather than left as an accepted
-    /// residual risk. An ANONYMOUS record, array, map, or set literal has no such
-    /// registered shape of its own to check against (its inferred type is exactly its
-    /// elements' own types), so a `Generic` element in one of those remains the
-    /// SAME accepted, non-widened residual risk a bare uninformed return already
-    /// carries (see below) — a silently wrong value, not a crash, whenever such a
-    /// literal is later matched against some OTHER concrete annotation.
-    ///
-    /// One gap this leaves: a parameter FORWARDED into another function's own bare
-    /// `:: Result` parameter, rather than called with a concrete `Ok`/`NotOk` argument
-    /// directly, is not informed by that forwarding call (its argument is an
-    /// `Identifier`, not a constructor application, so it carries no payload type of its
-    /// own to read) — the forwarded-to parameter is then left `Generic` exactly like a
-    /// never-called one, and `oracle::value_repr_type` renders it as `Num`'s `f64`
-    /// regardless of its real payload. This is caught only when the forwarded-to
-    /// parameter's OWN body feeds it into a concrete-typed constructor or a plain
-    /// function call ([`Self::slot_is_unsafe_for_generic`]'s guard, deliberately NOT
-    /// resolving an OVERLOADED name's own member — see its doc comment); a forwarded-to
-    /// parameter merely returned, used in arithmetic, or itself fed into an overloaded
-    /// call is not. The residual risk differs by shape: returned or used in arithmetic,
-    /// it silently computes as if it really were `Num`; fed into an overloaded call
-    /// (or any other statically-fixed non-`Num` slot this guard doesn't reach), the
-    /// mismatch is still an internal error at codegen (LLVM's own module verification,
-    /// or `coerce_payload`), not a silent wrong answer — the same class of failure this
-    /// whole fix exists to catch earlier, just not caught here.
-    /// Closing it fully would need either tracing a payload's type through every call in
-    /// between (undoing the very whole-program mis-attribution risk the narrowing above
-    /// exists to avoid) or rejecting every such forwarding parameter outright (which
-    /// would also reject a parameter dispatched on the tag alone through a chain of
-    /// forwarders); left as a known, non-regressing limitation for now.
+    /// Rejecting every unpinned-but-read variant here is what lets codegen stop
+    /// defaulting an undetermined payload's representation to `Num` at all: a program
+    /// this pass accepts never reaches `oracle::value_repr_type`'s `Type::Generic` arm
+    /// with a payload anything actually reads, so that arm is now an internal error
+    /// (see its own doc comment) rather than a silent `f64` fallback.
     pub(super) fn pin_result_parameters(&mut self, program: &Program) -> Result<(), TypeError> {
-        let index = index_program_calls(program);
+        let calls_by_name = index_program_calls(program);
 
         for item in &program.items {
             match item {
@@ -353,9 +319,9 @@ impl TypeChecker {
                         declaration.declared_parameters(),
                         &declaration.body,
                         pinnable,
-                        &index,
+                        &calls_by_name,
                     )?;
-                    self.pin_nested_result_parameters(&declaration.body, &index)?;
+                    self.pin_nested_result_parameters(&declaration.body, &calls_by_name)?;
                 }
                 Item::TypeDeclaration(declaration) => {
                     for method in declaration.type_definition.methods() {
@@ -370,9 +336,9 @@ impl TypeChecker {
                             None,
                             &method.body,
                             false,
-                            &index,
+                            &calls_by_name,
                         )?;
-                        self.pin_nested_result_parameters(&method.body, &index)?;
+                        self.pin_nested_result_parameters(&method.body, &calls_by_name)?;
                     }
                 }
                 Item::VariableDeclaration(declaration) => match &declaration.value {
@@ -393,11 +359,11 @@ impl TypeChecker {
                             None,
                             body,
                             true,
-                            &index,
+                            &calls_by_name,
                         )?;
-                        self.pin_nested_result_parameters(body, &index)?;
+                        self.pin_nested_result_parameters(body, &calls_by_name)?;
                     }
-                    other => self.pin_nested_result_parameters(other, &index)?,
+                    other => self.pin_nested_result_parameters(other, &calls_by_name)?,
                 },
             }
         }
@@ -415,7 +381,7 @@ impl TypeChecker {
     fn pin_nested_result_parameters(
         &mut self,
         body: &Expression,
-        index: &CallIndex<'_>,
+        calls_by_name: &HashMap<&str, Vec<&Expression>>,
     ) -> Result<(), TypeError> {
         for candidate in nested_function_candidates(body) {
             self.pin_result_parameters_of(
@@ -424,7 +390,7 @@ impl TypeChecker {
                 candidate.declared,
                 candidate.body,
                 !candidate.is_method,
-                index,
+                calls_by_name,
             )?;
         }
         Ok(())
@@ -433,10 +399,9 @@ impl TypeChecker {
     /// [`Self::pin_result_parameters`]'s per-declaration work, shared by a top-level
     /// function, a method, a lambda, and every nested candidate: every bare `:: Result`
     /// parameter of `parameters` that `body` matches directly. `pinnable` is false for a
-    /// method or an overload member, where a bound payload is reported unconditionally
-    /// rather than pinning attempted (see the doc comment above). `declared` is a
-    /// whole-signature `::` annotation's parameter slots (`f :: (Result) -> Text =
-    /// (result) => …`), read the same way
+    /// method or an overload member, where no direct caller is ever consulted (see the
+    /// doc comment above). `declared` is a whole-signature `::` annotation's parameter
+    /// slots (`f :: (Result) -> Text = (result) => …`), read the same way
     /// [`crate::ast::FunctionDeclaration::parameter_type`] does — a parameter's own
     /// annotation wins, so this is consulted only when it has none of its own.
     fn pin_result_parameters_of(
@@ -446,7 +411,7 @@ impl TypeChecker {
         declared: Option<&[Type]>,
         body: &Expression,
         pinnable: bool,
-        call_index: &CallIndex<'_>,
+        calls_by_name: &HashMap<&str, Vec<&Expression>>,
     ) -> Result<(), TypeError> {
         for (index, parameter) in parameters.iter().enumerate() {
             let annotation = parameter
@@ -463,37 +428,33 @@ impl TypeChecker {
             if sites.is_empty() {
                 continue;
             }
-            if !pinnable {
-                if let Some(span) = first_binding(&sites) {
-                    return Err(TypeError::UnresolvedResultPayload {
-                        function: name.to_string(),
-                        parameter: parameter.name.clone(),
-                        span: span.clone(),
-                    });
-                }
-                continue;
-            }
-            self.pin_one_result_parameter(name, index, &parameter.name, &sites, body, call_index)?;
+            self.pin_one_result_parameter(
+                name,
+                index,
+                &parameter.name,
+                &sites,
+                pinnable,
+                calls_by_name,
+            )?;
         }
         Ok(())
     }
 
-    /// [`Self::pin_result_parameters_of`]'s pinnable-parameter case: fold every direct
-    /// caller's argument at `index` into a pinned `Ok`/`NotOk` payload, then teach every
-    /// matched site in `sites` that pinned type.
+    /// [`Self::pin_result_parameters_of`]'s per-parameter work: fold every direct
+    /// caller's argument at `index` into a pinned `Ok`/`NotOk` payload — skipped
+    /// entirely when `!pinnable` (a method or an overload member), which always treats
+    /// both variants as undemonstrated. A variant that ends up unpinned but is bound AND
+    /// READ somewhere in `sites` is `UnresolvedResultPayload`; otherwise, whatever WAS
+    /// pinned is taught to every matched site.
     fn pin_one_result_parameter(
         &mut self,
         name: &str,
         index: usize,
         parameter_name: &str,
-        sites: &[ResultParameterMatch],
-        body: &Expression,
-        call_index: &CallIndex<'_>,
+        sites: &[ResultParameterMatch<'_>],
+        pinnable: bool,
+        calls_by_name: &HashMap<&str, Vec<&Expression>>,
     ) -> Result<(), TypeError> {
-        let CallIndex {
-            calls_by_name,
-            referenced_names,
-        } = call_index;
         use crate::ast::{NOT_OK, OK, RESULT_TYPE_NAME, SumVariant};
 
         // Only a variant some site actually BINDS needs a single, agreed-on payload type
@@ -504,85 +465,69 @@ impl TypeChecker {
         let needs_ok = sites.iter().any(|site| site.ok_binding.is_some());
         let needs_not_ok = sites.iter().any(|site| site.not_ok_binding.is_some());
 
-        let no_calls = Vec::new();
-        let calls = calls_by_name.get(name).unwrap_or(&no_calls);
         let mut ok_pin: Option<Type> = None;
         let mut not_ok_pin: Option<Type> = None;
-        for call in calls {
-            let Expression::Call { arguments, .. } = call else {
-                unreachable!("calls_by_name only ever indexes Call expressions")
-            };
-            if index >= arguments.len() {
-                continue;
-            }
-            let argument = &arguments[index];
-            let Some(Type::Sum {
-                name: sum_name,
-                variants,
-            }) = self.type_table.get(argument.span()).cloned()
-            else {
-                continue;
-            };
-            if sum_name != RESULT_TYPE_NAME {
-                continue;
-            }
-            if needs_ok && let Some(variant) = variants.iter().find(|v| v.name == OK) {
-                unify_result_pin(&mut ok_pin, &variant.fields[0], argument.span())?;
-            }
-            if needs_not_ok && let Some(variant) = variants.iter().find(|v| v.name == NOT_OK) {
-                unify_result_pin(&mut not_ok_pin, &variant.fields[0], argument.span())?;
+        if pinnable {
+            let no_calls = Vec::new();
+            let calls = calls_by_name.get(name).unwrap_or(&no_calls);
+            for call in calls {
+                let Expression::Call { arguments, .. } = call else {
+                    unreachable!("calls_by_name only ever indexes Call expressions")
+                };
+                if index >= arguments.len() {
+                    continue;
+                }
+                let argument = &arguments[index];
+                let Some(Type::Sum {
+                    name: sum_name,
+                    variants,
+                }) = self.type_table.get(argument.span()).cloned()
+                else {
+                    continue;
+                };
+                if sum_name != RESULT_TYPE_NAME {
+                    continue;
+                }
+                if needs_ok && let Some(variant) = variants.iter().find(|v| v.name == OK) {
+                    unify_result_pin(&mut ok_pin, &variant.fields[0], argument.span())?;
+                }
+                if needs_not_ok && let Some(variant) = variants.iter().find(|v| v.name == NOT_OK) {
+                    unify_result_pin(&mut not_ok_pin, &variant.fields[0], argument.span())?;
+                }
             }
         }
 
-        // A variant no direct caller informs is normally left `Generic`, falling back to
-        // codegen's numeric default — sound as long as nothing ever needs that binding's
-        // REAL representation. It doesn't when the binding is itself passed straight into
-        // a sum-variant constructor whose field at that position is concrete and isn't
-        // `Num`: codegen then has a `Num`-shaped (`f64`) value to store into a slot sized
-        // for something else, an internal error `coerce_payload` catches but which a
-        // clean compile should never have reached. Caught here instead, by name, at the
-        // binding that would cause it.
+        // A variant no caller demonstrates has no payload type at all: reject the FIRST
+        // site that actually READS it (naming that exact binding), and otherwise leave
+        // it alone — a bound-but-unread payload needs no type, since nothing ever
+        // observes its representation.
         if needs_ok
             && ok_pin.is_none()
-            && let Some((binding_name, binding_span)) =
-                sites.iter().find_map(|s| s.ok_binding.as_ref())
-            && flows_into_a_non_num_constructor(self, body, binding_name)
+            && let Some((_, span, _)) = sites
+                .iter()
+                .filter_map(|s| s.ok_binding.as_ref())
+                .find(|(binding_name, _, arm_body)| is_payload_read(arm_body, binding_name))
         {
             return Err(TypeError::UnresolvedResultPayload {
                 function: name.to_string(),
                 parameter: parameter_name.to_string(),
-                span: binding_span.clone(),
+                variant: OK.to_string(),
+                span: span.clone(),
             });
         }
         if needs_not_ok
             && not_ok_pin.is_none()
-            && let Some((binding_name, binding_span)) =
-                sites.iter().find_map(|s| s.not_ok_binding.as_ref())
-            && flows_into_a_non_num_constructor(self, body, binding_name)
+            && let Some((_, span, _)) = sites
+                .iter()
+                .filter_map(|s| s.not_ok_binding.as_ref())
+                .find(|(binding_name, _, arm_body)| is_payload_read(arm_body, binding_name))
         {
             return Err(TypeError::UnresolvedResultPayload {
                 function: name.to_string(),
                 parameter: parameter_name.to_string(),
-                span: binding_span.clone(),
+                variant: NOT_OK.to_string(),
+                span: span.clone(),
             });
-        }
-
-        // Reject only when the name is referenced NOWHERE in the whole program at all —
-        // a truly dead declaration, whose payload no caller (direct or otherwise) can
-        // ever teach this pass. A declaration that IS referenced but never with a
-        // concrete argument at THIS position keeps that position generic instead: the
-        // same historical, sound-for-`Num` default an unconstructed local variant's own
-        // slot already gets (a position genuinely read with something else needs a
-        // caller demonstrating that, which pins it here instead of leaving it generic).
-        if !referenced_names.contains(name) {
-            if let Some(span) = first_binding(sites) {
-                return Err(TypeError::UnresolvedResultPayload {
-                    function: name.to_string(),
-                    parameter: parameter_name.to_string(),
-                    span: span.clone(),
-                });
-            }
-            return Ok(());
         }
 
         if ok_pin.is_none() && not_ok_pin.is_none() {
@@ -722,28 +667,16 @@ fn nested_function_candidates(body: &Expression) -> Vec<NestedDeclaration<'_>> {
 /// One `?`/`|` match, within a declaration's body, whose SCRUTINEE is a bare read of one
 /// of its own `Result`-typed parameters (or a direct alias of one — see
 /// [`result_parameter_matches`]) — what [`TypeChecker::pin_result_parameters`] looks
-/// for. `ok_binding`/`not_ok_binding` are the payload sub-pattern's own name and span,
-/// when that arm binds a name (`Ok(text)`) rather than discarding the payload (`Ok(_)`);
-/// matching a DERIVED value (a call, a field, a renamed local's further transformation)
+/// for. `ok_binding`/`not_ok_binding` are the payload sub-pattern's own name, span, and
+/// ARM BODY, when that arm binds a name (`Ok(text)`) rather than discarding the payload
+/// (`Ok(_)`) — the body is what [`is_payload_read`] checks for a use of that name.
+/// Matching a DERIVED value (a call, a field, a renamed local's further transformation)
 /// is out of reach for this pass — matching the producing call directly, or annotating,
 /// still works.
-struct ResultParameterMatch {
+struct ResultParameterMatch<'a> {
     scrutinee_span: Span,
-    ok_binding: Option<(String, Span)>,
-    not_ok_binding: Option<(String, Span)>,
-}
-
-/// The span of the first payload binding (`Ok(x)`/`NotOk(x)`, not `Ok(_)`) among `sites`,
-/// if any binds one at all — the span an unpinnable declaration's `UnresolvedResultPayload`
-/// names, and the same evidence a pinnable one falls back to naming if it turns out to be
-/// truly unreachable (see [`TypeChecker::pin_one_result_parameter`]).
-fn first_binding(sites: &[ResultParameterMatch]) -> Option<&Span> {
-    sites.iter().find_map(|site| {
-        site.ok_binding
-            .as_ref()
-            .or(site.not_ok_binding.as_ref())
-            .map(|(_, span)| span)
-    })
+    ok_binding: Option<(String, Span, &'a Expression)>,
+    not_ok_binding: Option<(String, Span, &'a Expression)>,
 }
 
 /// One name's status, valid only within `scope` (a byte-range, file-qualified region of
@@ -788,11 +721,11 @@ fn resolve_alive(entries: &[AliasEntry], name: &str, at: &Span) -> bool {
 /// A `?`/`|` match found during the walk, before it's known whether its scrutinee's name
 /// still resolves to `parameter_name` at that point — resolved by [`resolve_alive`] only
 /// once the whole walk (and so every [`AliasEntry`] it could depend on) is complete.
-struct MatchCandidate {
+struct MatchCandidate<'a> {
     scrutinee_name: String,
     scrutinee_span: Span,
-    ok_binding: Option<(String, Span)>,
-    not_ok_binding: Option<(String, Span)>,
+    ok_binding: Option<(String, Span, &'a Expression)>,
+    not_ok_binding: Option<(String, Span, &'a Expression)>,
 }
 
 /// Every `?`/`|` match in `body` whose scrutinee is a bare read of `parameter_name`, or a
@@ -815,11 +748,11 @@ struct MatchCandidate {
 /// parameter — `type_table`, the checker's own first-pass record of each identifier
 /// occurrence's REAL type, disambiguates: a site counts only when its scrutinee's own
 /// recorded type is exactly as unspecialized as the target parameter's.
-fn result_parameter_matches(
+fn result_parameter_matches<'a>(
     type_table: &TypeTable,
-    body: &Expression,
+    body: &'a Expression,
     parameter_name: &str,
-) -> Vec<ResultParameterMatch> {
+) -> Vec<ResultParameterMatch<'a>> {
     use crate::ast::{NOT_OK, OK};
 
     // The parameter itself is always its own alias, everywhere in its own body.
@@ -828,7 +761,7 @@ fn result_parameter_matches(
         scope: body.span().clone(),
         alive: true,
     }];
-    let mut candidates: Vec<MatchCandidate> = Vec::new();
+    let mut candidates: Vec<MatchCandidate<'a>> = Vec::new();
 
     let _: ControlFlow<()> = try_for_each_subexpression(body, &mut |expression| {
         match expression {
@@ -857,7 +790,7 @@ fn result_parameter_matches(
                                 },
                             ] = arguments.as_slice()
                         {
-                            let binding = (binding_name.clone(), binding_span.clone());
+                            let binding = (binding_name.clone(), binding_span.clone(), &arm.body);
                             match constructor.as_str() {
                                 OK => candidate.ok_binding = Some(binding),
                                 NOT_OK => candidate.not_ok_binding = Some(binding),
@@ -987,69 +920,45 @@ fn result_parameter_matches(
 /// A one-time index over the whole program, shared by every candidate parameter
 /// [`TypeChecker::pin_result_parameters`] considers (rather than re-walking the program
 /// once per candidate): `calls_by_name[callee]` is every plain (non-member) call
-/// expression naming `callee`, and `referenced_names` is every name any `Identifier`
-/// expression anywhere reads (a superset of the callees above, since a call's own
-/// function position is itself an `Identifier`) — the signal
-/// [`TypeChecker::pin_one_result_parameter`] uses to tell a truly dead declaration
-/// (referenced nowhere at all, where a bound payload is `UnresolvedResultPayload`) from
-/// one that IS referenced but never with a concrete argument at some position (left
-/// generic there instead). Bundled into one struct so passing it down through
-/// `pin_result_parameters_of` and `pin_nested_result_parameters` costs one argument, not
-/// two.
-struct CallIndex<'a> {
-    calls_by_name: HashMap<&'a str, Vec<&'a Expression>>,
-    referenced_names: HashSet<&'a str>,
-}
-
-fn index_program_calls(program: &Program) -> CallIndex<'_> {
+/// expression naming `callee` — the only signal [`TypeChecker::pin_one_result_parameter`]
+/// draws from, since a variant no such call demonstrates has no payload type regardless
+/// of whether the declaration is referenced some OTHER way.
+fn index_program_calls(program: &Program) -> HashMap<&str, Vec<&Expression>> {
     let mut calls_by_name: HashMap<&str, Vec<&Expression>> = HashMap::new();
-    let mut referenced_names: HashSet<&str> = HashSet::new();
     for item in &program.items {
         match item {
             Item::FunctionDeclaration(declaration) => {
-                index_expression(&declaration.body, &mut calls_by_name, &mut referenced_names)
+                index_expression(&declaration.body, &mut calls_by_name)
             }
-            Item::VariableDeclaration(declaration) => index_expression(
-                &declaration.value,
-                &mut calls_by_name,
-                &mut referenced_names,
-            ),
+            Item::VariableDeclaration(declaration) => {
+                index_expression(&declaration.value, &mut calls_by_name)
+            }
             Item::TypeDeclaration(declaration) => {
                 for method in declaration.type_definition.methods() {
-                    index_expression(&method.body, &mut calls_by_name, &mut referenced_names);
+                    index_expression(&method.body, &mut calls_by_name);
                 }
             }
         }
     }
-    CallIndex {
-        calls_by_name,
-        referenced_names,
-    }
+    calls_by_name
 }
 
 /// [`index_program_calls`]'s per-expression work — its own named, explicitly-lifetimed
 /// function rather than a closure, which a plain `impl FnMut` cannot express here: the
-/// borrowed `Expression`s these two maps collect must outlive the call that finds them.
+/// borrowed `Expression`s this map collects must outlive the call that finds them.
 fn index_expression<'a>(
     expression: &'a Expression,
     calls_by_name: &mut HashMap<&'a str, Vec<&'a Expression>>,
-    referenced_names: &mut HashSet<&'a str>,
 ) {
     let _: ControlFlow<()> = try_for_each_subexpression(expression, &mut |e| {
-        match e {
-            Expression::Identifier { name, .. } => {
-                referenced_names.insert(name.as_str());
-            }
-            Expression::Call {
-                function,
-                member_call: false,
-                ..
-            } => {
-                if let Expression::Identifier { name, .. } = function.as_ref() {
-                    calls_by_name.entry(name.as_str()).or_default().push(e);
-                }
-            }
-            _ => {}
+        if let Expression::Call {
+            function,
+            member_call: false,
+            ..
+        } = e
+            && let Expression::Identifier { name, .. } = function.as_ref()
+        {
+            calls_by_name.entry(name.as_str()).or_default().push(e);
         }
         ControlFlow::Continue(())
     });
@@ -1077,145 +986,97 @@ fn unify_result_pin(pinned: &mut Option<Type>, field: &Type, span: &Span) -> Res
     }
 }
 
-/// Whether `binding_name` is passed, anywhere in `body`, as a bare argument to a
-/// sum-variant constructor call whose field at that position is CONCRETE and isn't
-/// `Num` — the one shape [`TypeChecker::pin_one_result_parameter`] cannot safely leave
-/// `Generic`: `Num` is safe because Generic's own codegen default (`f64`) already IS
-/// `Num`'s representation, so nothing downstream can tell the difference; anything else
-/// (`Text`, a record, another sum, an array) has its own, DIFFERENT representation, and
-/// a `Generic` value flowing into that slot is exactly what makes `coerce_payload` fail.
-/// A purely local scan, like [`result_parameter_matches`] itself: it reads only what
-/// `binding_name` is passed to, not what any OTHER declaration's body contains — a
-/// function's or a lambda's own concrete-typed parameter is the same, already-accepted
-/// forwarding gap [`TypeChecker::pin_result_parameters`]'s doc comment names, since a
-/// user function's declared parameter type isn't looked up here.
-impl TypeChecker {
-    /// Whether `binding_name` is passed, anywhere in `body`, as a bare argument to EITHER
-    /// a sum-variant constructor OR a plain (non-overloaded) function whose slot at that
-    /// position is CONCRETE and isn't `Num` — see [`flows_into_a_non_num_constructor`]'s
-    /// doc comment for why that shape is unsafe to leave `Generic`. An overloaded name's
-    /// own member isn't resolved here (`self.env.get_type` answers only a plain
-    /// function's single registered type, and correctly answers nothing useful for one),
-    /// so a payload forwarded into an overload set keeps the same accepted, non-widened
-    /// forwarding gap it already had.
-    fn slot_is_unsafe_for_generic(&self, callee: &str, position: usize) -> bool {
-        self.sum_types.values().any(|sum_type| {
-            let Type::Sum { variants, .. } = sum_type else {
-                return false;
-            };
-            variants
-                .iter()
-                .find(|v| v.name == callee)
-                .and_then(|v| v.fields.get(position))
-                .is_some_and(is_concrete_non_num)
-        }) || matches!(
-            self.env.get_type(callee),
-            Some(Type::Function { parameters, .. })
-                if parameters.get(position).is_some_and(is_concrete_non_num)
-        )
-    }
-
-    /// [`Self::slot_is_unsafe_for_generic`]'s counterpart for a NAMED type's constructor
-    /// (`Box { note = text2, … }`, `Expression::Constructor`), whose fields are matched
-    /// by NAME rather than position: whether `type_name`'s registered field `field_name`
-    /// is concrete and isn't `Num`. An anonymous record literal (`{ note = text2, … }`,
-    /// `Expression::Record`, no `type_name` of its own) has no such registered shape to
-    /// check against — its own inferred type is exactly what its field VALUES say, so
-    /// nothing here forces a mismatched slot; the danger for one of those, like a bare
-    /// return, is only whatever a SURROUNDING annotation demands, which is the already
-    /// accepted, non-widened residual risk [`TypeChecker::pin_result_parameters`]'s doc
-    /// comment names, not a new concrete-slot danger this pass closes.
-    fn named_field_is_unsafe_for_generic(&self, type_name: &str, field_name: &str) -> bool {
-        matches!(
-            self.env.get_type(type_name),
-            Some(Type::Named { fields, .. })
-                if fields
-                    .iter()
-                    .find(|(name, _)| name == field_name)
-                    .is_some_and(|(_, field)| is_concrete_non_num(field))
-        )
-    }
-}
-
-/// A `Result` slot — specialized or not — shares `Result`'s own ONE canonical `{ ptr,
-/// i64 }` representation regardless of payload (`pack_result_payload`), so passing an
-/// equally-unpinned payload into it forces no REAL representation decision the way a
-/// genuinely concrete (`Text`, a record, …) field does; this is the accepted
-/// Result-to-Result forwarding gap [`TypeChecker::pin_result_parameters`]'s doc comment
-/// already names, not a new concrete-slot danger. `Num` is exempt for the same reason
-/// `Generic` itself is: its own codegen default (`f64`) already IS `Num`'s
-/// representation.
-fn is_concrete_non_num(field: &Type) -> bool {
-    !matches!(field, Type::Generic { .. } | Type::Num)
-        && !matches!(field, Type::Sum { name, .. } if name == crate::ast::RESULT_TYPE_NAME)
-}
-
-/// Whether `binding_name` is passed, anywhere in `body`, as a bare argument to a call
-/// whose slot at that position is CONCRETE and isn't `Num` (see
-/// [`TypeChecker::slot_is_unsafe_for_generic`]) — the one shape
-/// [`TypeChecker::pin_one_result_parameter`] cannot safely leave `Generic`: `Num` is safe
-/// because Generic's own codegen default (`f64`) already IS `Num`'s representation, so
-/// nothing downstream can tell the difference; anything else (`Text`, a record, another
-/// sum, an array) has its own, DIFFERENT representation, and a `Generic` value flowing
-/// into that slot is exactly what makes `coerce_payload` (a constructor) or LLVM's own
-/// module verifier (a plain function call) fail. A purely local scan, like
-/// [`result_parameter_matches`] itself: it reads only what `binding_name` is passed to,
-/// not what any OTHER declaration's body contains — an OVERLOADED function's own member
-/// isn't resolved (see [`TypeChecker::slot_is_unsafe_for_generic`]), which remains the
-/// same, already-accepted forwarding gap [`TypeChecker::pin_result_parameters`]'s doc
-/// comment names.
-fn flows_into_a_non_num_constructor(
-    checker: &TypeChecker,
-    body: &Expression,
-    binding_name: &str,
-) -> bool {
-    let mut found = false;
-    let _: ControlFlow<()> = try_for_each_subexpression(body, &mut |expression| {
-        if found {
-            return ControlFlow::Break(());
-        }
-        if let Expression::Call {
-            function,
-            arguments,
-            member_call: false,
-            ..
-        } = expression
-            && let Expression::Identifier { name: callee, .. } = function.as_ref()
-        {
-            for (position, argument) in arguments.iter().enumerate() {
-                if let Expression::Identifier { name, .. } = argument
-                    && name == binding_name
-                    && checker.slot_is_unsafe_for_generic(callee, position)
-                {
-                    found = true;
-                    return ControlFlow::Break(());
+/// Whether `name` — a match arm's own bound payload — is READ anywhere within
+/// `arm_body`: any occurrence of it as a bare identifier, other than one shadowed by a
+/// nested function/lambda parameter, a local declaration, or a nested match arm's own
+/// pattern reusing the same name (each of which then refers to something else, not this
+/// binding, for the rest of that shadow's own scope). This is the ONLY thing
+/// [`TypeChecker::pin_one_result_parameter`] needs to know about an unpinned variant:
+/// with no caller ever demonstrating its type, a REAL read has no representation to
+/// materialize, while a bound-but-unread payload (`Ok(x) => 0`, never touching `x`)
+/// needs no type at all — nothing observes it. A purely local scan, like
+/// [`result_parameter_matches`] itself: it reads only `arm_body`, never another
+/// declaration's.
+fn is_payload_read(arm_body: &Expression, name: &str) -> bool {
+    let mut occurrences: Vec<Span> = Vec::new();
+    let mut shadows: Vec<Span> = Vec::new();
+    let _: ControlFlow<()> = try_for_each_subexpression(arm_body, &mut |expression| {
+        match expression {
+            Expression::Identifier { name: n, span } if n == name => occurrences.push(span.clone()),
+            Expression::Lambda {
+                parameters, span, ..
+            } if parameters.iter().any(|p| p.name == name) => {
+                shadows.push(span.clone());
+            }
+            Expression::Match { arms, .. } => {
+                for arm in arms {
+                    if pattern_binds(&arm.pattern, name) {
+                        shadows.push(arm.body.span().clone());
+                    }
                 }
             }
-        }
-        // A NAMED type's own constructor (`Box { note = text2, … }`) — codegen builds
-        // its struct from this literal's OWN field VALUES (`generate_record`), so a
-        // `Generic`-defaulted field here doesn't just mismatch a slot it's STORED into
-        // (as a sum-variant constructor's or a plain call's argument does) — it makes
-        // the CONSTRUCTED VALUE ITSELF a different runtime layout than every read site
-        // (sized from `Box`'s DECLARED field types) expects, corrupting the whole
-        // record rather than one argument.
-        if let Expression::Constructor {
-            type_name, fields, ..
-        } = expression
-        {
-            for (field_name, value) in fields {
-                if let Expression::Identifier { name, .. } = value
-                    && name == binding_name
-                    && checker.named_field_is_unsafe_for_generic(type_name, field_name)
-                {
-                    found = true;
-                    return ControlFlow::Break(());
+            Expression::Block { statements, span } => {
+                for statement in statements {
+                    match statement {
+                        Statement::Item(Item::FunctionDeclaration(nested)) => {
+                            if nested.parameters.iter().any(|p| p.name == name) {
+                                shadows.push(nested.span.clone());
+                            }
+                            if nested.name == name {
+                                shadows.push(Span {
+                                    start: nested.span.start,
+                                    end: span.end,
+                                    file: span.file,
+                                });
+                            }
+                        }
+                        Statement::Item(Item::TypeDeclaration(declaration)) => {
+                            for method in declaration.type_definition.methods() {
+                                if method.parameters.iter().any(|p| p.name == name) {
+                                    shadows.push(method.span.clone());
+                                }
+                            }
+                        }
+                        // A local declaration reusing `name` shadows it for the REST of
+                        // this block, starting right after its OWN value expression —
+                        // never from the declaration's own start, which would wrongly
+                        // hide a self-referential read (`text := text + "!"`) inside
+                        // that very value.
+                        Statement::Item(Item::VariableDeclaration(local)) if local.name == name => {
+                            shadows.push(Span {
+                                start: local.value.span().end,
+                                end: span.end,
+                                file: span.file,
+                            });
+                        }
+                        _ => {}
+                    }
                 }
             }
+            _ => {}
         }
         ControlFlow::Continue(())
     });
-    found
+    occurrences.iter().any(|occurrence| {
+        !shadows.iter().any(|shadow| {
+            shadow.file == occurrence.file
+                && shadow.start <= occurrence.start
+                && occurrence.end <= shadow.end
+        })
+    })
+}
+
+/// Whether `pattern` binds `name` — a constructor sub-pattern's own identifier, or a
+/// bare identifier pattern — used by [`is_payload_read`] to tell a nested match arm that
+/// rebinds the same name (shadowing it) from one that doesn't.
+fn pattern_binds(pattern: &Pattern, name: &str) -> bool {
+    match pattern {
+        Pattern::Identifier { name: n, .. } => n == name,
+        Pattern::Constructor { arguments, .. } => arguments
+            .iter()
+            .any(|argument| pattern_binds(argument, name)),
+        Pattern::Wildcard { .. } | Pattern::Number { .. } | Pattern::Text { .. } => false,
+    }
 }
 
 /// The `Result` type with a CONCRETE `Ok` payload of `elem` (and a `$`/Unit `NotOk`

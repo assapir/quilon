@@ -405,19 +405,21 @@ pub enum TypeError {
         touch: Span,
         span: Span,
     },
-    /// A bare `:: Result` PARAMETER (of `function`) is matched directly and its payload
-    /// is bound (`Ok(x)`, not `Ok(_)`), and no payload type could be worked out for it:
-    /// nothing about the parameter's own declaration says what `x`'s real type is, and
-    /// either `function` is a method or an overload member — with no resolvable call
-    /// site to pin one from at all — or `function` (a plain function or a `:=`/`=`-bound
-    /// lambda, at any nesting depth) is referenced nowhere in the whole program, so no
-    /// caller could ever teach it one either (see `sums::pin_result_parameters`'s doc
-    /// comment for the full rule, including why a referenced-but-uninformed position is
-    /// left generic instead of reported here). `parameter` and `span` name the binding
-    /// left unresolved.
+    /// A bare `:: Result` PARAMETER (of `function`) is matched directly, its
+    /// `variant` (`"Ok"`/`"NotOk"`) payload is bound (`Ok(x)`, not `Ok(_)`), and that
+    /// binding is READ — any use of it, anywhere in its own match arm: no caller ever
+    /// demonstrates that variant's payload type, so nothing about the parameter's own
+    /// declaration says what the read value's real type is. `function` is either a
+    /// method or an overload member (no call site can ever be attributed to one
+    /// receiver-independent signature or one overload member) or a plain function/lambda
+    /// no direct caller ever calls with that variant (see `sums::pin_result_parameters`'s
+    /// doc comment for the full rule — binding it WITHOUT reading it needs no payload
+    /// type and is accepted either way). `parameter` and `span` name the binding read
+    /// unresolved.
     UnresolvedResultPayload {
         function: String,
         parameter: String,
+        variant: String,
         span: Span,
     },
 }

@@ -286,32 +286,26 @@ All notable changes to Quilon are documented here.
   declaration says what a bound payload's real type is; the checker now reads it off every
   direct call site's already-checked argument instead, the same way a constructor call
   (`Ok("x")`) specializes its own payload — two callers disagreeing over a position's
-  payload is a type mismatch at the second one, and a bound position no direct call informs
-  is left generic (the historical, sound-for-`Num` default an unconstructed local variant's
-  own slot already gets), rather than rejected — UNLESS that binding is itself passed
-  straight into a sum-variant constructor, a named type's own constructor
-  (`Box { note = text2, … }`), or a plain function, whose slot there is concrete and
-  isn't `Num`: each has a registered declared type to check the binding against, and is
-  still reported rather than risk a mismatch (an internal codegen error for the first
-  and third; a corrupted, differently-laid-out record for the second). An anonymous
-  record, array, map, or set literal has no such registered shape of its own, so a
-  `Generic` element there is the same accepted, non-widened residual risk as a bare
-  uninformed return — silently wrong, not crashing, if later matched against some other
-  concrete annotation. This covers a
-  top-level function's, a `:=`/`=`-bound lambda's, and a nested function or lambda's
-  parameter, at any nesting depth. A method's or an overloaded function's own parameter has
-  no such call site to pin from at all — a member call's argument can't be attributed to one
-  receiver-independent signature, and a bare call to an overloaded name doesn't say which
-  member it fills — so those, and any declaration referenced nowhere in the whole program,
-  still raise the new
-  [QN351](docs/tooling/errors.md#qn351--unresolved-result-payload), naming the fix: match
-  the call that produces the `Result` directly, or annotate the payload instead of matching
-  the whole `Result` inside an unreachable helper. A `Result`'s payload type crossing a
-  function boundary through its RETURN remains inferred, including through an OVERLOADED
-  function: that overload member's own registered return type is now refined from its body
-  the way a plain function's `env` binding already was, closing the matching gap where a
-  call through an overload set previously lost the payload a direct call already kept. See
-  `docs/types/sum-types.md` and `examples/result_helper.qn`. Closes #469. Closes #468.
+  payload is a type mismatch at the second one. A variant no caller ever demonstrates has
+  no payload type at all: a match arm that **reads** that binding — any use of it, not
+  merely binding it — is the new
+  [QN351](docs/tooling/errors.md#qn351--unresolved-result-payload), naming the function,
+  the parameter, and the unresolved variant; binding it without reading it (`Ok(x) => 0`)
+  needs no payload type and is always accepted, whether or not any caller ever demonstrates
+  that variant. This covers a top-level function's, a `:=`/`=`-bound lambda's, and a nested
+  function or lambda's parameter, at any nesting depth. A method's or an overloaded
+  function's own parameter has no call site to pin from at all — a member call's argument
+  can't be attributed to one receiver-independent signature, and a bare call to an
+  overloaded name doesn't say which member it fills — so a read there is QN351
+  unconditionally. Codegen itself no longer defaults an unresolved payload to `Num` either:
+  `oracle::value_repr_type`'s `Generic` arm is now an internal error, not a silent `f64`
+  fallback, since every bound-and-read variant this checker accepts is already pinned to a
+  real type. A `Result`'s payload type crossing a function boundary through its RETURN
+  remains inferred, including through an OVERLOADED function: that overload member's own
+  registered return type is now refined from its body the way a plain function's `env`
+  binding already was, closing the matching gap where a call through an overload set
+  previously lost the payload a direct call already kept. See `docs/types/sum-types.md` and
+  `examples/result_helper.qn`. Closes #469. Closes #468.
 - **A match arm's binding is no longer corrupted by a nested match inside it reusing the
   same name.** `| Ok(body) => (second ? | Ok(body) => body | NotOk(reason) => reason) +
   body` used to read the outer `body` back as whatever the inner `Ok(body)` arm's own slot
