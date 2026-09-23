@@ -1218,18 +1218,9 @@ Bind it atomically:
 
 ### QN351 — unresolved `Result` payload
 
-A bare `:: Result` parameter's own declaration carries no payload type — every bare
-`:: Result` annotation is the same unspecialized `Ok(T)`/`NotOk(E)` shape. Matching one
-directly and BINDING a variant's payload (`Ok(x)`, not `Ok(_)`) pins that variant's type
-from a direct caller's own argument instead, the same way a constructor call (`Ok("x")`)
-specializes its own. A variant no caller ever demonstrates has no payload type at all —
-and a READ of its binding (any use of it, anywhere in that match arm, not merely binding
-it) then has nothing to type-check against, which this reports. Binding it WITHOUT
-reading it needs no type and is always accepted, whether or not any caller ever
-demonstrates that variant. A method's or an overloaded function's own `Result` parameter
-has no call site to pin from EITHER way — a member call's argument can't be attributed to
-one receiver-independent signature, and a bare call to an overloaded name doesn't say
-which member it fills — so a read there is `UnresolvedResultPayload` unconditionally.
+A `Result` parameter's payload types are the types its callers pass. A variant no
+caller passes has no payload type, and a match arm that reads that binding is this
+error.
 
 ```quilon ignore
 describe = (result :: Result) -> Text => <
@@ -1238,8 +1229,7 @@ describe = (result :: Result) -> Text => <
 ^ = () -> Num => < 0 >
 ```
 
-Nothing calls `describe`, so no caller ever demonstrates `Ok`'s payload — and `text` is
-read (returned). Pass it a `Result` whose `Ok` a direct call demonstrates:
+Pass that variant from a caller, or bind it without reading it:
 
 ```quilon
 describe = (result :: Result) -> Text => <

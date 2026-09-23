@@ -98,16 +98,12 @@ And a `-> Result` whose branches are `Ok(Text)` / `NotOk(Text)` — the `getEnv`
 shape — carries **both** arms' payloads. (See `examples/result.qn` and
 `examples/result_payload.qn`.)
 
-A bare `:: Result` **parameter** carries no payload type of its own, so matching one
-directly and binding a variant's payload (`Ok(x) => …`) pins that variant's type from a
-direct caller's own argument instead — two callers disagreeing over it is a type
-mismatch at the second one. (See `examples/result_helper.qn`.) A variant no caller ever
-demonstrates has no payload type at all, so a match arm that **reads** that binding (any
-use of it, not merely binding it) is
-[QN351](../tooling/errors.md#qn351--unresolved-result-payload) — binding it without
-reading it always needs no type — and a method's or an overloaded function's own
-`Result` parameter, with no call site to ever pin from, raises QN351 on a read
-unconditionally.
+A bare `:: Result` **parameter**'s payload types are the types its callers pass. A
+variant no caller passes has no payload type, and a match arm that reads that binding
+is [QN351](../tooling/errors.md#qn351--unresolved-result-payload); binding it unread, or
+as `_`, is allowed. A method's or an overloaded function's `Result` parameter has no
+callers to learn from, so every read of its payload is QN351. See
+`examples/result_helper.qn`.
 
 Every `Result` shares **one uniform layout** regardless of its payload, so a `Result`
 carrying *any* payload — `Num`, `Text`, `[]Text`, a composite — passes through a generic
