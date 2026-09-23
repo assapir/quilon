@@ -294,28 +294,31 @@ All notable changes to Quilon are documented here.
   never forces — `@testimony := io.@readStdin()` stays accepted. See
   `docs/concurrency/README.md` and `examples/deferred_global.qn`. Closes #445.
 - **A bare `:: Result` parameter matched directly and bound (`Ok(x) => …`, not `Ok(_)`) now
-  has its payload pinned from its own callers, instead of silently defaulting to `Num`'s
-  representation and sometimes crashing at codegen.** Every bare `:: Result` annotation is
-  the same unspecialized `Ok(T)`/`NotOk(E)` shape, so nothing about the parameter's own
-  declaration says what a bound payload's real type is; the checker now reads it off every
-  direct call site's already-checked argument instead, the same way a constructor call
-  (`Ok("x")`) specializes its own payload — two callers disagreeing over a position's
-  payload is a type mismatch at the second one. A variant no caller ever demonstrates has
-  no payload type at all: a match arm that **reads** that binding — any use of it, not
-  merely binding it — is the new
-  [QN351](docs/tooling/errors.md#qn351--unresolved-result-payload), naming the function,
-  the parameter, and the unresolved variant; binding it without reading it (`Ok(x) => 0`)
-  needs no payload type and is always accepted, whether or not any caller ever demonstrates
-  that variant. This covers a top-level function's, a `:=`/`=`-bound lambda's, and a nested
-  function or lambda's parameter, at any nesting depth. A method's or an overloaded
-  function's own parameter has no call site to pin from at all — a member call's argument
-  can't be attributed to one receiver-independent signature, and a bare call to an
-  overloaded name doesn't say which member it fills — so a read there is QN351
-  unconditionally. Codegen itself no longer defaults an unresolved payload to `Num` either:
-  `oracle::value_repr_type`'s `Generic` arm is now an internal error, not a silent `f64`
-  fallback, since every bound-and-read variant this checker accepts is already pinned to a
-  real type. A `Result`'s payload type crossing a function boundary through its RETURN
-  remains inferred, including through an OVERLOADED function: that overload member's own
+  has its payload pinned from its own call sites, instead of silently defaulting to
+  `Num`'s representation and sometimes crashing at codegen.** Every bare `:: Result`
+  annotation is the same unspecialized `Ok(T)`/`NotOk(E)` shape, so nothing about the
+  parameter's own declaration says what a bound payload's real type is; the checker now
+  reads it off every one of its call sites' already-checked arguments instead, the same
+  way a constructor call (`Ok("x")`) specializes its own payload — two call sites
+  disagreeing over a position's payload is a type mismatch at the second one. This
+  includes a method call, pinned from the call the checker already resolved to that
+  receiver's type, and a call to one member of an overload set, pinned from the call the
+  checker already resolved to that member by argument types — not only a plain function's
+  or a bound lambda's direct call. A variant no call site ever demonstrates has no payload
+  type at all: a match arm that **reads** that binding — any use of it, not merely binding
+  it — is the new [QN351](docs/tooling/errors.md#qn351--unresolved-result-payload), naming
+  the function, the parameter, and the unresolved variant; binding it without reading it
+  (`Ok(x) => 0`) needs no payload type and is always accepted, whether or not any call site
+  ever demonstrates that variant. A top-level function nothing reachable from `^` calls —
+  the same tree-shaking analysis codegen already prunes it by, most visibly a helper only
+  called from inside a `test.describe`/`test.it` block, which `quilon run`/`check`/`build`
+  erase entirely — is not checked at all, since it never reaches codegen either (`quilon
+  test` synthesizes its own `^` that does reach it, so it is checked there). Codegen itself
+  no longer defaults an unresolved payload to `Num` either: `oracle::value_repr_type`'s
+  `Generic` arm is now an internal error, not a silent `f64` fallback, since every
+  bound-and-read variant this checker accepts is already pinned to a real type. A
+  `Result`'s payload type crossing a function boundary through its RETURN remains
+  inferred, including through an OVERLOADED function: that overload member's own
   registered return type is now refined from its body the way a plain function's `env`
   binding already was, closing the matching gap where a call through an overload set
   previously lost the payload a direct call already kept. See `docs/types/sum-types.md` and

@@ -208,7 +208,7 @@ impl TypeChecker {
     /// coercion). Returns the matched overload's return type. Errors on no match or
     /// (with exact matching, a duplicate-signature) ambiguity, listing the candidates.
     pub(super) fn resolve_overload(
-        &self,
+        &mut self,
         name: &str,
         arg_types: &[Type],
         arg_spans: &[Span],
@@ -231,30 +231,51 @@ impl TypeChecker {
                 .unwrap_or_default()
         };
 
-        match matches.as_slice() {
-            [] => Err(TypeError::NoMatchingOverload {
-                name: name.to_string(),
-                arg_types: arg_types.to_vec(),
-                arg_spans: arg_spans.to_vec(),
-                candidates: candidates(),
-                span: span.clone(),
-            }),
-            // Re-resolve the result type: an overloaded member's return annotation may
-            // have been registered (pre-pass) before its named type existed, so a bare
-            // `Named{T, fields:[]}` is filled in to its full definition here. A member
-            // with no return annotation has no result type to give this call.
-            [only] => match &only.ret {
-                Some(ret) => Ok(self.resolve_type(ret)),
-                None => Err(TypeError::UnannotatedOverloadCall {
+        // Extracted as owned values before anything below mutates `self` — `only` still
+        // borrows `self.overloads`, which a later `self.overload_call_args.entry(...)`
+        // (a DIFFERENT field) would otherwise conflict with only if this borrow were
+        // still alive.
+        let (member_parameters, member_ret) = match matches.as_slice() {
+            [] => {
+                return Err(TypeError::NoMatchingOverload {
                     name: name.to_string(),
-                    parameters: only.parameters.clone(),
+                    arg_types: arg_types.to_vec(),
+                    arg_spans: arg_spans.to_vec(),
+                    candidates: candidates(),
                     span: span.clone(),
-                }),
-            },
-            _ => Err(TypeError::AmbiguousOverload {
+                });
+            }
+            [only] => (only.parameters.clone(), only.ret.clone()),
+            _ => {
+                return Err(TypeError::AmbiguousOverload {
+                    name: name.to_string(),
+                    arg_types: arg_types.to_vec(),
+                    candidates: candidates(),
+                    span: span.clone(),
+                });
+            }
+        };
+
+        // This call's own argument spans, tagged with the EXACT member they resolved to
+        // (by its parameter types — `Type` has no `Hash`, so this can't be a nested map
+        // key) — `sums::pin_result_parameters` folds this into that member's own
+        // bound-and-read `Result` parameters the same way a plain function's direct
+        // callers already are, since a call to an overloaded name can't be attributed to
+        // one member by name alone.
+        self.overload_call_args
+            .entry(name.to_string())
+            .or_default()
+            .push((member_parameters.clone(), arg_spans.to_vec()));
+
+        // Re-resolve the result type: an overloaded member's return annotation may
+        // have been registered (pre-pass) before its named type existed, so a bare
+        // `Named{T, fields:[]}` is filled in to its full definition here. A member
+        // with no return annotation has no result type to give this call.
+        match member_ret {
+            Some(ret) => Ok(self.resolve_type(&ret)),
+            None => Err(TypeError::UnannotatedOverloadCall {
                 name: name.to_string(),
-                arg_types: arg_types.to_vec(),
-                candidates: candidates(),
+                parameters: member_parameters,
                 span: span.clone(),
             }),
         }

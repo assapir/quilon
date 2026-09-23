@@ -1218,9 +1218,11 @@ Bind it atomically:
 
 ### QN351 — unresolved `Result` payload
 
-A `Result` parameter's payload types are the types its callers pass. A variant no
-caller passes has no payload type, and a match arm that reads that binding is this
-error.
+A `Result` parameter's payload types are the types its own call sites pass — a method
+call (pinned from its receiver's own call) and a call to one member of an overload set
+(pinned from the argument types that resolved it) count exactly like a plain function's
+direct call. A variant no call site passes has no payload type, and a match arm that
+reads that binding is this error.
 
 ```quilon ignore
 describe = (result :: Result) -> Text => <
@@ -1230,17 +1232,22 @@ describe = (result :: Result) -> Text => <
 ^ = () -> $ => < assert(describe(NotOk("lost")), equals("none")) >
 ```
 
-A caller that passes `Ok` gives `text` its type:
+A caller that passes `Ok` gives `text` its type — a method call works the same way:
 
 ```quilon
-describe = (result :: Result) -> Text => <
-  result ? | Ok(text) => text | NotOk(_) => "none"
->
-^ = () -> $ => <
-  assert(describe(Ok("home")), equals("home"))
-  assert(describe(NotOk("lost")), equals("none"))
->
+Parcel = {
+  label :: Text,
+  describe = (result :: Result) -> Text => <
+    result ? | Ok(text) => text | NotOk(_) => "none"
+  >
+}
+^ = () -> $ => < assert(Parcel { label = "x" }.describe(Ok("home")), equals("home")) >
 ```
+
+A function nothing reachable from `^` calls is not checked at all — a helper only
+called from inside a `test.describe`/`test.it` block, which `quilon run`/`check`/`build`
+erase entirely, never reaches this check under those commands (`quilon test`
+synthesizes its own `^` that does reach it, so it is checked there).
 
 ## Code generation and build
 

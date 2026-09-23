@@ -405,17 +405,15 @@ pub enum TypeError {
         touch: Span,
         span: Span,
     },
-    /// A bare `:: Result` PARAMETER (of `function`) is matched directly, its
-    /// `variant` (`"Ok"`/`"NotOk"`) payload is bound (`Ok(x)`, not `Ok(_)`), and that
-    /// binding is READ — any use of it, anywhere in its own match arm: no caller ever
-    /// demonstrates that variant's payload type, so nothing about the parameter's own
-    /// declaration says what the read value's real type is. `function` is either a
-    /// method or an overload member (no call site can ever be attributed to one
-    /// receiver-independent signature or one overload member) or a plain function/lambda
-    /// no direct caller ever calls with that variant (see `sums::pin_result_parameters`'s
-    /// doc comment for the full rule — binding it WITHOUT reading it needs no payload
-    /// type and is accepted either way). `parameter` and `span` name the binding read
-    /// unresolved.
+    /// A bare `:: Result` PARAMETER (of `function` — a plain function, a `:=`/`=`-bound
+    /// lambda, a method, or an overload member) is matched directly, its `variant`
+    /// (`"Ok"`/`"NotOk"`) payload is bound (`Ok(x)`, not `Ok(_)`), and that binding is
+    /// READ — any use of it, anywhere in its own match arm: no direct caller ever passes
+    /// that variant, so nothing about the parameter's own declaration says what the read
+    /// value's real type is (see `sums::pin_result_parameters`'s doc comment for the
+    /// full rule, including how a method's or an overload member's own call sites are
+    /// found — binding it WITHOUT reading it needs no payload type and is accepted
+    /// either way). `parameter` and `span` name the binding read unresolved.
     UnresolvedResultPayload {
         function: String,
         parameter: String,
@@ -560,6 +558,12 @@ pub struct Environment {
 /// type is always resolved — `check_type_methods` infers it from the body when the method
 /// has no `-> Type` annotation, so a registered method always has a concrete one.
 type MethodDef = (Vec<Parameter>, Type, Expression);
+
+/// One overloaded name's recorded calls: per call, the resolved member's own parameter
+/// types (`Type` has no `Hash`, so a member is identified by a linear `PartialEq` scan
+/// over these rather than a nested `HashMap` key — see `TypeChecker::overload_call_args`)
+/// alongside that call's own argument spans.
+type OverloadCallArgs = std::collections::HashMap<String, Vec<(Vec<Type>, Vec<Span>)>>;
 
 /// The **type oracle**: a side-table mapping each expression's — and each function
 /// parameter's — source `Span` to the `Type` the checker inferred for it. Produced by
@@ -709,6 +713,25 @@ pub struct TypeChecker {
     // (`FunctionDeclaration::from_corelib`) — a bare `__`-prefixed intrinsic resolves only
     // there.
     checking_corelib_declaration: bool,
+    // Every member call's own argument SPANS, recorded as `check_call` resolves it — a
+    // member call is attributed to a callee by its RECEIVER's type, not a name a
+    // whole-program scan could key on the way a plain function's calls already are, so
+    // this is populated at the same point resolution happens instead, one entry (a call's
+    // own argument spans, in order) per call. Keyed like `methods`; `sums::
+    // pin_result_parameters` looks each argument's type up in `type_table` lazily (the
+    // same way it already does for a plain function's `calls_by_name` entries) and folds
+    // it into that method's own bound-and-read `Result` parameters.
+    method_call_args: std::collections::HashMap<(String, String), Vec<Vec<Span>>>,
+    // Every call's own argument SPANS, recorded as `resolve_overload` resolves it to
+    // exactly one member — an overloaded call is attributed to a member by its
+    // ARGUMENT types, not a name alone (multiple members share one), so each entry also
+    // carries the resolved member's OWN parameter types, the same way `overload_member_mut`
+    // identifies one member among a name's overload set (`Type` has no `Hash`, so this is
+    // a plain `Vec` keyed by the overloaded name, filtered by parameter-type equality at
+    // lookup time rather than a nested `HashMap` key). Covers a top-level overload member
+    // AND a type's own qualified `"Type.method"` overload set alike, since both resolve
+    // through the same function.
+    overload_call_args: OverloadCallArgs,
 }
 
 impl Default for TypeChecker {
@@ -742,6 +765,8 @@ impl TypeChecker {
             case_depth: 0,
             pending_return_type: None,
             checking_corelib_declaration: false,
+            method_call_args: std::collections::HashMap::new(),
+            overload_call_args: std::collections::HashMap::new(),
         };
 
         checker.add_builtins();

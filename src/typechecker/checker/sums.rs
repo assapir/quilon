@@ -276,27 +276,45 @@ impl TypeChecker {
     /// 0`, never touching `x`) or discarding it outright (`Ok(_)`) needs no payload type
     /// at all and is accepted either way — nothing ever observes its representation, so
     /// a function dispatched on the tag alone (`okTag`-style, every call passing a
-    /// different concrete payload) is untouched. A method's or an overload member's own
-    /// parameter has no call site to pin from AT ALL (a member call's argument can't be
-    /// attributed to one receiver-independent signature, and a bare call to an
-    /// overloaded name doesn't say which member it fills) — every read there follows
-    /// this SAME rule unconditionally, since no caller could ever inform it either way.
+    /// different concrete payload) is untouched.
     ///
-    /// This design is narrower than it once was: pinning from a whole-program,
-    /// name-keyed scan of call sites went through several review rounds, each finding a
-    /// new way it mis-attributes a match to the wrong declaration (a forwarding
-    /// wrapper's own uninformative call, a nested function or lambda the scan never
-    /// visited, a local rebinding that shadows the outer name) — all fixed below, by
-    /// scoping every match/shadow check to purely LOCAL, per-declaration information
-    /// (nothing here reads what ANOTHER declaration's body contains) and reserving the
-    /// whole-program scan strictly for reading a DIRECT call's own, already-checked
-    /// argument type.
+    /// A method's or an overload member's own parameter is pinned from its direct
+    /// callers too — the checker already resolves a member call to its receiver's type
+    /// and an overloaded call to one member by argument types (`check_call`,
+    /// `resolve_overload`), so each records its OWN call's argument spans at that same
+    /// point (`TypeChecker::method_call_args`/`overload_call_args`) rather than through
+    /// a name-keyed scan, which could never attribute a member call to one
+    /// receiver-independent signature or an overloaded call to one member by name alone
+    /// (see [`CallOrigin`]).
+    ///
+    /// This design is narrower than it once was: pinning a plain function's or a bound
+    /// lambda's parameter from a whole-program, name-keyed scan of call sites went
+    /// through several review rounds, each finding a new way it mis-attributes a match
+    /// to the wrong declaration (a forwarding wrapper's own uninformative call, a nested
+    /// function or lambda the scan never visited, a local rebinding that shadows the
+    /// outer name) — all fixed below, by scoping every match/shadow check to purely
+    /// LOCAL, per-declaration information (nothing here reads what ANOTHER
+    /// declaration's body contains) and reserving the whole-program scan strictly for
+    /// reading a DIRECT call's own, already-checked argument type.
     ///
     /// A `Result`'s payload type crossing a function boundary through its RETURN,
     /// including an OVERLOADED function's, is a different, already-sound mechanism —
     /// see [`Self::refine_overload_return_type`] and `check_function_declaration`'s
     /// own-`env`-binding refinement — since a function's return is pinned from its OWN
     /// body, never from a caller.
+    ///
+    /// A top-level function nothing reachable from `^` calls is never emitted —
+    /// [`crate::ast::reachability::reachable_functions`] is the same tree-shaking
+    /// analysis `generator.rs` already skips it by, most visibly a helper only called
+    /// from inside a `test.describe`/`test.it` block, which `run`/`check`/`build` erase
+    /// entirely (`quilon test` synthesizes its own `^` that DOES reach it, so it IS
+    /// checked there). This check is skipped for such a function entirely, not merely
+    /// relaxed: a program codegen would happily compile once the dead code is gone must
+    /// not fail here first. A method body and every top-level binding's value are
+    /// always reachable roots (`reachable_functions` never prunes them), so only a
+    /// plain top-level function is subject to this skip; `reachable_functions`
+    /// returning `None` means there is no `^` to measure reachability from, so nothing
+    /// is skipped — matching codegen, which then keeps everything too.
     ///
     /// Rejecting every unpinned-but-read variant here is what lets codegen stop
     /// defaulting an undetermined payload's representation to `Num` at all: a program
@@ -305,6 +323,7 @@ impl TypeChecker {
     /// (see its own doc comment) rather than a silent `f64` fallback.
     pub(super) fn pin_result_parameters(&mut self, program: &Program) -> Result<(), TypeError> {
         let calls_by_name = index_program_calls(program);
+        let reachable = crate::ast::reachability::reachable_functions(program);
 
         for item in &program.items {
             match item {
@@ -312,13 +331,29 @@ impl TypeChecker {
                     if declaration.is_inert_corelib_placeholder() {
                         continue;
                     }
-                    let pinnable = !self.overloaded_names.contains(&declaration.name);
+                    if !reachable
+                        .as_ref()
+                        .is_none_or(|reachable| reachable.contains(declaration.name.as_str()))
+                    {
+                        continue;
+                    }
+                    let origin = if self.overloaded_names.contains(&declaration.name) {
+                        CallOrigin::Overload {
+                            name: declaration.name.clone(),
+                            parameter_types: self.resolved_parameter_types(
+                                &declaration.parameters,
+                                declaration.declared_parameters(),
+                            ),
+                        }
+                    } else {
+                        CallOrigin::Named(declaration.name.clone())
+                    };
                     self.pin_result_parameters_of(
                         &declaration.name,
                         &declaration.parameters,
                         declaration.declared_parameters(),
                         &declaration.body,
-                        pinnable,
+                        &origin,
                         &calls_by_name,
                     )?;
                     self.pin_nested_result_parameters(&declaration.body, &calls_by_name)?;
@@ -327,15 +362,18 @@ impl TypeChecker {
                     for method in declaration.type_definition.methods() {
                         // A method has no whole-signature `::` form of its own (no
                         // `binding_type`) — every parameter is annotated directly, or
-                        // `check_type_methods` already rejected the declaration. Never
-                        // pinnable: a member call's argument can't be attributed to one
-                        // receiver-independent signature.
+                        // `check_type_methods` already rejected the declaration.
+                        let origin = self.method_call_origin(
+                            &declaration.name,
+                            &method.name,
+                            &method.parameters,
+                        );
                         self.pin_result_parameters_of(
                             &method.name,
                             &method.parameters,
                             None,
                             &method.body,
-                            false,
+                            &origin,
                             &calls_by_name,
                         )?;
                         self.pin_nested_result_parameters(&method.body, &calls_by_name)?;
@@ -348,8 +386,8 @@ impl TypeChecker {
                     // its own body is still handed to that walk, for anything nested
                     // further in. A lambda literal has no whole-signature form either
                     // (no `binding_type`): its parameters take their types only from
-                    // their own annotations. Pinnable — called by its binding's name
-                    // exactly like a `FunctionDeclaration`, and never overloaded.
+                    // their own annotations. Called by its binding's name exactly like a
+                    // `FunctionDeclaration`, and never overloaded.
                     Expression::Lambda {
                         parameters, body, ..
                     } => {
@@ -358,7 +396,7 @@ impl TypeChecker {
                             parameters,
                             None,
                             body,
-                            true,
+                            &CallOrigin::Named(declaration.name.clone()),
                             &calls_by_name,
                         )?;
                         self.pin_nested_result_parameters(body, &calls_by_name)?;
@@ -375,33 +413,87 @@ impl TypeChecker {
     /// declared inside one of those is checked exactly the same way, one level further
     /// in — each against its own parameters and own body only (see
     /// [`Self::pin_result_parameters`]'s doc comment: nothing here reads what ANOTHER
-    /// declaration's body contains). A nested function or lambda is pinnable (its name
-    /// is never in `overloaded_names`, which only a top-level `FunctionDeclaration`
-    /// joins); a nested type's method never is, same as a top-level type's.
+    /// declaration's body contains). A nested function or lambda is called by NAME (its
+    /// name is never in `overloaded_names`, which only a top-level `FunctionDeclaration`
+    /// joins, and never a method either); a nested type's method is resolved the same
+    /// way a top-level one's is (see [`Self::method_call_origin`]).
     fn pin_nested_result_parameters(
         &mut self,
         body: &Expression,
         calls_by_name: &HashMap<&str, Vec<&Expression>>,
     ) -> Result<(), TypeError> {
         for candidate in nested_function_candidates(body) {
+            let origin = match &candidate.owning_type {
+                Some(owning_type) => {
+                    self.method_call_origin(owning_type, &candidate.name, candidate.parameters)
+                }
+                None => CallOrigin::Named(candidate.name.clone()),
+            };
             self.pin_result_parameters_of(
                 &candidate.name,
                 candidate.parameters,
                 candidate.declared,
                 candidate.body,
-                !candidate.is_method,
+                &origin,
                 calls_by_name,
             )?;
         }
         Ok(())
     }
 
+    /// The resolved types of `parameters` (or `declared`'s whole-signature slots where a
+    /// parameter has no annotation of its own), in order — an overload member's own key
+    /// into `overloads`/`overload_call_args`, computed the same way
+    /// `register_overload_declaration` computes it for registration.
+    fn resolved_parameter_types(
+        &self,
+        parameters: &[Parameter],
+        declared: Option<&[Type]>,
+    ) -> Vec<Type> {
+        parameters
+            .iter()
+            .enumerate()
+            .map(|(index, parameter)| {
+                let annotation = parameter
+                    .type_annotation
+                    .as_ref()
+                    .or_else(|| declared.map(|slots| &slots[index]))
+                    .expect("an overload member's every parameter is annotated");
+                self.resolve_type(annotation)
+            })
+            .collect()
+    }
+
+    /// Where a method named `method_name` on `owning_type`'s own calls come from: a
+    /// qualified `"Type.method"` overload set (2+ methods of this name on `owning_type`)
+    /// resolves exactly like a top-level overload does, so its calls are attributed to
+    /// it the same way (`CallOrigin::Overload`); otherwise a member call is attributed
+    /// to it by `owning_type` and its own name alone (`CallOrigin::Method`).
+    fn method_call_origin(
+        &self,
+        owning_type: &str,
+        method_name: &str,
+        method_parameters: &[Parameter],
+    ) -> CallOrigin {
+        let qualified_name = format!("{owning_type}.{method_name}");
+        if self.overloads.contains_key(&qualified_name) {
+            CallOrigin::Overload {
+                name: qualified_name,
+                parameter_types: self.resolved_parameter_types(method_parameters, None),
+            }
+        } else {
+            CallOrigin::Method {
+                type_name: owning_type.to_string(),
+                method_name: method_name.to_string(),
+            }
+        }
+    }
+
     /// [`Self::pin_result_parameters`]'s per-declaration work, shared by a top-level
     /// function, a method, a lambda, and every nested candidate: every bare `:: Result`
-    /// parameter of `parameters` that `body` matches directly. `pinnable` is false for a
-    /// method or an overload member, where no direct caller is ever consulted (see the
-    /// doc comment above). `declared` is a whole-signature `::` annotation's parameter
-    /// slots (`f :: (Result) -> Text = (result) => …`), read the same way
+    /// parameter of `parameters` that `body` matches directly. `declared` is a
+    /// whole-signature `::` annotation's parameter slots (`f :: (Result) -> Text =
+    /// (result) => …`), read the same way
     /// [`crate::ast::FunctionDeclaration::parameter_type`] does — a parameter's own
     /// annotation wins, so this is consulted only when it has none of its own.
     fn pin_result_parameters_of(
@@ -410,7 +502,7 @@ impl TypeChecker {
         parameters: &[Parameter],
         declared: Option<&[Type]>,
         body: &Expression,
-        pinnable: bool,
+        origin: &CallOrigin,
         calls_by_name: &HashMap<&str, Vec<&Expression>>,
     ) -> Result<(), TypeError> {
         for (index, parameter) in parameters.iter().enumerate() {
@@ -433,26 +525,69 @@ impl TypeChecker {
                 index,
                 &parameter.name,
                 &sites,
-                pinnable,
+                origin,
                 calls_by_name,
             )?;
         }
         Ok(())
     }
 
+    /// The argument spans of every direct call [`CallOrigin`] attributes to a
+    /// declaration — a plain function's or a bound lambda's found by NAME in the
+    /// whole-program `calls_by_name` index (computed once, up front); a method's or an
+    /// overload member's own calls were recorded as `check_call`/`resolve_overload`
+    /// resolved each one, which this only reads back.
+    fn call_argument_spans(
+        &self,
+        origin: &CallOrigin,
+        calls_by_name: &HashMap<&str, Vec<&Expression>>,
+    ) -> Vec<Vec<Span>> {
+        match origin {
+            CallOrigin::Named(name) => calls_by_name
+                .get(name.as_str())
+                .into_iter()
+                .flatten()
+                .filter_map(|call| match call {
+                    Expression::Call { arguments, .. } => {
+                        Some(arguments.iter().map(|a| a.span().clone()).collect())
+                    }
+                    _ => None,
+                })
+                .collect(),
+            CallOrigin::Method {
+                type_name,
+                method_name,
+            } => self
+                .method_call_args
+                .get(&(type_name.clone(), method_name.clone()))
+                .cloned()
+                .unwrap_or_default(),
+            CallOrigin::Overload {
+                name,
+                parameter_types,
+            } => self
+                .overload_call_args
+                .get(name)
+                .into_iter()
+                .flatten()
+                .filter(|(member_parameters, _)| member_parameters == parameter_types)
+                .map(|(_, spans)| spans.clone())
+                .collect(),
+        }
+    }
+
     /// [`Self::pin_result_parameters_of`]'s per-parameter work: fold every direct
-    /// caller's argument at `index` into a pinned `Ok`/`NotOk` payload — skipped
-    /// entirely when `!pinnable` (a method or an overload member), which always treats
-    /// both variants as undemonstrated. A variant that ends up unpinned but is bound AND
-    /// READ somewhere in `sites` is `UnresolvedResultPayload`; otherwise, whatever WAS
-    /// pinned is taught to every matched site.
+    /// caller's argument at `index` into a pinned `Ok`/`NotOk` payload. A variant that
+    /// ends up unpinned but is bound AND READ somewhere in `sites` is
+    /// `UnresolvedResultPayload`; otherwise, whatever WAS pinned is taught to every
+    /// matched site.
     fn pin_one_result_parameter(
         &mut self,
         name: &str,
         index: usize,
         parameter_name: &str,
         sites: &[ResultParameterMatch<'_>],
-        pinnable: bool,
+        origin: &CallOrigin,
         calls_by_name: &HashMap<&str, Vec<&Expression>>,
     ) -> Result<(), TypeError> {
         use crate::ast::{NOT_OK, OK, RESULT_TYPE_NAME, SumVariant};
@@ -467,33 +602,25 @@ impl TypeChecker {
 
         let mut ok_pin: Option<Type> = None;
         let mut not_ok_pin: Option<Type> = None;
-        if pinnable {
-            let no_calls = Vec::new();
-            let calls = calls_by_name.get(name).unwrap_or(&no_calls);
-            for call in calls {
-                let Expression::Call { arguments, .. } = call else {
-                    unreachable!("calls_by_name only ever indexes Call expressions")
-                };
-                if index >= arguments.len() {
-                    continue;
-                }
-                let argument = &arguments[index];
-                let Some(Type::Sum {
-                    name: sum_name,
-                    variants,
-                }) = self.type_table.get(argument.span()).cloned()
-                else {
-                    continue;
-                };
-                if sum_name != RESULT_TYPE_NAME {
-                    continue;
-                }
-                if needs_ok && let Some(variant) = variants.iter().find(|v| v.name == OK) {
-                    unify_result_pin(&mut ok_pin, &variant.fields[0], argument.span())?;
-                }
-                if needs_not_ok && let Some(variant) = variants.iter().find(|v| v.name == NOT_OK) {
-                    unify_result_pin(&mut not_ok_pin, &variant.fields[0], argument.span())?;
-                }
+        for call_args in self.call_argument_spans(origin, calls_by_name) {
+            let Some(argument_span) = call_args.get(index) else {
+                continue;
+            };
+            let Some(Type::Sum {
+                name: sum_name,
+                variants,
+            }) = self.type_table.get(argument_span).cloned()
+            else {
+                continue;
+            };
+            if sum_name != RESULT_TYPE_NAME {
+                continue;
+            }
+            if needs_ok && let Some(variant) = variants.iter().find(|v| v.name == OK) {
+                unify_result_pin(&mut ok_pin, &variant.fields[0], argument_span)?;
+            }
+            if needs_not_ok && let Some(variant) = variants.iter().find(|v| v.name == NOT_OK) {
+                unify_result_pin(&mut not_ok_pin, &variant.fields[0], argument_span)?;
             }
         }
 
@@ -570,19 +697,41 @@ fn is_unspecialized_result(ty: &Type) -> bool {
                 .all(|v| v.fields.iter().all(|f| matches!(f, Type::Generic { .. }))))
 }
 
+/// Where a declaration's own direct callers' arguments come from — the three shapes
+/// [`TypeChecker::pin_one_result_parameter`] draws from, each attributing a call to its
+/// callee a different way: a plain function or a bound lambda by NAME (looked up in the
+/// whole-program `calls_by_name` index, computed once up front); a method by its
+/// RECEIVER's type (recorded by `check_call` as it resolves one, since a member call
+/// can't be attributed to a callee by name alone); an overload member — top-level, or a
+/// type's own qualified `"Type.method"` set — by its OWN declared parameter types
+/// (recorded by `resolve_overload` as it resolves one to exactly one member, since
+/// several members share the overloaded name).
+enum CallOrigin {
+    Named(String),
+    Method {
+        type_name: String,
+        method_name: String,
+    },
+    Overload {
+        name: String,
+        parameter_types: Vec<Type>,
+    },
+}
+
 /// A function, lambda, or method declared somewhere inside another declaration's body —
 /// [`TypeChecker::pin_nested_result_parameters`]'s own candidate to check next, against
 /// its own parameters and its own body only. `declared` is its whole-signature `::`
 /// annotation's parameter slots, when it has one (only a nested `FunctionDeclaration`
-/// can; a lambda literal or a method, named or not, never does). `is_method` is true
-/// only for a locally-declared type's method — never pinnable, unlike every other
-/// candidate here (see [`TypeChecker::pin_result_parameters`]'s doc comment).
+/// can; a lambda literal or a method, named or not, never does). `owning_type` is the
+/// enclosing type's own name for a locally-declared type's method, and `None` for
+/// everything else — resolved the same way a top-level method's calls are (see
+/// [`TypeChecker::method_call_origin`]), never by a plain name lookup.
 struct NestedDeclaration<'a> {
     name: String,
     parameters: &'a [Parameter],
     declared: Option<&'a [Type]>,
     body: &'a Expression,
-    is_method: bool,
+    owning_type: Option<String>,
 }
 
 /// Every function/lambda/method-shaped construct anywhere inside `body`, at ANY nesting
@@ -610,7 +759,7 @@ fn nested_function_candidates(body: &Expression) -> Vec<NestedDeclaration<'_>> {
                 parameters,
                 declared: None,
                 body,
-                is_method: false,
+                owning_type: None,
             }),
             Expression::Block { statements, .. } => {
                 for statement in statements {
@@ -621,7 +770,7 @@ fn nested_function_candidates(body: &Expression) -> Vec<NestedDeclaration<'_>> {
                                 parameters: &nested.parameters,
                                 declared: nested.declared_parameters(),
                                 body: &nested.body,
-                                is_method: false,
+                                owning_type: None,
                             });
                         }
                         Statement::Item(Item::VariableDeclaration(local))
@@ -634,14 +783,13 @@ fn nested_function_candidates(body: &Expression) -> Vec<NestedDeclaration<'_>> {
                                 parameters,
                                 declared: None,
                                 body,
-                                is_method: false,
+                                owning_type: None,
                             });
                         }
                         // A type declared locally (inside a function's own body) has
                         // methods exactly like a top-level one's — each is its own
-                        // candidate, never a method has a whole-signature form, and
-                        // never pinnable (a member call's argument can't be attributed
-                        // to one receiver-independent signature).
+                        // candidate, resolved the same way (see
+                        // `TypeChecker::method_call_origin`).
                         Statement::Item(Item::TypeDeclaration(declaration)) => {
                             for method in declaration.type_definition.methods() {
                                 candidates.push(NestedDeclaration {
@@ -649,7 +797,7 @@ fn nested_function_candidates(body: &Expression) -> Vec<NestedDeclaration<'_>> {
                                     parameters: &method.parameters,
                                     declared: None,
                                     body: &method.body,
-                                    is_method: true,
+                                    owning_type: Some(declaration.name.clone()),
                                 });
                             }
                         }
