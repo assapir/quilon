@@ -1244,10 +1244,10 @@ Parcel = {
 ^ = () -> $ => < assert(Parcel { label = "x" }.describe(Ok("home")), equals("home")) >
 ```
 
-A function nothing reachable from `^` calls is not checked at all — a helper only
-called from inside a `test.describe`/`test.it` block, which `quilon run`/`check`/`build`
-erase entirely, never reaches this check under those commands (`quilon test`
-synthesizes its own `^` that does reach it, so it is checked there).
+The check covers the functions reachable from `^`, the same set codegen emits (a helper
+only called from inside a `test.describe`/`test.it` block, which `quilon run`/`check`/
+`build` erase, is outside that set under those commands); under `quilon test` the
+synthesized `^` reaches every test's helpers.
 
 ## Code generation and build
 

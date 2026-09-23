@@ -445,12 +445,7 @@ impl TypeChecker {
                         span,
                     )?;
 
-                    // This call's own argument spans, against the exact (non-overloaded)
-                    // method they belong to — a member call is attributed to its callee
-                    // by RECEIVER type, not a name a whole-program scan could key on, so
-                    // this is recorded at the point resolution happens instead; `sums::
-                    // pin_result_parameters` folds it into `type_name`'s own
-                    // bound-and-read `Result` parameters.
+                    // Record this call's argument spans, for `sums::pin_result_parameters`.
                     self.method_call_args
                         .entry((type_name.clone(), name.clone()))
                         .or_default()

@@ -231,10 +231,8 @@ impl TypeChecker {
                 .unwrap_or_default()
         };
 
-        // Extracted as owned values before anything below mutates `self` — `only` still
-        // borrows `self.overloads`, which a later `self.overload_call_args.entry(...)`
-        // (a DIFFERENT field) would otherwise conflict with only if this borrow were
-        // still alive.
+        // Owned, to drop the borrow of `self.overloads` before the `overload_call_args`
+        // write below.
         let (member_parameters, member_ret) = match matches.as_slice() {
             [] => {
                 return Err(TypeError::NoMatchingOverload {
@@ -256,12 +254,7 @@ impl TypeChecker {
             }
         };
 
-        // This call's own argument spans, tagged with the EXACT member they resolved to
-        // (by its parameter types — `Type` has no `Hash`, so this can't be a nested map
-        // key) — `sums::pin_result_parameters` folds this into that member's own
-        // bound-and-read `Result` parameters the same way a plain function's direct
-        // callers already are, since a call to an overloaded name can't be attributed to
-        // one member by name alone.
+        // Record which member this call resolved to, for `sums::pin_result_parameters`.
         self.overload_call_args
             .entry(name.to_string())
             .or_default()
@@ -388,10 +381,8 @@ impl TypeChecker {
         Ok(())
     }
 
-    /// The member of overload set `name` whose parameters EXACTLY match
-    /// `parameter_types`, mutably — the shared lookup [`Self::refine_overload_return_type`]
-    /// and [`Self::set_overload_result_aliasing`] both mutate a different field of once
-    /// they have found their member.
+    /// The member of overload set `name` whose parameters exactly match
+    /// `parameter_types`, mutably.
     fn overload_member_mut(
         &mut self,
         name: &str,
@@ -407,14 +398,9 @@ impl TypeChecker {
         })
     }
 
-    /// Refine an overload member's GENERIC return annotation — in practice only
-    /// `-> Result`, whose `Ok(T)`/`NotOk(E)` slots are type variables — to `refined`, the
-    /// type its own body just proved. Mirrors `check_function_declaration`'s refinement
-    /// of a plain function's `env` binding, applied to the member's registered `ret`
-    /// instead: a plain function's callers read its refined type straight from `env`, but
-    /// an overload member's callers read `resolve_overload`'s `ret` field, which needs
-    /// the same correction so a call to it sees the real payload (`Ok("x")` => `Text`)
-    /// instead of the opaque annotation.
+    /// Refine an overload member's generic return annotation (in practice only
+    /// `-> Result`) to `refined`, the type its body just proved — mirrors
+    /// `check_function_declaration`'s `env` refinement, but on the member's `ret`.
     pub(super) fn refine_overload_return_type(
         &mut self,
         name: &str,

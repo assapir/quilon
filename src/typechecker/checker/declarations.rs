@@ -86,9 +86,8 @@ impl TypeChecker {
         // return annotation is one nothing calls — reported at its definition.
         self.report_unannotated_overload_member()?;
 
-        // Every call site is known now too, so a bare `:: Result` parameter matched
-        // directly in its own body can be pinned from what its direct callers actually
-        // pass it — see `pin_result_parameters`'s own doc comment for the full rule.
+        // Every call site is known now, so a bare `:: Result` parameter matched
+        // directly can be pinned from what its callers actually pass it.
         self.pin_result_parameters(program)?;
 
         // Validate the `^` entry point's parameter signature up front, so `quilon check`
@@ -1207,11 +1206,8 @@ impl TypeChecker {
             // This mirrors `check_match` preferring a concrete arm type over a generic
             // one and introduces no generics (the annotation still stands as the
             // compatibility check). A concrete annotation is left exactly as written.
-            // An OVERLOADED member refines the same way, but on its own registered
-            // `ret` (`resolve_overload` reads that, not `env`) — without this, a call
-            // resolving through an overload set never saw the refinement a plain
-            // function's callers already got, which is the gap a same-named overloaded
-            // producer of a `Result` left open.
+            // An overloaded member refines its own registered `ret` instead of `env`,
+            // since `resolve_overload` reads that.
             if annotated_type.contains_generic() {
                 if is_overloaded {
                     self.refine_overload_return_type(

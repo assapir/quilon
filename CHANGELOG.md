@@ -293,36 +293,16 @@ All notable changes to Quilon are documented here.
   a read of one exactly like a read of a deferred local. A store into such a global still
   never forces — `@testimony := io.@readStdin()` stays accepted. See
   `docs/concurrency/README.md` and `examples/deferred_global.qn`. Closes #445.
-- **A bare `:: Result` parameter matched directly and bound (`Ok(x) => …`, not `Ok(_)`) now
-  has its payload pinned from its own call sites, instead of silently defaulting to
-  `Num`'s representation and sometimes crashing at codegen.** Every bare `:: Result`
-  annotation is the same unspecialized `Ok(T)`/`NotOk(E)` shape, so nothing about the
-  parameter's own declaration says what a bound payload's real type is; the checker now
-  reads it off every one of its call sites' already-checked arguments instead, the same
-  way a constructor call (`Ok("x")`) specializes its own payload — two call sites
-  disagreeing over a position's payload is a type mismatch at the second one. This
-  includes a method call, pinned from the call the checker already resolved to that
-  receiver's type, and a call to one member of an overload set, pinned from the call the
-  checker already resolved to that member by argument types — not only a plain function's
-  or a bound lambda's direct call. A variant no call site ever demonstrates has no payload
-  type at all: a match arm that **reads** that binding — any use of it, not merely binding
-  it — is the new [QN351](docs/tooling/errors.md#qn351--unresolved-result-payload), naming
-  the function, the parameter, and the unresolved variant; binding it without reading it
-  (`Ok(x) => 0`) needs no payload type and is always accepted, whether or not any call site
-  ever demonstrates that variant. A top-level function nothing reachable from `^` calls —
-  the same tree-shaking analysis codegen already prunes it by, most visibly a helper only
-  called from inside a `test.describe`/`test.it` block, which `quilon run`/`check`/`build`
-  erase entirely — is not checked at all, since it never reaches codegen either (`quilon
-  test` synthesizes its own `^` that does reach it, so it is checked there). Codegen itself
-  no longer defaults an unresolved payload to `Num` either: `oracle::value_repr_type`'s
-  `Generic` arm is now an internal error, not a silent `f64` fallback, since every
-  bound-and-read variant this checker accepts is already pinned to a real type. A
-  `Result`'s payload type crossing a function boundary through its RETURN remains
-  inferred, including through an OVERLOADED function: that overload member's own
-  registered return type is now refined from its body the way a plain function's `env`
-  binding already was, closing the matching gap where a call through an overload set
-  previously lost the payload a direct call already kept. See `docs/types/sum-types.md` and
-  `examples/result_payload.qn`. Closes #469. Closes #468.
+- **A bare `:: Result` parameter matched directly and bound (`Ok(x) => …`) now has its
+  payload pinned from its own call sites, instead of silently defaulting to `Num`'s
+  representation and sometimes crashing at codegen.** This includes a plain function's,
+  a method's, and an overload member's calls alike. Reading an undemonstrated variant is
+  [QN351](docs/tooling/errors.md#qn351--unresolved-result-payload); binding it unread
+  (`Ok(x) => 0`) needs no payload type. A function nothing reachable from `^` calls is
+  not checked. An overload member's `-> Result` return is now refined from its body the
+  way a plain function's already was. Codegen no longer defaults an unresolved payload to
+  `Num` either. See `docs/types/sum-types.md` and `examples/result_payload.qn`. Closes
+  #469. Closes #468.
 - **A match arm's binding is no longer corrupted by a nested match inside it reusing the
   same name.** `| Ok(body) => (second ? | Ok(body) => body | NotOk(reason) => reason) +
   body` used to read the outer `body` back as whatever the inner `Ok(body)` arm's own slot

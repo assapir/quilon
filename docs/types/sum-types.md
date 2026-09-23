@@ -99,14 +99,13 @@ shape — carries **both** arms' payloads. (See `examples/result.qn` and
 `examples/result_payload.qn`.)
 
 A bare `:: Result` **parameter**'s payload types are the types its own call sites pass —
-including a method call (resolved by its receiver's type) and a call to one member of
-an overload set (resolved by argument types), the same as a plain function's direct
-call. A variant no call site passes has no payload type, and a match arm that reads
-that binding is [QN351](../tooling/errors.md#qn351--unresolved-result-payload); binding
-it unread, or as `_`, is allowed. A function nothing reachable from `^` calls — for
-example, a helper only called from inside a `test.describe`/`test.it` block, which
-`quilon run`/`check`/`build` erase entirely — is not checked at all, since it never
-reaches codegen either. See `examples/result_payload.qn`.
+a method call and a call to one member of an overload set count the same as a plain
+function's direct call. A variant no call site passes has no payload type, and a match
+arm that reads that binding is
+[QN351](../tooling/errors.md#qn351--unresolved-result-payload); binding it unread, or as
+`_`, is allowed. The check covers the functions reachable from `^`, the same set codegen
+emits; under `quilon test` the synthesized `^` reaches every test's helpers. See
+`examples/result_payload.qn`.
 
 Every `Result` shares **one uniform layout** regardless of its payload, so a `Result`
 carrying *any* payload — `Num`, `Text`, `[]Text`, a composite — passes through a generic

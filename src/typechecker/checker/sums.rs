@@ -255,177 +255,37 @@ impl TypeChecker {
         }
     }
 
-    /// After the whole program is checked, pin the payload type of a bare `:: Result`
-    /// PARAMETER — of a top-level function, a `:=`/`=`-bound lambda, or a function/lambda
-    /// declared inside either of those, at any nesting depth — that stays the raw,
-    /// unspecialized built-in type through its own declaration (`resolve_type` gives
-    /// every bare `:: Result` the same generic `Ok(T)`/`NotOk(E)` shape) but is matched
-    /// directly in its OWN body, binding a payload (`Ok(x)`, not `Ok(_)`).
-    ///
-    /// The payload is pinned from every DIRECT call site's already-checked argument type
-    /// at that position — the same source [`Self::check_constructor_call`] draws from
-    /// for a constructor's own result. Two callers disagreeing over a position's payload
-    /// is a `TypeMismatch` at the second one.
-    ///
-    /// A variant NO caller demonstrates has no payload type at all — full stop, whether
-    /// the declaration is called elsewhere without informing that specific variant, or
-    /// never called at all. A match arm that binds AND READS that payload — any use of
-    /// the bound name, anywhere in the arm's own body, honoring shadowing (see
-    /// [`is_payload_read`]) — is `UnresolvedResultPayload`, naming the function, the
-    /// parameter, and the unresolved variant. Binding it WITHOUT reading it (`Ok(x) =>
-    /// 0`, never touching `x`) or discarding it outright (`Ok(_)`) needs no payload type
-    /// at all and is accepted either way — nothing ever observes its representation, so
-    /// a function dispatched on the tag alone (`okTag`-style, every call passing a
-    /// different concrete payload) is untouched.
-    ///
-    /// A method's or an overload member's own parameter is pinned from its direct
-    /// callers too — the checker already resolves a member call to its receiver's type
-    /// and an overloaded call to one member by argument types (`check_call`,
-    /// `resolve_overload`), so each records its OWN call's argument spans at that same
-    /// point (`TypeChecker::method_call_args`/`overload_call_args`) rather than through
-    /// a name-keyed scan, which could never attribute a member call to one
-    /// receiver-independent signature or an overloaded call to one member by name alone
-    /// (see [`CallOrigin`]).
-    ///
-    /// This design is narrower than it once was: pinning a plain function's or a bound
-    /// lambda's parameter from a whole-program, name-keyed scan of call sites went
-    /// through several review rounds, each finding a new way it mis-attributes a match
-    /// to the wrong declaration (a forwarding wrapper's own uninformative call, a nested
-    /// function or lambda the scan never visited, a local rebinding that shadows the
-    /// outer name) — all fixed below, by scoping every match/shadow check to purely
-    /// LOCAL, per-declaration information (nothing here reads what ANOTHER
-    /// declaration's body contains) and reserving the whole-program scan strictly for
-    /// reading a DIRECT call's own, already-checked argument type.
-    ///
-    /// A `Result`'s payload type crossing a function boundary through its RETURN,
-    /// including an OVERLOADED function's, is a different, already-sound mechanism —
-    /// see [`Self::refine_overload_return_type`] and `check_function_declaration`'s
-    /// own-`env`-binding refinement — since a function's return is pinned from its OWN
-    /// body, never from a caller.
-    ///
-    /// A top-level function nothing reachable from `^` calls is never emitted —
-    /// [`crate::ast::reachability::reachable_functions`] is the same tree-shaking
-    /// analysis `generator.rs` already skips it by, most visibly a helper only called
-    /// from inside a `test.describe`/`test.it` block, which `run`/`check`/`build` erase
-    /// entirely (`quilon test` synthesizes its own `^` that DOES reach it, so it IS
-    /// checked there). This check is skipped for such a function entirely, not merely
-    /// relaxed: a program codegen would happily compile once the dead code is gone must
-    /// not fail here first. A method body and every top-level binding's value are
-    /// always reachable roots (`reachable_functions` never prunes them), so only a
-    /// plain top-level function is subject to this skip; `reachable_functions`
-    /// returning `None` means there is no `^` to measure reachability from, so nothing
-    /// is skipped — matching codegen, which then keeps everything too.
-    ///
-    /// Rejecting every unpinned-but-read variant here is what lets codegen stop
-    /// defaulting an undetermined payload's representation to `Num` at all: a program
-    /// this pass accepts never reaches `oracle::value_repr_type`'s `Type::Generic` arm
-    /// with a payload anything actually reads, so that arm is now an internal error
-    /// (see its own doc comment) rather than a silent `f64` fallback.
+    /// Pin a bare `:: Result` parameter's payload from its own call sites, once the
+    /// whole program's calls and overloads are known: a variant some site binds and
+    /// reads, but no site ever passes, is `UnresolvedResultPayload`; binding it unread
+    /// needs no payload type. A method call is attributed by receiver type and an
+    /// overloaded call by the member it resolved to (`CallOrigin`), not by name. A
+    /// top-level function unreachable from `^` is skipped entirely, matching codegen's
+    /// own tree-shaking.
     pub(super) fn pin_result_parameters(&mut self, program: &Program) -> Result<(), TypeError> {
         let calls_by_name = index_program_calls(program);
         let reachable = crate::ast::reachability::reachable_functions(program);
 
-        for item in &program.items {
-            match item {
-                Item::FunctionDeclaration(declaration) => {
-                    if declaration.is_inert_corelib_placeholder() {
-                        continue;
-                    }
-                    if !reachable
-                        .as_ref()
-                        .is_none_or(|reachable| reachable.contains(declaration.name.as_str()))
-                    {
-                        continue;
-                    }
-                    let origin = if self.overloaded_names.contains(&declaration.name) {
-                        CallOrigin::Overload {
-                            name: declaration.name.clone(),
-                            parameter_types: self.resolved_parameter_types(
-                                &declaration.parameters,
-                                declaration.declared_parameters(),
-                            ),
-                        }
-                    } else {
-                        CallOrigin::Named(declaration.name.clone())
-                    };
-                    self.pin_result_parameters_of(
-                        &declaration.name,
-                        &declaration.parameters,
-                        declaration.declared_parameters(),
-                        &declaration.body,
-                        &origin,
-                        &calls_by_name,
-                    )?;
-                    self.pin_nested_result_parameters(&declaration.body, &calls_by_name)?;
-                }
-                Item::TypeDeclaration(declaration) => {
-                    for method in declaration.type_definition.methods() {
-                        // A method has no whole-signature `::` form of its own (no
-                        // `binding_type`) — every parameter is annotated directly, or
-                        // `check_type_methods` already rejected the declaration.
-                        let origin = self.method_call_origin(
-                            &declaration.name,
-                            &method.name,
-                            &method.parameters,
-                        );
-                        self.pin_result_parameters_of(
-                            &method.name,
-                            &method.parameters,
-                            None,
-                            &method.body,
-                            &origin,
-                            &calls_by_name,
-                        )?;
-                        self.pin_nested_result_parameters(&method.body, &calls_by_name)?;
-                    }
-                }
-                Item::VariableDeclaration(declaration) => match &declaration.value {
-                    // Checked directly, by its real binding name, rather than through
-                    // `pin_nested_result_parameters`'s generic walk (which would also
-                    // find this same top-level lambda, unhelpfully labeled "a lambda") —
-                    // its own body is still handed to that walk, for anything nested
-                    // further in. A lambda literal has no whole-signature form either
-                    // (no `binding_type`): its parameters take their types only from
-                    // their own annotations. Called by its binding's name exactly like a
-                    // `FunctionDeclaration`, and never overloaded.
-                    Expression::Lambda {
-                        parameters, body, ..
-                    } => {
-                        self.pin_result_parameters_of(
-                            &declaration.name,
-                            parameters,
-                            None,
-                            body,
-                            &CallOrigin::Named(declaration.name.clone()),
-                            &calls_by_name,
-                        )?;
-                        self.pin_nested_result_parameters(body, &calls_by_name)?;
-                    }
-                    other => self.pin_nested_result_parameters(other, &calls_by_name)?,
-                },
+        for candidate in declaration_candidates(program) {
+            if candidate.top_level_function
+                && !reachable
+                    .as_ref()
+                    .is_none_or(|reachable| reachable.contains(candidate.name.as_str()))
+            {
+                continue;
             }
-        }
-        Ok(())
-    }
-
-    /// Every `:=`/`=`-bound or nested `FunctionDeclaration` lambda, and every locally
-    /// declared type's method, anywhere inside `body` — at any nesting depth, since one
-    /// declared inside one of those is checked exactly the same way, one level further
-    /// in — each against its own parameters and own body only (see
-    /// [`Self::pin_result_parameters`]'s doc comment: nothing here reads what ANOTHER
-    /// declaration's body contains). A nested function or lambda is called by NAME (its
-    /// name is never in `overloaded_names`, which only a top-level `FunctionDeclaration`
-    /// joins, and never a method either); a nested type's method is resolved the same
-    /// way a top-level one's is (see [`Self::method_call_origin`]).
-    fn pin_nested_result_parameters(
-        &mut self,
-        body: &Expression,
-        calls_by_name: &HashMap<&str, Vec<&Expression>>,
-    ) -> Result<(), TypeError> {
-        for candidate in nested_function_candidates(body) {
             let origin = match &candidate.owning_type {
                 Some(owning_type) => {
                     self.method_call_origin(owning_type, &candidate.name, candidate.parameters)
+                }
+                None if candidate.top_level_function
+                    && self.overloaded_names.contains(&candidate.name) =>
+                {
+                    CallOrigin::Overload {
+                        name: candidate.name.clone(),
+                        parameter_types: self
+                            .resolved_parameter_types(candidate.parameters, candidate.declared),
+                    }
                 }
                 None => CallOrigin::Named(candidate.name.clone()),
             };
@@ -435,16 +295,15 @@ impl TypeChecker {
                 candidate.declared,
                 candidate.body,
                 &origin,
-                calls_by_name,
+                &calls_by_name,
             )?;
         }
         Ok(())
     }
 
     /// The resolved types of `parameters` (or `declared`'s whole-signature slots where a
-    /// parameter has no annotation of its own), in order — an overload member's own key
-    /// into `overloads`/`overload_call_args`, computed the same way
-    /// `register_overload_declaration` computes it for registration.
+    /// parameter has no annotation of its own) — an overload member's own key into
+    /// `overloads`/`overload_call_args`.
     fn resolved_parameter_types(
         &self,
         parameters: &[Parameter],
@@ -464,11 +323,8 @@ impl TypeChecker {
             .collect()
     }
 
-    /// Where a method named `method_name` on `owning_type`'s own calls come from: a
-    /// qualified `"Type.method"` overload set (2+ methods of this name on `owning_type`)
-    /// resolves exactly like a top-level overload does, so its calls are attributed to
-    /// it the same way (`CallOrigin::Overload`); otherwise a member call is attributed
-    /// to it by `owning_type` and its own name alone (`CallOrigin::Method`).
+    /// A method's calls come from its qualified `"Type.method"` overload set if it has
+    /// one, otherwise from `owning_type` and its own name.
     fn method_call_origin(
         &self,
         owning_type: &str,
@@ -489,13 +345,9 @@ impl TypeChecker {
         }
     }
 
-    /// [`Self::pin_result_parameters`]'s per-declaration work, shared by a top-level
-    /// function, a method, a lambda, and every nested candidate: every bare `:: Result`
-    /// parameter of `parameters` that `body` matches directly. `declared` is a
-    /// whole-signature `::` annotation's parameter slots (`f :: (Result) -> Text =
-    /// (result) => …`), read the same way
-    /// [`crate::ast::FunctionDeclaration::parameter_type`] does — a parameter's own
-    /// annotation wins, so this is consulted only when it has none of its own.
+    /// Pin every bare `:: Result` parameter of `parameters` that `body` matches
+    /// directly. `declared` is a whole-signature `::` annotation's parameter slots,
+    /// consulted only when a parameter has no annotation of its own.
     fn pin_result_parameters_of(
         &mut self,
         name: &str,
@@ -532,11 +384,7 @@ impl TypeChecker {
         Ok(())
     }
 
-    /// The argument spans of every direct call [`CallOrigin`] attributes to a
-    /// declaration — a plain function's or a bound lambda's found by NAME in the
-    /// whole-program `calls_by_name` index (computed once, up front); a method's or an
-    /// overload member's own calls were recorded as `check_call`/`resolve_overload`
-    /// resolved each one, which this only reads back.
+    /// The argument spans of every call [`CallOrigin`] attributes to a declaration.
     fn call_argument_spans(
         &self,
         origin: &CallOrigin,
@@ -576,17 +424,14 @@ impl TypeChecker {
         }
     }
 
-    /// [`Self::pin_result_parameters_of`]'s per-parameter work: fold every direct
-    /// caller's argument at `index` into a pinned `Ok`/`NotOk` payload. A variant that
-    /// ends up unpinned but is bound AND READ somewhere in `sites` is
-    /// `UnresolvedResultPayload`; otherwise, whatever WAS pinned is taught to every
-    /// matched site.
+    /// Fold every call's argument at `index` into a pinned `Ok`/`NotOk` payload, and
+    /// teach it to every matched site in `sites`.
     fn pin_one_result_parameter(
         &mut self,
         name: &str,
         index: usize,
         parameter_name: &str,
-        sites: &[ResultParameterMatch<'_>],
+        sites: &[MatchCandidate<'_>],
         origin: &CallOrigin,
         calls_by_name: &HashMap<&str, Vec<&Expression>>,
     ) -> Result<(), TypeError> {
@@ -697,15 +542,10 @@ fn is_unspecialized_result(ty: &Type) -> bool {
                 .all(|v| v.fields.iter().all(|f| matches!(f, Type::Generic { .. }))))
 }
 
-/// Where a declaration's own direct callers' arguments come from — the three shapes
-/// [`TypeChecker::pin_one_result_parameter`] draws from, each attributing a call to its
-/// callee a different way: a plain function or a bound lambda by NAME (looked up in the
-/// whole-program `calls_by_name` index, computed once up front); a method by its
-/// RECEIVER's type (recorded by `check_call` as it resolves one, since a member call
-/// can't be attributed to a callee by name alone); an overload member — top-level, or a
-/// type's own qualified `"Type.method"` set — by its OWN declared parameter types
-/// (recorded by `resolve_overload` as it resolves one to exactly one member, since
-/// several members share the overloaded name).
+/// A declaration's calls: a plain function or a bound lambda by NAME (looked up in the
+/// whole-program `calls_by_name` index); a method by its RECEIVER's type (recorded by
+/// `check_call`); an overload member by its OWN parameter types (recorded by
+/// `resolve_overload`, since several members share the overloaded name).
 enum CallOrigin {
     Named(String),
     Method {
@@ -718,37 +558,85 @@ enum CallOrigin {
     },
 }
 
-/// A function, lambda, or method declared somewhere inside another declaration's body —
-/// [`TypeChecker::pin_nested_result_parameters`]'s own candidate to check next, against
-/// its own parameters and its own body only. `declared` is its whole-signature `::`
-/// annotation's parameter slots, when it has one (only a nested `FunctionDeclaration`
-/// can; a lambda literal or a method, named or not, never does). `owning_type` is the
-/// enclosing type's own name for a locally-declared type's method, and `None` for
-/// everything else — resolved the same way a top-level method's calls are (see
-/// [`TypeChecker::method_call_origin`]), never by a plain name lookup.
+/// A function, lambda, or method to check on its own — its own parameters and body
+/// only. `declared` is a whole-signature `::` annotation's parameter slots, when it has
+/// one. `owning_type` is the enclosing type's name for a method, `None` otherwise.
+/// `top_level_function` marks exactly the top-level `FunctionDeclaration`s the
+/// reachability skip in [`TypeChecker::pin_result_parameters`] applies to — a method
+/// body and a top-level binding's value are always reachable roots.
 struct NestedDeclaration<'a> {
     name: String,
     parameters: &'a [Parameter],
     declared: Option<&'a [Type]>,
     body: &'a Expression,
     owning_type: Option<String>,
+    top_level_function: bool,
 }
 
-/// Every function/lambda/method-shaped construct anywhere inside `body`, at ANY nesting
-/// depth — a `?`/`|` match inside one of THESE checks that construct's OWN parameters
-/// against ITS OWN body when [`TypeChecker::pin_nested_result_parameters`] visits it, so
-/// a nested declaration's `:: Result` parameter is covered by this pass exactly like a
-/// top-level one, never by attributing anything found here to the ENCLOSING
-/// declaration. A `:=`/`=`-bound lambda is named after its binding (found via its
-/// enclosing `Block`, before the generic `Expression::Lambda` arm below reaches the same
-/// lambda through the walk's own recursion into that binding's value — whichever
-/// candidate is checked FIRST short-circuits `pin_nested_result_parameters` on a
-/// rejection, so the well-named one always wins); an anonymous lambda literal (a bare
-/// callback, say) has no name of its own to report, so `"a lambda"` names it instead.
-/// `try_for_each_subexpression` already descends into a nested `FunctionDeclaration`'s
-/// and a bound lambda's own body on its own, so one walk finds every depth — no
-/// recursion needed here.
-fn nested_function_candidates(body: &Expression) -> Vec<NestedDeclaration<'_>> {
+/// Every function, lambda, and method declared anywhere in `program`, top-level or
+/// nested at any depth — each its own candidate for
+/// [`TypeChecker::pin_result_parameters`], checked against its own parameters and body
+/// only.
+fn declaration_candidates(program: &Program) -> Vec<NestedDeclaration<'_>> {
+    let mut candidates = Vec::new();
+    for item in &program.items {
+        match item {
+            Item::FunctionDeclaration(declaration) => {
+                if declaration.is_inert_corelib_placeholder() {
+                    continue;
+                }
+                candidates.push(NestedDeclaration {
+                    name: declaration.name.clone(),
+                    parameters: &declaration.parameters,
+                    declared: declaration.declared_parameters(),
+                    body: &declaration.body,
+                    owning_type: None,
+                    top_level_function: true,
+                });
+                candidates.extend(nested_declaration_candidates(&declaration.body));
+            }
+            Item::TypeDeclaration(declaration) => {
+                for method in declaration.type_definition.methods() {
+                    candidates.push(NestedDeclaration {
+                        name: method.name.clone(),
+                        parameters: &method.parameters,
+                        declared: None,
+                        body: &method.body,
+                        owning_type: Some(declaration.name.clone()),
+                        top_level_function: false,
+                    });
+                    candidates.extend(nested_declaration_candidates(&method.body));
+                }
+            }
+            Item::VariableDeclaration(declaration) => match &declaration.value {
+                // Named directly by its binding, rather than through the generic
+                // `Expression::Lambda` walk below (which would also find this same
+                // lambda, unhelpfully labeled "a lambda").
+                Expression::Lambda {
+                    parameters, body, ..
+                } => {
+                    candidates.push(NestedDeclaration {
+                        name: declaration.name.clone(),
+                        parameters,
+                        declared: None,
+                        body,
+                        owning_type: None,
+                        top_level_function: false,
+                    });
+                    candidates.extend(nested_declaration_candidates(body));
+                }
+                other => candidates.extend(nested_declaration_candidates(other)),
+            },
+        }
+    }
+    candidates
+}
+
+/// Every function/lambda/method-shaped construct anywhere inside `body`, at any nesting
+/// depth — `try_for_each_subexpression` already descends into a nested declaration's or
+/// bound lambda's own body, so one walk finds every depth. An anonymous lambda literal
+/// has no name of its own, so `"a lambda"` names it instead.
+fn nested_declaration_candidates(body: &Expression) -> Vec<NestedDeclaration<'_>> {
     let mut candidates = Vec::new();
     let _: ControlFlow<()> = try_for_each_subexpression(body, &mut |expression| {
         match expression {
@@ -760,6 +648,7 @@ fn nested_function_candidates(body: &Expression) -> Vec<NestedDeclaration<'_>> {
                 declared: None,
                 body,
                 owning_type: None,
+                top_level_function: false,
             }),
             Expression::Block { statements, .. } => {
                 for statement in statements {
@@ -771,6 +660,7 @@ fn nested_function_candidates(body: &Expression) -> Vec<NestedDeclaration<'_>> {
                                 declared: nested.declared_parameters(),
                                 body: &nested.body,
                                 owning_type: None,
+                                top_level_function: false,
                             });
                         }
                         Statement::Item(Item::VariableDeclaration(local))
@@ -784,12 +674,11 @@ fn nested_function_candidates(body: &Expression) -> Vec<NestedDeclaration<'_>> {
                                 declared: None,
                                 body,
                                 owning_type: None,
+                                top_level_function: false,
                             });
                         }
-                        // A type declared locally (inside a function's own body) has
-                        // methods exactly like a top-level one's — each is its own
-                        // candidate, resolved the same way (see
-                        // `TypeChecker::method_call_origin`).
+                        // A type declared locally has methods exactly like a top-level
+                        // one's — each is its own candidate.
                         Statement::Item(Item::TypeDeclaration(declaration)) => {
                             for method in declaration.type_definition.methods() {
                                 candidates.push(NestedDeclaration {
@@ -798,6 +687,7 @@ fn nested_function_candidates(body: &Expression) -> Vec<NestedDeclaration<'_>> {
                                     declared: None,
                                     body: &method.body,
                                     owning_type: Some(declaration.name.clone()),
+                                    top_level_function: false,
                                 });
                             }
                         }
@@ -810,21 +700,6 @@ fn nested_function_candidates(body: &Expression) -> Vec<NestedDeclaration<'_>> {
         ControlFlow::Continue(())
     });
     candidates
-}
-
-/// One `?`/`|` match, within a declaration's body, whose SCRUTINEE is a bare read of one
-/// of its own `Result`-typed parameters (or a direct alias of one — see
-/// [`result_parameter_matches`]) — what [`TypeChecker::pin_result_parameters`] looks
-/// for. `ok_binding`/`not_ok_binding` are the payload sub-pattern's own name, span, and
-/// ARM BODY, when that arm binds a name (`Ok(text)`) rather than discarding the payload
-/// (`Ok(_)`) — the body is what [`is_payload_read`] checks for a use of that name.
-/// Matching a DERIVED value (a call, a field, a renamed local's further transformation)
-/// is out of reach for this pass — matching the producing call directly, or annotating,
-/// still works.
-struct ResultParameterMatch<'a> {
-    scrutinee_span: Span,
-    ok_binding: Option<(String, Span, &'a Expression)>,
-    not_ok_binding: Option<(String, Span, &'a Expression)>,
 }
 
 /// One name's status, valid only within `scope` (a byte-range, file-qualified region of
@@ -900,7 +775,7 @@ fn result_parameter_matches<'a>(
     type_table: &TypeTable,
     body: &'a Expression,
     parameter_name: &str,
-) -> Vec<ResultParameterMatch<'a>> {
+) -> Vec<MatchCandidate<'a>> {
     use crate::ast::{NOT_OK, OK};
 
     // The parameter itself is always its own alias, everywhere in its own body.
@@ -1056,11 +931,6 @@ fn result_parameter_matches<'a>(
             type_table
                 .get(&candidate.scrutinee_span)
                 .is_some_and(is_unspecialized_result)
-        })
-        .map(|candidate| ResultParameterMatch {
-            scrutinee_span: candidate.scrutinee_span,
-            ok_binding: candidate.ok_binding,
-            not_ok_binding: candidate.not_ok_binding,
         })
         .collect()
 }
