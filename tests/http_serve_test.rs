@@ -484,20 +484,17 @@ fn jit_http_serve_reads_a_content_length_and_a_chunked_body_under_a_raised_cap()
 /// start listening, run `drive` against it with raw sockets, quit through `/quit`, and
 /// wait for a clean exit — the keep-alive tests' own counterpart of `run_body_echo_server`.
 fn run_hummus_server(drive: impl FnOnce(&str, u16)) {
-    let port = free_port();
     let quilon = env!("CARGO_BIN_EXE_quilon");
-    let file = common::temp_ql(
-        "http_serve_keep_alive",
-        &program(&format!("127.0.0.1:{port}")),
-    );
+    let file = common::temp_ql("http_serve_keep_alive", &program("127.0.0.1:0"));
 
-    let child = Command::new(quilon)
+    let mut child = Command::new(quilon)
         .args(["run", file.to_str().unwrap()])
         .stdin(Stdio::null())
-        .stdout(Stdio::null())
+        .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .spawn()
         .expect("spawn quilon run");
+    let port = read_announced_port(&mut child);
 
     wait_until_listening("127.0.0.1", port);
     drive("127.0.0.1", port);
@@ -636,6 +633,7 @@ fn idle_timeout_program(address: &str, idle_timeout: f64) -> String {
         r#"
 << core.http
 << core.net
+<< core.io
 
 @server := net.Server {{ handle = 0 }}
 
@@ -654,6 +652,7 @@ hummus = (request :: http.Request) -> http.Response => <
   server := http.@serve(
     "{address}", request => hummus(request),
     http.ServerOptions {{ maxBodySize = 16 * 1024 * 1024, idleTimeout = {idle_timeout} }})
+  io.print(server.address().port)
   0
 >
 "#
@@ -662,20 +661,20 @@ hummus = (request :: http.Request) -> http.Response => <
 
 #[test]
 fn jit_http_serve_closes_an_idle_connection_after_its_configured_timeout() {
-    let port = free_port();
     let quilon = env!("CARGO_BIN_EXE_quilon");
     let file = common::temp_ql(
         "http_serve_idle_timeout",
-        &idle_timeout_program(&format!("127.0.0.1:{port}"), 0.2),
+        &idle_timeout_program("127.0.0.1:0", 0.2),
     );
 
-    let child = Command::new(quilon)
+    let mut child = Command::new(quilon)
         .args(["run", file.to_str().unwrap()])
         .stdin(Stdio::null())
-        .stdout(Stdio::null())
+        .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .spawn()
         .expect("spawn quilon run");
+    let port = read_announced_port(&mut child);
 
     wait_until_listening("127.0.0.1", port);
 
