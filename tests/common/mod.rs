@@ -23,8 +23,8 @@ use std::net::TcpStream;
 use std::path::Path;
 use std::process::{Child, Command};
 use std::rc::Rc;
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Mutex, mpsc};
 use std::time::{Duration, Instant};
 
 /// The `file:line:column:` position line a report prints for `path` — with the path
@@ -284,13 +284,24 @@ pub fn run_with_stdin(mut command: Command, input: &[u8]) -> (Option<i32>, Vec<u
 /// intermittently losing to another process on a shared box (`tcp_serve_test.rs`,
 /// `http_serve_test.rs`). Panics if the first line is not a valid port.
 pub fn read_announced_port(child: &mut Child) -> u16 {
-    let stdout = child
+    let mut stdout = child
         .stdout
-        .as_mut()
+        .take()
         .expect("the child's stdout must be piped");
-    let mut line = String::new();
-    BufReader::new(stdout)
-        .read_line(&mut line)
+    // `read_line` blocks with no timeout of its own, so it runs on a helper thread and
+    // this side waits on it bounded — a hung or crashed-before-printing child then fails
+    // the test in 10s with a clear message instead of hanging the whole run.
+    let (sender, receiver) = mpsc::channel();
+    std::thread::spawn(move || {
+        let mut line = String::new();
+        let outcome = BufReader::new(&mut stdout)
+            .read_line(&mut line)
+            .map(|_| line);
+        let _ = sender.send(outcome);
+    });
+    let line = receiver
+        .recv_timeout(Duration::from_secs(10))
+        .expect("the child never announced its port within 10s")
         .expect("read the announced port from the child's stdout");
     line.trim()
         .parse()
