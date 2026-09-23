@@ -62,6 +62,11 @@
   >
 }
 
+~ `@tcpRequest`, given the `Address` a `Server.address()` reported instead of `host:port` text.
+>> @tcpRequest = (address :: Address, requestBytes :: Text) -> Result => <
+  @tcpRequest(address.text(), requestBytes)
+>
+
 ~ A server `net.@tcpServe` started, returned the moment it begins listening.
 >> Server = {
   handle :: Num,
@@ -87,6 +92,11 @@
 ~ is refused) is fatal.
 >> @tcpServe = (address :: Text, handler :: (Connection) -> $) -> Server => <
   Server { handle = 0 }
+>
+
+~ `@tcpServe`, given the `Address` a `Server.address()` reported instead of `host:port` text.
+>> @tcpServe = (address :: Address, handler :: (Connection) -> $) -> Server => <
+  @tcpServe(address.text(), handler)
 >
 
 ~ The suite for `Address.text()`: offline over canned host/port pairs, so it runs anywhere.

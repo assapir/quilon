@@ -1201,22 +1201,28 @@ impl TypeChecker {
             // function that only returns `Ok(text)` — still strictly more informative).
             // This mirrors `check_match` preferring a concrete arm type over a generic
             // one and introduces no generics (the annotation still stands as the
-            // compatibility check). A concrete annotation is left exactly as written,
-            // and an overloaded member keeps its per-member registered return.
-            if !is_overloaded && annotated_type.contains_generic() {
-                let refined = Type::Function {
-                    parameters: parameter_types.clone(),
-                    return_type: Box::new(body_type.clone()),
-                };
-                let _ = self.env.update_type(&declaration.name, refined);
+            // compatibility check). A concrete annotation is left exactly as written.
+            // An overload member refines the same way, on its OWN registered return —
+            // each member stands on its own, so two members sharing a name may refine to
+            // different concrete payloads with no effect on one another.
+            if annotated_type.contains_generic() {
+                if is_overloaded {
+                    self.refine_overload_return_type(
+                        &declaration.name,
+                        &parameter_types,
+                        body_type.clone(),
+                    );
+                } else {
+                    let refined = Type::Function {
+                        parameters: parameter_types.clone(),
+                        return_type: Box::new(body_type.clone()),
+                    };
+                    let _ = self.env.update_type(&declaration.name, refined);
+                }
             }
         } else if is_overloaded {
-            // An overload member's return type is its annotation, never its inferred body
-            // type. Adopting the body type here would make the member's signature depend
-            // on where a call sits relative to the definition — a call above it would see
-            // one type and a call below it another — which is precisely the order
-            // dependence the annotation requirement removes. The omission is reported
-            // instead, at the call or at the definition.
+            // No return annotation at all: the omission is reported at the call or at
+            // the definition (see `UnannotatedOverloadMember`), not refined from the body.
         } else {
             // Not annotated, not overloaded: `declaration.name` was left undefined for the
             // body-check window (see above), so define it now, for real, with the type its

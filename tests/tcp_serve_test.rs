@@ -44,6 +44,32 @@ respond = (connection :: net.Connection) -> $ => <
     )
 }
 
+/// Like [`program`], but binds through `net.@tcpServe`'s `Address` overload instead of a
+/// `host:port` string — proves the overload forwards to the `Text` member rather than
+/// miscompiling the `Address` record as raw `Text` bytes.
+fn program_via_address_overload() -> String {
+    r#"
+<< core.net
+<< core.io
+
+@server := net.Server { handle = 0 }
+
+respond = (connection :: net.Connection) -> $ => <
+  line = connection.@read()
+  line == "quit" ? server.kill(1) : connection.@write(line)
+  $
+>
+
+^ = () -> Num => <
+  server := net.@tcpServe(
+    net.Address { host = "127.0.0.1", port = 0 }, connection => respond(connection))
+  io.print(server.address().port)
+  0
+>
+"#
+    .to_string()
+}
+
 /// Write `source` to a unique temp `.qn` file and return its path.
 fn temp_ql(tag: &str, source: &str) -> PathBuf {
     let mut path = std::env::temp_dir();
@@ -140,6 +166,29 @@ fn jit_tcp_serve_binds_a_hostname() {
     let port = read_announced_port(&mut child);
 
     drive_echo_then_quit("localhost", port);
+
+    assert_eq!(
+        wait_bounded(child, Duration::from_secs(15)),
+        0,
+        "the server's own process exits 0 once kill has settled the accept loop"
+    );
+    let _ = std::fs::remove_file(&file);
+}
+
+#[test]
+fn jit_tcp_serve_binds_through_the_address_overload() {
+    let file = temp_ql("jit_address_overload", &program_via_address_overload());
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_quilon"))
+        .args(["run", file.to_str().unwrap()])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn quilon run");
+    let port = read_announced_port(&mut child);
+
+    drive_echo_then_quit("127.0.0.1", port);
 
     assert_eq!(
         wait_bounded(child, Duration::from_secs(15)),

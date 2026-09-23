@@ -335,6 +335,77 @@ fn aot_http_serve_answers_then_kill_stops_the_server() {
     let _ = std::fs::remove_file(&binary);
 }
 
+/// Like [`program`], but binds through `http.@serve`'s `Address` overload instead of a
+/// `host:port` string — proves the overload forwards to the `Text` member rather than
+/// miscompiling the `Address` record as raw `Text` bytes.
+fn program_via_address_overload() -> String {
+    r#"
+<< core.http
+<< core.net
+<< core.io
+
+@server := net.Server { handle = 0 }
+
+killAndReply = () -> http.Response => <
+  server.kill(1)
+  http.Response.reply(http.OK, "bye")
+>
+
+hummus = (request :: http.Request) -> http.Response => <
+  request.path() == "/quit"
+    ? killAndReply()
+    : http.Response.reply(http.OK, "chickpeas: plenty")
+>
+
+^ = () -> Num => <
+  server := http.@serve(
+    net.Address { host = "127.0.0.1", port = 0 }, request => hummus(request))
+  io.print(server.address().port)
+  0
+>
+"#
+    .to_string()
+}
+
+#[test]
+fn jit_http_serve_binds_through_the_address_overload() {
+    let quilon = env!("CARGO_BIN_EXE_quilon");
+    let file = common::temp_ql(
+        "http_serve_address_overload",
+        &program_via_address_overload(),
+    );
+
+    let mut child = Command::new(quilon)
+        .args(["run", file.to_str().unwrap()])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn quilon run");
+    let port = read_announced_port(&mut child);
+
+    wait_until_listening("127.0.0.1", port);
+    let reply = send_raw(
+        "127.0.0.1",
+        port,
+        b"GET /pantry HTTP/1.1\r\nHost: shop\r\nConnection: close\r\n\r\n",
+    );
+    assert!(reply.starts_with("HTTP/1.1 200 OK\r\n"), "reply: {reply}");
+
+    let mut quitter = connect_with_timeout("127.0.0.1", port).expect("connect to send quit");
+    quitter
+        .write_all(b"GET /quit HTTP/1.1\r\nHost: shop\r\nConnection: close\r\n\r\n")
+        .expect("write the quit request");
+    drop(quitter);
+
+    assert_eq!(
+        wait_bounded(child, Duration::from_secs(15)),
+        0,
+        "the server's own process exits 0 once kill has settled the accept loop"
+    );
+    let _ = std::fs::remove_file(&file);
+}
+
 /// A server whose handler echoes a POST's body back as the reply (`Created` carrying
 /// exactly `body.content`), built with the three-argument `http.@serve` so `max_body_size`
 /// governs how large a request body it accepts before answering `413` — the same

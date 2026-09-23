@@ -389,6 +389,30 @@ impl TypeChecker {
         }
     }
 
+    /// Refine one overload member's registered return type to `refined`, once its body has
+    /// been checked — the overloaded counterpart of `check_function_declaration`'s own
+    /// generic-to-concrete refinement for a single declaration, keyed by this member's own
+    /// parameter types so it never touches any other member of the same set.
+    pub(super) fn refine_overload_return_type(
+        &mut self,
+        name: &str,
+        parameter_types: &[Type],
+        refined: Type,
+    ) {
+        if let Some(set) = self.overloads.get_mut(name)
+            && let Some(member) = set.iter_mut().find(|overload| {
+                overload.parameters.len() == parameter_types.len()
+                    && overload
+                        .parameters
+                        .iter()
+                        .zip(parameter_types)
+                        .all(|(a, b)| types_match(a, b))
+            })
+        {
+            member.ret = Some(refined);
+        }
+    }
+
     /// Register an operator MEMBER of a record or sum type as a member of that operator's
     /// overload set. An operator lives inside the type it operates on: `it` is the left
     /// operand (its type is `self_type`) and the member's single explicit parameter is the

@@ -595,6 +595,34 @@ impl<'ctx> CodeGenerator<'ctx> {
         ))
     }
 
+    /// The `(ptr, len)` bytes `net.@tcpServe`/`http.@serve`/`net.@tcpRequest`'s `address`
+    /// argument crosses the FFI as: a `Text` argument's own fields, or — for the `Address`
+    /// overload — `address.text()`'s result, called here as an ordinary method rather than
+    /// through a genuine Quilon-level forwarding call. A forwarding call would put the
+    /// launch inside THAT wrapper function's own body, whose own block-scope join would
+    /// then wait for it before the wrapper could even return the `Server` handle — a
+    /// block's join is not call-transparent (see `docs/concurrency/README.md`). Calling
+    /// `.text()` inline instead keeps the primitive call the user actually wrote as the
+    /// only thing the deferral pass sees launching.
+    fn address_text_fields(
+        &mut self,
+        address: &Expression,
+    ) -> Result<(PointerValue<'ctx>, inkwell::values::IntValue<'ctx>), String> {
+        if matches!(self.oracle.expression_type(address), Some(Type::Text)) {
+            return self.extract_text(address);
+        }
+        let symbol = self
+            .method_symbol_for("text", std::slice::from_ref(address), true)?
+            .ok_or_else(|| "core.net.Address has no `text` method".to_string())?;
+        let text_fn = self
+            .module
+            .get_function(&symbol)
+            .ok_or_else(|| format!("Unknown function: {symbol}"))?;
+        let address_value = self.generate_expression(address)?;
+        let text_value = self.emit_call(text_fn, &[address_value])?;
+        self.text_fields(text_value)
+    }
+
     /// Lower a leaf `@` IO primitive call to its runtime intrinsic. `site` is the span of the
     /// `@`-identifier — the call's launch site, which a fault in the launched work reports at.
     ///
@@ -644,7 +672,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                 const CALL_FAILED: &str = "Failed to call core.net.@tcpRequest";
                 const LOAD_FAILED: &str = "Failed to load core.net.@tcpRequest result";
                 Self::expect_arity(NAME, arguments, false, 2)?;
-                let (addr_ptr, addr_len) = self.extract_text(&arguments[0])?;
+                let (addr_ptr, addr_len) = self.address_text_fields(&arguments[0])?;
                 let (req_ptr, req_len) = self.extract_text(&arguments[1])?;
                 // The launch writes a DEFERRED `Result` (`Ok(responseBytes)` / `NotOk(message)`,
                 // tagged deferred) into `out`; a `Result` crosses the FFI via this out-pointer, not
@@ -716,11 +744,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                 const NAME: &str = "core.net.@tcpServe";
                 const CALL_FAILED: &str = "Failed to call core.net.@tcpServe";
                 Self::expect_arity(NAME, arguments, false, 2)?;
-                let address_value = self.generate_expression(&arguments[0])?;
-                let BasicValueEnum::StructValue(_) = address_value else {
-                    return Err(format!("{NAME} expects a Text address"));
-                };
-                let (address_ptr, address_len) = self.text_fields(address_value)?;
+                let (address_ptr, address_len) = self.address_text_fields(&arguments[0])?;
                 let BasicValueEnum::StructValue(closure) =
                     self.generate_expression(&arguments[1])?
                 else {
@@ -766,11 +790,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                         arguments.len()
                     ));
                 }
-                let address_value = self.generate_expression(&arguments[0])?;
-                let BasicValueEnum::StructValue(_) = address_value else {
-                    return Err(format!("{NAME} expects a Text address"));
-                };
-                let (address_ptr, address_len) = self.text_fields(address_value)?;
+                let (address_ptr, address_len) = self.address_text_fields(&arguments[0])?;
                 let BasicValueEnum::StructValue(closure) =
                     self.generate_expression(&arguments[1])?
                 else {

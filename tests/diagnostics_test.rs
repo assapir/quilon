@@ -278,6 +278,50 @@ fn a_global_shared_with_a_fiber_handler_is_rejected() {
     );
 }
 
+/// The same QN350 rejection, reached through `net.@tcpServe`'s `Address` overload rather
+/// than a `host:port` string — the fiber-sharing check matches the primitive by name, not
+/// by which overload the call resolved to, so it must still catch the shared global.
+#[test]
+fn a_global_shared_with_a_fiber_handler_is_rejected_through_the_tcp_serve_address_overload() {
+    let src = "<< core.net\n\
+               hits := 0\n\
+               ^ = () -> Num => <\n  \
+                 net.@tcpServe(net.Address { host = \"127.0.0.1\", port = 0 }, \
+                 connection => < hits := hits + 1 >)\n  \
+                 0\n\
+               >\n";
+    let (ok, stderr) = check("fiber_sharing_tcp_address_overload", src);
+
+    assert!(!ok, "expected non-zero exit, stderr was: {stderr}");
+    assert!(
+        stderr.contains("error[QN350]:"),
+        "no QN350 header: {stderr}"
+    );
+}
+
+/// The same QN350 rejection, reached through `http.@serve`'s `Address` overload.
+#[test]
+fn a_global_shared_with_a_fiber_handler_is_rejected_through_the_http_serve_address_overload() {
+    let src = "<< core.http\n<< core.net\n\
+               hits := 0\n\
+               answer = (request :: http.Request) -> http.Response => <\n  \
+                 hits := hits + 1\n  \
+                 http.Response.reply(http.OK, \"hi\")\n\
+               >\n\
+               ^ = () -> Num => <\n  \
+                 http.@serve(net.Address { host = \"127.0.0.1\", port = 0 }, \
+                 request => answer(request))\n  \
+                 0\n\
+               >\n";
+    let (ok, stderr) = check("fiber_sharing_http_address_overload", src);
+
+    assert!(!ok, "expected non-zero exit, stderr was: {stderr}");
+    assert!(
+        stderr.contains("error[QN350]:"),
+        "no QN350 header: {stderr}"
+    );
+}
+
 /// `quilon explain` prints the reference section for a code, and says so for a code the
 /// registry lacks.
 #[test]

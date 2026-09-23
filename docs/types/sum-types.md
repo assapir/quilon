@@ -97,7 +97,9 @@ This holds across a function boundary too. A function returning `Ok("x")` —
 return type inferred or annotated `-> Result` — hands the caller a usable `Text` payload.
 And a `-> Result` whose branches are `Ok(Text)` / `NotOk(Text)` — the `getEnv`/`getOpt`
 shape — carries **both** arms' payloads. (See `examples/result.qn` and
-`examples/result_payload.qn`.)
+`examples/result_payload.qn`.) **A member of an [overload set](../functions/overloading.md)
+declared `-> Result` carries the payload types its own body returns**, exactly like a
+single declaration, independently of every other member sharing its name.
 
 Every `Result` shares **one uniform layout** regardless of its payload, so a `Result`
 carrying *any* payload — `Num`, `Text`, `[]Text`, a composite — passes through a generic

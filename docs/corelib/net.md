@@ -14,6 +14,7 @@ Import with `<< core.net`. See the [corelib index](README.md).
 | Function | Effect |
 |----------|--------|
 | `net.@tcpRequest(address :: Text, requestBytes :: Text) -> Result` | One-shot request exchange: connect to `address` (`host:port`), write `requestBytes`, read the response until the peer closes (close-delimited). Yields `Ok(responseBytes)` with the whole response as a `Text` on success, or `NotOk(errorMessage)` on ANY network failure (DNS resolution, connect, write, or read) — a failure is a value to match. A value-returning [leaf IO primitive](../concurrency/README.md): the call launches the exchange and hands back a **deferred** `Result`, forced when a strict operation first reads it. |
+| `net.@tcpRequest(address :: Address, requestBytes :: Text) -> Result` | As above, given the `Address` a `server.address()` reported. |
 
 The response is capped at **16 MiB**; a larger one yields `NotOk`.
 Hostname resolution runs on the runtime's blocking-call pool and parks only the calling fiber
@@ -52,6 +53,7 @@ Quilon, reached through the connection the accept loop hands the handler.
 | Function | Effect |
 |----------|--------|
 | `net.@tcpServe(address :: Text, handler :: (Connection) -> $) -> Server` | Bind `address` — `host:port`, exactly the form `net.@tcpRequest` accepts (a numeric IPv4/IPv6 address, an IPv6 literal in brackets, or a hostname resolved the same way, on the runtime's blocking-call pool) — listen, and return the `Server` handle at once — never deferred. The accept loop is a launch of the enclosing `< >` block, joined by that block's own [block-scope join](../concurrency/README.md#implemented-primitives), so `^` stays alive while the server runs; a program that never kills its server runs until the process does. Each accepted connection runs `handler` on its own fiber. A bind failure — the address does not parse or resolve, the port is taken, or nothing but a privileged process may bind it — is fatal, naming the address as written. |
+| `net.@tcpServe(address :: Address, handler :: (Connection) -> $) -> Server` | As above, given the `Address` a `server.address()` reported. |
 
 `net.Connection`, the value `handler` is called with, one per accepted peer:
 
@@ -90,8 +92,8 @@ holler = (connection :: net.Connection) -> $ => <
 >
 
 ^ = () -> $ => <
-  canyon = net.@tcpServe("127.0.0.1:9047", connection => holler(connection))
-  net.@tcpRequest("127.0.0.1:9047", "hellooo") ?
+  canyon = net.@tcpServe("127.0.0.1:0", connection => holler(connection))
+  net.@tcpRequest(canyon.address(), "hellooo") ?
     | Ok(echo) => assert(echo, equals("hellooo"))
     | NotOk(error) => test.failAt(error)
   canyon.kill(1)
