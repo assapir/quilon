@@ -46,9 +46,11 @@ impl<'ctx> CodeGenerator<'ctx> {
     ///     ever runs, so a `Generic` reaching this arm is an internal error in the
     ///     checker or codegen, not a value the language ever asks to represent. Reported
     ///     rather than silently defaulted to `f64` (the historical behavior, and the
-    ///     class of bug issue #469 was) — see [`Self::sized_layout_repr_type`] for the
-    ///     one place that default is still correct: sizing a SLOT (not materializing a
-    ///     value) for a sum variant that may never be constructed at all.
+    ///     class of bug that gave a `Text`/record/array payload a `Num` representation
+    ///     and corrupted it, or crashed codegen outright) — see
+    ///     [`Self::sized_layout_repr_type`] for the one place that default is still
+    ///     correct: sizing a SLOT (not materializing a value) for a sum variant that may
+    ///     never be constructed at all.
     pub(super) fn value_repr_type(&self, ty: &Type) -> Result<BasicTypeEnum<'ctx>, String> {
         match ty {
             Type::Array(_) => Ok(self.ptr_len_struct_type().into()),
