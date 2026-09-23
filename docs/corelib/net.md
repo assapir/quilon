@@ -74,7 +74,8 @@ Quilon, reached through the connection the accept loop hands the handler.
 << core.test
 
 holler = (connection :: net.Connection) -> $ => <
-  shout = connection.@read()
+  ~ "" means either the peer closed or 2 seconds passed with nothing sent.
+  shout = connection.@read(2)
   connection.@write(shout)
   $
 >
