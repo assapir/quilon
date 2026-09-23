@@ -932,11 +932,8 @@ impl<'ctx> CodeGenerator<'ctx> {
         Ok(self.unit_value().into())
     }
 
-    /// `Server.address()`: the `Address` record this server actually bound — its `host`
-    /// and `port` come from two separate runtime calls (each reads the same `local_addr`
-    /// the server's own table entry carries), assembled into the record via
-    /// [`Self::build_plain_record`] since no Quilon-level constructor call sits behind
-    /// this compiler-lowered method.
+    /// `Server.address()`: the bound host and port from two runtime reads of the same
+    /// `local_addr`, assembled with [`Self::build_plain_record`].
     fn generate_server_address(
         &mut self,
         arguments: &[Expression],

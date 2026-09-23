@@ -10,9 +10,7 @@
 
 mod common;
 
-use common::{
-    connect_once_listening, connect_with_timeout, ensure_runtime_lib, read_announced_port,
-};
+use common::{connect_with_timeout, ensure_runtime_lib, read_announced_port};
 use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::path::Path;
@@ -20,11 +18,11 @@ use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
 /// The program under test: the `hummus` handler from `core.http`'s own reference, serving on
-/// `address` (port `0`), announcing the port it actually bound as the first line of its own
-/// stdout before doing anything else, with `/quit` (matched on `request.path()`, not a real
-/// router — there is none) killing the server through the top-level atomic `server` a
-/// handler declared before `@serve` returns must reach this way (the same shape
-/// `tcp_serve_test.rs`'s `program` uses for the raw layer).
+/// `address` (port `0`), printing the port it bound as the first line of its own stdout,
+/// with `/quit` (matched on `request.path()`, not a real router — there is none) killing
+/// the server through the top-level atomic `server` a handler declared before `@serve`
+/// returns must reach this way (the same shape `tcp_serve_test.rs`'s `program` uses for the
+/// raw layer).
 fn program(address: &str) -> String {
     format!(
         r#"
@@ -110,12 +108,10 @@ fn run_client_check(quilon: &str, address: &str) -> (Option<i32>, String) {
     )
 }
 
-/// Block until the server at `host:port` is accepting connections — the one place any test
-/// below waits out the server's own startup, so every later connect attempt (raw or through
-/// the client-check program, which retries nothing on its own) can fail fast on a genuine
-/// problem instead of a race with `@serve` still binding.
+/// Confirm the server at `host:port` is accepting connections before any later connect
+/// attempt (raw or through the client-check program, which retries nothing on its own).
 fn wait_until_listening(host: &str, port: u16) {
-    drop(connect_once_listening(host, port));
+    drop(connect_with_timeout(host, port).expect("connect to the test server"));
 }
 
 /// Send `request` over a fresh connection and read the reply to EOF — valid for a request

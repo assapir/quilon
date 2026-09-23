@@ -451,28 +451,25 @@ pub extern "C" fn __server_kill(server_id: f64, seconds: f64) {
     }
 }
 
-/// `Server.address()`'s `host` half: the bound `SocketAddr`'s IP, rendered bare (never
-/// bracketed — `Address.text()`, the Quilon side, is what adds brackets for an IPv6 host).
-/// `""` on an already-killed or unknown handle, the same missing-entry policy
-/// `Connection.@read()` uses.
-#[unsafe(no_mangle)]
-pub extern "C" fn __server_address_host(server_id: f64) -> QlSlice {
+/// `server_id`'s bound `SocketAddr`, or `None` on an already-killed or unknown handle.
+fn bound_address(server_id: f64) -> Option<SocketAddr> {
     let id = server_id as u64;
-    let Some(server) = SERVERS.with(|servers| servers.borrow().get(&id).cloned()) else {
-        return alloc_text(&[]);
-    };
-    alloc_text(server.local_addr.ip().to_string().as_bytes())
+    SERVERS.with(|servers| servers.borrow().get(&id).map(|server| server.local_addr))
 }
 
-/// `Server.address()`'s `port` half: the bound `SocketAddr`'s port — never `0`, even when
-/// `@tcpServe` was asked for one, since this reads back what the OS actually bound. `0` on
-/// an already-killed or unknown handle.
+/// `Server.address()`'s `host` half, rendered bare (`Address.text()` adds brackets).
+#[unsafe(no_mangle)]
+pub extern "C" fn __server_address_host(server_id: f64) -> QlSlice {
+    bound_address(server_id).map_or_else(
+        || alloc_text(&[]),
+        |a| alloc_text(a.ip().to_string().as_bytes()),
+    )
+}
+
+/// `Server.address()`'s `port` half.
 #[unsafe(no_mangle)]
 pub extern "C" fn __server_address_port(server_id: f64) -> f64 {
-    let id = server_id as u64;
-    SERVERS
-        .with(|servers| servers.borrow().get(&id).cloned())
-        .map_or(0.0, |server| f64::from(server.local_addr.port()))
+    bound_address(server_id).map_or(0.0, |a| f64::from(a.port()))
 }
 
 #[cfg(test)]

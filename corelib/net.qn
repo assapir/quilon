@@ -49,10 +49,10 @@
 ~ The address a `net.Server` actually bound, from `server.address()` — most useful after
 ~ binding port `0`, to learn which port the OS actually chose.
 >> Address = {
-  ~ The bound host, exactly as the OS reports it (`127.0.0.1`, `::1` — never bracketed).
+  ~ The bound host as the OS reports it (`127.0.0.1`, `::1`).
   host :: Text,
 
-  ~ The bound port, never `0` even when `@tcpServe` was asked for one.
+  ~ The port the OS bound.
   port :: Num,
 
   ~ `host:port`, exactly the form `@tcpRequest`/`@tcpServe` accept — an IPv6 `host` (one

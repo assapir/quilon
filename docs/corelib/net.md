@@ -74,8 +74,8 @@ Quilon, reached through the connection the accept loop hands the handler.
 
 | Member | Effect |
 |--------|--------|
-| `address.host :: Text` | The bound host, exactly as the OS reports it (`127.0.0.1`, `::1` — never bracketed). |
-| `address.port :: Num` | The bound port — never `0`, even when `@tcpServe` was asked for one. |
+| `address.host :: Text` | The bound host as the OS reports it (`127.0.0.1`, `::1`). |
+| `address.port :: Num` | The port the OS bound. |
 | `address.text() -> Text` | `host:port`, exactly the form `@tcpRequest`/`@tcpServe` accept — an IPv6 `host` wrapped in brackets. |
 
 ```quilon

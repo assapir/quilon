@@ -25,7 +25,7 @@ use std::process::{Child, Command};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, mpsc};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 /// The `file:line:column:` position line a report prints for `path` — with the path
 /// elided exactly as the report elides it.
@@ -277,12 +277,9 @@ pub fn run_with_stdin(mut command: Command, input: &[u8]) -> (Option<i32>, Vec<u
 }
 
 /// The port a server test program announces on the first line of its stdout
-/// (`io.print(server.address().port)`), read from `child`'s piped stdout. Every test that
-/// spawns a `net.@tcpServe`/`http.@serve` program binds port `0` and learns the OS-assigned
-/// port this way, rather than picking one ahead of time and handing it to the program — the
-/// gap between choosing a "free" port and the program binding it was itself a race,
-/// intermittently losing to another process on a shared box (`tcp_serve_test.rs`,
-/// `http_serve_test.rs`). Panics if the first line is not a valid port.
+/// (`io.print(server.address().port)`), read from `child`'s piped stdout. Choosing a free
+/// port ahead of time raced other processes on a shared box. Panics if the first line is
+/// not a valid port.
 pub fn read_announced_port(child: &mut Child) -> u16 {
     let mut stdout = child
         .stdout
@@ -318,19 +315,6 @@ pub fn connect_with_timeout(host: &str, port: u16) -> std::io::Result<TcpStream>
     stream.set_read_timeout(Some(Duration::from_secs(5)))?;
     stream.set_write_timeout(Some(Duration::from_secs(5)))?;
     Ok(stream)
-}
-
-/// Connect to `host:port`, retrying (bounded) until the server is up — the process under
-/// test needs a moment after starting before it has actually bound and is accepting.
-pub fn connect_once_listening(host: &str, port: u16) -> TcpStream {
-    let deadline = Instant::now() + Duration::from_secs(10);
-    loop {
-        match connect_with_timeout(host, port) {
-            Ok(stream) => return stream,
-            Err(_) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(20)),
-            Err(error) => panic!("never managed to connect to the test server: {error}"),
-        }
-    }
 }
 
 /// Whether `tool` is on PATH, for gates that need a linker and skip gracefully without one.

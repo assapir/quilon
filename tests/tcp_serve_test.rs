@@ -1,31 +1,26 @@
 //! End-to-end proof of the raw TCP server layer (`net.@tcpServe`, `Connection`, `Server`).
 //!
-//! The program under test binds port `0` and announces the port it actually got over its
-//! own stdout (`server.address()`) — no port is chosen ahead of time and handed to the
-//! program, which used to leave a gap between choosing a "free" port and the program
-//! binding it, a race intermittently lost on a shared box. It echoes back whatever one
-//! connection sends, and stops the server when a second connection sends the word `quit` —
-//! the handler reaches the `Server` handle through a top-level atomic global `^` assigns right after
-//! `@tcpServe` returns, since a handler is declared (and so must already compile) before
-//! the handle exists. `^`'s own block, having called `@tcpServe` directly, does not return
-//! until that `kill` has settled the accept loop — so the process's own exit is the proof
-//! the whole chain (accept loop, per-connection fiber, kill, block-scope join) completed,
-//! under both the in-process JIT (`quilon run`) and a native AOT binary (`quilon build`).
+//! The program under test binds port `0` and prints the port it bound as the first line of
+//! its own stdout. It echoes back whatever one connection sends, and stops the server when
+//! a second connection sends the word `quit` — the handler reaches the `Server` handle
+//! through a top-level atomic global `^` assigns right after `@tcpServe` returns, since a
+//! handler is declared (and so must already compile) before the handle exists. `^`'s own
+//! block, having called `@tcpServe` directly, does not return until that `kill` has settled
+//! the accept loop — so the process's own exit is the proof the whole chain (accept loop,
+//! per-connection fiber, kill, block-scope join) completed, under both the in-process JIT
+//! (`quilon run`) and a native AOT binary (`quilon build`).
 
 mod common;
 
-use common::{
-    connect_once_listening, connect_with_timeout, ensure_runtime_lib, read_announced_port,
-};
+use common::{connect_with_timeout, ensure_runtime_lib, read_announced_port};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
 /// The program under test: a `net.@tcpServe` echo server bound to `address` (`host:port`,
-/// port `0` in every test below), announcing the port it actually bound as the first line
-/// of its own stdout before doing anything else — the test's own `read_announced_port`
-/// reads it — then stopped by the word `quit` on any connection.
+/// port `0` in every test below), printing the port it bound as the first line of its own
+/// stdout, then stopped by the word `quit` on any connection.
 fn program(address: &str) -> String {
     format!(
         r#"
@@ -85,7 +80,7 @@ fn wait_bounded(mut child: Child, timeout: Duration) -> i32 {
 
 /// Drive the echo-then-quit exchange against a server already listening on `host:port`.
 fn drive_echo_then_quit(host: &str, port: u16) {
-    let mut echoer = connect_once_listening(host, port);
+    let mut echoer = connect_with_timeout(host, port).expect("connect to the test server");
     echoer
         .write_all(b"knock knock")
         .expect("write the echo message");
