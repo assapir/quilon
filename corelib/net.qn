@@ -33,6 +33,11 @@
   ~ has closed. Parks on readiness and forces at the first strict use, like `@tcpRequest`.
   @read = () -> Text => < "" >,
 
+  ~ Like `@read()`, but gives up and yields "" once `seconds` pass with nothing arriving —
+  ~ the same "" a closed peer already yields, since neither carries a channel a Text result
+  ~ could tell them apart through.
+  @read = (seconds :: Num) -> Text => < "" >,
+
   ~ Write every byte of `bytes`, parking on writability until all of it is sent.
   @write = (bytes :: Text) -> $ => < $ >,
 
@@ -73,6 +78,17 @@
   address = () -> Address => < Address { host = "", port = 0 } >
 }
 
+~ Bind `address` (`host:port`, exactly what `@tcpRequest` accepts — a numeric IPv4/IPv6
+~ address, an IPv6 literal in brackets, or a hostname resolved the same way, on the
+~ runtime's blocking-call pool), listen, and return the `Server` handle at once — never
+~ deferred. The accept loop runs as a launch of the calling block, so `^` stays alive
+~ while the server runs; every accepted connection runs `handler` on its own fiber. A
+~ bind failure (the address does not parse or resolve, the port is taken, or permission
+~ is refused) is fatal.
+>> @tcpServe = (address :: Text, handler :: (Connection) -> $) -> Server => <
+  Server { handle = 0 }
+>
+
 ~ The suite for `Address.text()`: offline over canned host/port pairs, so it runs anywhere.
 ~ Only `quilon test corelib/net.qn` compiles this block — every other command erases it.
 << core.test
@@ -86,14 +102,3 @@ test.describe("Address.text", () => <
     expect(Address { host = "::1", port = 9048 }.text(), equals("[::1]:9048"))
   >)
 >)
-
-~ Bind `address` (`host:port`, exactly what `@tcpRequest` accepts — a numeric IPv4/IPv6
-~ address, an IPv6 literal in brackets, or a hostname resolved the same way, on the
-~ runtime's blocking-call pool), listen, and return the `Server` handle at once — never
-~ deferred. The accept loop runs as a launch of the calling block, so `^` stays alive
-~ while the server runs; every accepted connection runs `handler` on its own fiber. A
-~ bind failure (the address does not parse or resolve, the port is taken, or permission
-~ is refused) is fatal.
->> @tcpServe = (address :: Text, handler :: (Connection) -> $) -> Server => <
-  Server { handle = 0 }
->

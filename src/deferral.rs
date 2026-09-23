@@ -501,15 +501,17 @@ fn is_tcp_request_call(function: &Expression, arguments: &[Expression]) -> bool 
         && arguments.len() == TCP_REQUEST_ARITY
 }
 
-/// Whether `function`/`arguments` is a call to `Connection`'s `@read` primitive
-/// (`connection.@read()`, the member-call form, no arguments besides the receiver itself).
+/// Whether `function`/`arguments` is a call to `Connection`'s `@read` primitive — the
+/// member-call form, either `connection.@read()` (just the receiver) or
+/// `connection.@read(seconds)` (the receiver plus the timeout overload's one explicit
+/// argument) — both deferred the same way, so both need the taint and the block-scope join.
 fn is_connection_read_call(
     function: &Expression,
     arguments: &[Expression],
     member_call: bool,
 ) -> bool {
     member_call
-        && arguments.len() == 1
+        && (arguments.len() == 1 || arguments.len() == 2)
         && matches!(function, Expression::Identifier { name, .. }
             if at_primitive_name(name) == Some(CONNECTION_READ_PRIMITIVE))
 }
@@ -711,6 +713,16 @@ mod tests {
         // `line = connection.@read()` binds a deferred Text (lazy) through the member-call
         // form, exactly like the module-qualified primitives above; the comparison forces it.
         let src = "^ = () -> Num => <\n  line = c.@read()\n  line == \"\" ? 0 : 1\n>";
+        assert_eq!(force_count(src), 1);
+    }
+
+    #[test]
+    fn bound_connection_read_with_a_timeout_is_deferred_and_forced_at_a_strict_use() {
+        // `connection.@read(seconds)` — the timeout overload — is deferred exactly like the
+        // zero-argument form: the block launching it still needs its own launch scope, or
+        // it returns (and the runtime auto-closes the connection) before the background
+        // read ever runs.
+        let src = "^ = () -> Num => <\n  line = c.@read(5)\n  line == \"\" ? 0 : 1\n>";
         assert_eq!(force_count(src), 1);
     }
 

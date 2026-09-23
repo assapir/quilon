@@ -78,8 +78,9 @@ pub use mem::{
     check_range_endpoint, register_thread, remove_registered_roots,
 };
 pub use net::{
-    __connection_close, __connection_read_launch, __connection_write, __server_address_host,
-    __server_address_port, __server_kill, __tcp_request_launch, __tcp_serve_launch,
+    __connection_close, __connection_read_launch, __connection_read_with_timeout_launch,
+    __connection_write, __server_address_host, __server_address_port, __server_kill,
+    __tcp_request_launch, __tcp_serve_launch,
 };
 pub use process::{__argv_to_text_array, __envp_to_map, __exit};
 pub use report::{
@@ -200,6 +201,7 @@ intrinsic_registry! {
     __tcp_serve_launch:
         extern "C" fn(*const u8, i64, *const c_void, *mut c_void, *const QlSite) -> f64,
     __connection_read_launch: extern "C" fn(f64) -> QlSlice,
+    __connection_read_with_timeout_launch: extern "C" fn(f64, f64) -> QlSlice,
     __connection_write: extern "C" fn(f64, *const u8, i64),
     __connection_close: extern "C" fn(f64),
     __server_address_host: extern "C" fn(f64) -> QlSlice,

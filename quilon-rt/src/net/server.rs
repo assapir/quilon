@@ -291,6 +291,43 @@ fn read_connection_once(id: u64) -> QlSlice {
     }
 }
 
+/// `Connection.@read(seconds)`: like `__connection_read_launch`, but gives up and returns
+/// `""` once `seconds` pass with nothing arriving — `core.http`'s idle-timeout overload,
+/// parking on the same deadline mechanism [`crate::scheduler::sleep`] uses, alongside
+/// readiness rather than instead of it (see [`super::TcpStream::read_with_deadline`]).
+#[unsafe(no_mangle)]
+pub extern "C" fn __connection_read_with_timeout_launch(
+    connection_id: f64,
+    seconds: f64,
+) -> QlSlice {
+    let id = connection_id as u64;
+    // `bounded_duration`, not a bare `Duration::from_secs_f64`: `seconds` is ordinary
+    // Quilon arithmetic (`1.0 / 0.0` is infinity, not a language error), and that call
+    // panics — taking the whole server down — on a value that is not finite, the same
+    // risk `Server.kill`'s own grace period already guards against.
+    let deadline = Instant::now() + bounded_duration(seconds);
+    launch_deferred_text(move || read_connection_once_with_deadline(id, deadline))
+}
+
+/// [`read_connection_once`]'s timed counterpart: `""` at EOF, on any read error, on a
+/// missing/already-closed connection (exactly as before), OR once `deadline` passes with
+/// nothing arriving — the four cases a `Text` result cannot tell apart, since none of
+/// them carries a channel to report which one happened.
+fn read_connection_once_with_deadline(id: u64, deadline: Instant) -> QlSlice {
+    let Some(state) = CONNECTIONS.with(|connections| connections.borrow().get(&id).cloned()) else {
+        return alloc_text(&[]);
+    };
+    let mut slot = state.stream.borrow_mut();
+    let Some(stream) = slot.as_mut() else {
+        return alloc_text(&[]);
+    };
+    let mut buffer = [0u8; 4096];
+    match stream.read_with_deadline(&mut buffer, deadline) {
+        Ok(count) => alloc_text(&buffer[..count]),
+        Err(_) => alloc_text(&[]),
+    }
+}
+
 /// `Connection.@write(bytes)`: write every byte, parking on writability until all of it is
 /// sent. Effect-only (`-> $`), so a write past a closed connection — or one that fails
 /// partway — is a silent no-op rather than a fault: neither channel this call has (a
@@ -339,26 +376,27 @@ fn wake_accept_loop(server: &ServerState) {
     let _ = TcpStream::connect(target);
 }
 
-/// The largest grace period `Server.kill` honors. Far longer than any reasonable use, but
+/// The largest deadline this module honors for a caller-supplied `seconds` — `Server.kill`'s
+/// grace period, and `Connection.@read`'s timeout. Far longer than any reasonable use, but
 /// a concrete bound: `seconds` is ordinary Quilon arithmetic (`1.0 / 0.0` is infinity, not
 /// a language error), and `Duration::from_secs_f64` panics on a value that is not finite
 /// or overflows `Duration` — clamping into this range before ever calling it keeps a wild
 /// `seconds` from taking the whole process down with it.
-const MAX_KILL_SECONDS: f64 = 1_000_000_000.0;
+const MAX_DEADLINE_SECONDS: f64 = 1_000_000_000.0;
 
 /// `seconds` as a `Duration`, never panicking: NaN and a negative value both become "no
-/// wait", and an infinite or overflowing value is capped at [`MAX_KILL_SECONDS`].
-fn kill_grace_period(seconds: f64) -> Duration {
+/// wait", and an infinite or overflowing value is capped at [`MAX_DEADLINE_SECONDS`].
+fn bounded_duration(seconds: f64) -> Duration {
     let bounded = if seconds.is_nan() {
         0.0
     } else if !seconds.is_finite() {
         if seconds.is_sign_positive() {
-            MAX_KILL_SECONDS
+            MAX_DEADLINE_SECONDS
         } else {
             0.0
         }
     } else {
-        seconds.clamp(0.0, MAX_KILL_SECONDS)
+        seconds.clamp(0.0, MAX_DEADLINE_SECONDS)
     };
     Duration::from_secs_f64(bounded)
 }
@@ -381,7 +419,7 @@ fn wait_for_in_flight(server: &ServerState, seconds: f64) {
         HANDLER_FIBER_SERVER.with(|handlers| handlers.borrow().get(&fiber_id).copied())
     }) == Some(identity);
     let floor = usize::from(calling_fiber_is_this_servers_own_handler);
-    let deadline = Instant::now() + kill_grace_period(seconds);
+    let deadline = Instant::now() + bounded_duration(seconds);
     while server.in_flight.get() > floor && Instant::now() < deadline {
         sleep(TICK);
     }
@@ -481,6 +519,14 @@ mod tests {
     /// extract the promise from its sentinel-tagged slice and force it.
     fn force_connection_read(connection_id: f64) -> Vec<u8> {
         let deferred = __connection_read_launch(connection_id);
+        let forced = __force_text(deferred.data);
+        crate::text::byte_slice(forced.data as *const u8, forced.len).to_vec()
+    }
+
+    /// [`force_connection_read`]'s timed counterpart, forcing
+    /// `__connection_read_with_timeout_launch`'s deferred `Text` the same way.
+    fn force_connection_read_with_timeout(connection_id: f64, seconds: f64) -> Vec<u8> {
+        let deferred = __connection_read_with_timeout_launch(connection_id, seconds);
         let forced = __force_text(deferred.data);
         crate::text::byte_slice(forced.data as *const u8, forced.len).to_vec()
     }
@@ -828,10 +874,106 @@ mod tests {
     }
 
     #[test]
-    fn kill_grace_period_never_panics_on_a_non_finite_or_absurd_seconds() {
+    fn read_with_timeout_returns_data_that_arrives_before_the_deadline() {
+        // A generous deadline and a prompt client: the read returns the real bytes, not a
+        // timeout — the common case, where the timeout never actually fires.
+        extern "C" fn echo_with_generous_timeout(
+            connection_id: f64,
+            _environment: *mut c_void,
+        ) -> u8 {
+            let bytes = force_connection_read_with_timeout(connection_id, 5.0);
+            write_connection_bytes(connection_id, &bytes);
+            0
+        }
+
+        static FINISHED: AtomicBool = AtomicBool::new(false);
+        FINISHED.store(false, Ordering::SeqCst);
+
+        on_gc_thread(|| {
+            run(|| {
+                spawn(|| {
+                    let server_id = launch_test_server("127.0.0.1:0", echo_with_generous_timeout);
+                    let addr = bound_addr(server_id);
+
+                    let client = std::thread::spawn(move || {
+                        let mut stream = connect_with_timeout(addr);
+                        stream.write_all(b"sundial").expect("write the message");
+                        let mut echoed = [0u8; 7];
+                        stream.read_exact(&mut echoed).expect("read the echo");
+                        assert_eq!(&echoed, b"sundial");
+                        FINISHED.store(true, Ordering::SeqCst);
+                    });
+
+                    // Yield cooperatively (`sleep`, not `client.join()` outright) until the
+                    // client is done — a direct join would block this OS thread, the only
+                    // one driving the scheduler, before the handler fiber ever gets to run.
+                    let deadline = Instant::now() + Duration::from_secs(10);
+                    while !FINISHED.load(Ordering::SeqCst) && Instant::now() < deadline {
+                        sleep(Duration::from_millis(5));
+                    }
+                    client.join().expect("client thread panicked");
+                    __server_kill(server_id, 1.0);
+                });
+            });
+        });
+
+        assert!(FINISHED.load(Ordering::SeqCst), "the timed echo completed");
+    }
+
+    #[test]
+    fn read_with_timeout_returns_empty_once_the_deadline_passes_with_nothing_arriving() {
+        // A client that connects and then never writes: the handler's timed read gives up
+        // on its own, echoing back an empty reply rather than the connection hanging until
+        // `kill` force-closes it.
+        extern "C" fn echo_with_short_timeout(connection_id: f64, _environment: *mut c_void) -> u8 {
+            let bytes = force_connection_read_with_timeout(connection_id, 0.05);
+            write_connection_bytes(connection_id, &bytes);
+            0
+        }
+
+        static FINISHED: AtomicBool = AtomicBool::new(false);
+        FINISHED.store(false, Ordering::SeqCst);
+
+        on_gc_thread(|| {
+            run(|| {
+                spawn(|| {
+                    let server_id = launch_test_server("127.0.0.1:0", echo_with_short_timeout);
+                    let addr = bound_addr(server_id);
+
+                    let client = std::thread::spawn(move || {
+                        let mut stream = connect_with_timeout(addr);
+                        // Never writes: the timeout, not a real message, must end the read.
+                        let mut echoed = [0u8; 1];
+                        let outcome = stream.read(&mut echoed);
+                        // The timed-out handler writes zero bytes and returns, and the
+                        // runtime's own auto-close then ends the connection — read as EOF.
+                        assert!(matches!(outcome, Ok(0)), "expected EOF, got {outcome:?}");
+                        FINISHED.store(true, Ordering::SeqCst);
+                    });
+
+                    let deadline = Instant::now() + Duration::from_secs(10);
+                    while !FINISHED.load(Ordering::SeqCst) && Instant::now() < deadline {
+                        sleep(Duration::from_millis(5));
+                    }
+                    client.join().expect("client thread panicked");
+                    __server_kill(server_id, 1.0);
+                });
+            });
+        });
+
+        assert!(
+            FINISHED.load(Ordering::SeqCst),
+            "the timed-out read closed the connection"
+        );
+    }
+
+    #[test]
+    fn bounded_duration_never_panics_on_a_non_finite_or_absurd_seconds() {
         // `seconds` is ordinary Quilon Num arithmetic — `1.0 / 0.0` is infinity, not a
         // language error — so none of these may reach `Duration::from_secs_f64`'s own
-        // panic conditions (negative, not finite, or overflowing `Duration`).
+        // panic conditions (negative, not finite, or overflowing `Duration`). Shared by
+        // `Server.kill`'s grace period and `Connection.@read`'s timeout, so one test
+        // covers both callers.
         for seconds in [
             f64::NAN,
             f64::INFINITY,
@@ -841,7 +983,7 @@ mod tests {
             0.0,
             5.0,
         ] {
-            let _ = kill_grace_period(seconds);
+            let _ = bounded_duration(seconds);
         }
     }
 }

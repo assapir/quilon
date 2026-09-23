@@ -12,6 +12,20 @@ All notable changes to Quilon are documented here.
   and `port :: Num`, plus `text() -> Text` rendering `host:port` with an IPv6 host wrapped
   in brackets, exactly the form `@tcpRequest`/`@tcpServe` accept. See
   `docs/corelib/net.md`. Part of #435.
+- **The HTTP server keeps a connection alive across requests, with a configurable idle
+  timeout.** The connection handler loops instead of closing after one response: it reads
+  the next request off the same connection — carrying over a pipelined request's own bytes
+  if they already arrived — unless the request or the reply asked for `Connection: close`,
+  the request line named `HTTP/1.0`, or the next read comes back empty (a peer close or an
+  idle connection). The connection handler sets each reply's own `Connection` header to
+  match that decision (`close`/`keep-alive`) before writing it, unless a program already
+  set one on the `Response` it returned; a `HEAD` reply carries no body but keeps the
+  `content-length` a `GET` handled the same way would have sent. A new
+  **`ServerOptions.idleTimeout :: Num`** field (5 seconds by default, matching Node) closes
+  a connection with nothing arriving for that long, backed by a new runtime overload,
+  **`Connection.@read(seconds :: Num) -> Text`**, that gives up (yielding `""`, the same as
+  a peer close) once the deadline passes. See `docs/corelib/http.md#keep-alive` and
+  `docs/corelib/net.md#the-raw-tcp-server-layer`. Part of #435.
 - **The HTTP server reads request bodies.** A body-carrying method (`Post`/`Put`/`Query`/
   `Patch`) whose request declares `Content-Length` or `Transfer-Encoding: chunked` has its
   body read — exactly `Content-Length` more bytes past the head, or dechunked to the
