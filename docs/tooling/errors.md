@@ -1226,18 +1226,19 @@ error.
 describe = (result :: Result) -> Text => <
   result ? | Ok(text) => text | NotOk(_) => "none"
 >
-^ = () -> Num => < 0 >
+~ Every caller passes NotOk, so Ok has no payload type for `text` to read.
+^ = () -> $ => < assert(describe(NotOk("lost")), equals("none")) >
 ```
 
-Pass that variant from a caller, or bind it without reading it:
+A caller that passes `Ok` gives `text` its type:
 
 ```quilon
 describe = (result :: Result) -> Text => <
   result ? | Ok(text) => text | NotOk(_) => "none"
 >
 ^ = () -> $ => <
-  message = describe(Ok("home"))
-  assert(message, equals("home"))
+  assert(describe(Ok("home")), equals("home"))
+  assert(describe(NotOk("lost")), equals("none"))
 >
 ```
 
