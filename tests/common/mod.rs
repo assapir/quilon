@@ -18,10 +18,10 @@ use quilon::lexer::Lexer;
 use quilon::parser;
 use quilon::source_map::SourceMap;
 use quilon::typechecker::{TypeChecker, TypeTable};
-use std::io::Write;
-use std::net::{TcpListener, TcpStream};
+use std::io::{BufRead, BufReader, Write};
+use std::net::TcpStream;
 use std::path::Path;
-use std::process::Command;
+use std::process::{Child, Command};
 use std::rc::Rc;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -276,16 +276,25 @@ pub fn run_with_stdin(mut command: Command, input: &[u8]) -> (Option<i32>, Vec<u
     (output.status.code(), output.stdout)
 }
 
-/// A port nothing is bound to right now — bind an ephemeral one and drop it immediately.
-/// Vanishingly unlikely to race another process for the same port on a test box, and the
-/// program under test reports a clear bind failure if it ever loses that race. Shared by
-/// every test that hands a chosen port to a subprocess server (`tcp_serve_test.rs`,
-/// `http_serve_test.rs`).
-pub fn free_port() -> u16 {
-    let listener = TcpListener::bind("127.0.0.1:0").expect("bind to find a free port");
-    let port = listener.local_addr().expect("local addr").port();
-    drop(listener);
-    port
+/// The port a server test program announces on the first line of its stdout
+/// (`io.print(server.address().port)`), read from `child`'s piped stdout. Every test that
+/// spawns a `net.@tcpServe`/`http.@serve` program binds port `0` and learns the OS-assigned
+/// port this way, rather than picking one ahead of time and handing it to the program — the
+/// gap between choosing a "free" port and the program binding it was itself a race,
+/// intermittently losing to another process on a shared box (`tcp_serve_test.rs`,
+/// `http_serve_test.rs`). Panics if the first line is not a valid port.
+pub fn read_announced_port(child: &mut Child) -> u16 {
+    let stdout = child
+        .stdout
+        .as_mut()
+        .expect("the child's stdout must be piped");
+    let mut line = String::new();
+    BufReader::new(stdout)
+        .read_line(&mut line)
+        .expect("read the announced port from the child's stdout");
+    line.trim()
+        .parse()
+        .unwrap_or_else(|error| panic!("not a port ({error}): {line:?}"))
 }
 
 /// Connect to `host:port` with a bounded read/write timeout on every op — every client

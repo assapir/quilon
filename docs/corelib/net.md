@@ -67,6 +67,15 @@ Quilon, reached through the connection the accept loop hands the handler.
 |--------|--------|
 | `server.kill(seconds :: Num) -> $` | Stop accepting, wait up to `seconds` for in-flight handlers to finish, then close any connection still open and the listener itself. Parks the calling fiber until every one of that has happened. |
 | `server.kill() -> $` | `kill` with the default 5-second grace period. |
+| `server.address() -> Address` | The address this server actually bound. Binding port `0` takes any free port the OS assigns, and this is how a program learns which one. |
+
+`net.Address`, `server.address()`'s own value:
+
+| Member | Effect |
+|--------|--------|
+| `address.host :: Text` | The bound host, exactly as the OS reports it (`127.0.0.1`, `::1` — never bracketed). |
+| `address.port :: Num` | The bound port — never `0`, even when `@tcpServe` was asked for one. |
+| `address.text() -> Text` | `host:port`, exactly the form `@tcpRequest`/`@tcpServe` accept — an IPv6 `host` wrapped in brackets. |
 
 ```quilon
 << core.net

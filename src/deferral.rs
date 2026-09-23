@@ -762,6 +762,17 @@ mod tests {
     }
 
     #[test]
+    fn a_server_address_call_is_not_a_launch_scope() {
+        // `Server.address()` is a plain, synchronous member — reading where a server bound,
+        // not launching anything — so it must not be mistaken for `@tcpServe`/`@serve`'s
+        // own launch registration, nor be treated as a deferred-value producer.
+        let src = "^ = () -> Num => <\n  a = server.address()\n  0\n>";
+        let i = info(src);
+        assert!(i.launch_scopes.is_empty());
+        assert_eq!(i.force_sites.len(), 0);
+    }
+
+    #[test]
     fn a_pure_block_is_not_a_launch_scope() {
         let i = info("^ = () -> Num => < 1 + 2 * 3 >");
         assert!(i.launch_scopes.is_empty());

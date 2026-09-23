@@ -87,6 +87,9 @@ linkedGreeting = "linked " + "again"
     $
   >
   smokeServer = net.@tcpServe("127.0.0.1:0", connection => respondSmoke(connection))
+  ~ __server_address_host / __server_address_port, via `Address.text()`'s own composed use
+  ~ of both fields.
+  assert(smokeServer.address().text().size > 0, equals(true))
   smokeServer.kill(0.01)
 
   ~ __http_body_progress, via the compiled body of `core.http.serveConnection` (and the

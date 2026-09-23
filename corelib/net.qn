@@ -41,6 +41,22 @@
   close = () -> $ => < $ >
 }
 
+~ The address a `net.Server` actually bound, from `server.address()` — most useful after
+~ binding port `0`, to learn which port the OS actually chose.
+>> Address = {
+  ~ The bound host, exactly as the OS reports it (`127.0.0.1`, `::1` — never bracketed).
+  host :: Text,
+
+  ~ The bound port, never `0` even when `@tcpServe` was asked for one.
+  port :: Num,
+
+  ~ `host:port`, exactly the form `@tcpRequest`/`@tcpServe` accept — an IPv6 `host` (one
+  ~ containing `:`) wrapped in brackets.
+  text = () -> Text => <
+    it.host.contains(":") ? "[`it.host`]:`it.port`" : "`it.host`:`it.port`"
+  >
+}
+
 ~ A server `net.@tcpServe` started, returned the moment it begins listening.
 >> Server = {
   handle :: Num,
@@ -50,8 +66,26 @@
   kill = (seconds :: Num) -> $ => < $ >,
 
   ~ `kill` with the default 5-second grace period.
-  kill = () -> $ => < $ >
+  kill = () -> $ => < $ >,
+
+  ~ The address this server actually bound — most useful after binding port `0` (any free
+  ~ port), to learn which one the OS actually chose.
+  address = () -> Address => < Address { host = "", port = 0 } >
 }
+
+~ The suite for `Address.text()`: offline over canned host/port pairs, so it runs anywhere.
+~ Only `quilon test corelib/net.qn` compiles this block — every other command erases it.
+<< core.test
+
+test.describe("Address.text", () => <
+  test.it("renders an IPv4 host:port with no brackets", () => <
+    expect(Address { host = "127.0.0.1", port = 9047 }.text(), equals("127.0.0.1:9047"))
+  >)
+
+  test.it("wraps an IPv6 host in brackets", () => <
+    expect(Address { host = "::1", port = 9048 }.text(), equals("[::1]:9048"))
+  >)
+>)
 
 ~ Bind `address` (`host:port`, exactly what `@tcpRequest` accepts — a numeric IPv4/IPv6
 ~ address, an IPv6 literal in brackets, or a hostname resolved the same way, on the

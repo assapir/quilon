@@ -203,6 +203,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                     return self.generate_connection_close(arguments);
                 }
                 ("core.net.Server", "kill") => return self.generate_server_kill(arguments),
+                ("core.net.Server", "address") => return self.generate_server_address(arguments),
                 _ => {}
             }
         }
@@ -901,6 +902,68 @@ impl<'ctx> CodeGenerator<'ctx> {
             .build_call(kill, &[handle.into(), seconds.into()], "")
             .map_err(ctx(CALL_FAILED))?;
         Ok(self.unit_value().into())
+    }
+
+    /// `Server.address()`: the `Address` record this server actually bound — its `host`
+    /// and `port` come from two separate runtime calls (each reads the same `local_addr`
+    /// the server's own table entry carries), assembled into the record here since no
+    /// Quilon-level constructor call sits behind this compiler-lowered method.
+    fn generate_server_address(
+        &mut self,
+        arguments: &[Expression],
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        const NAME: &str = "core.net.Server.address";
+        const CALL_FAILED: &str = "Failed to call core.net.Server.address";
+        Self::expect_arity(NAME, arguments, true, 0)?;
+        let handle = self.handle_field(&arguments[0])?;
+        let host_fn = self.get_intrinsic("__server_address_host")?;
+        let host = Self::call_result_to_basic(
+            self.builder
+                .build_call(host_fn, &[handle.into()], "server_address_host")
+                .map_err(ctx(CALL_FAILED))?,
+        )?;
+        let port_fn = self.get_intrinsic("__server_address_port")?;
+        let port = Self::call_result_to_basic(
+            self.builder
+                .build_call(port_fn, &[handle.into()], "server_address_port")
+                .map_err(ctx(CALL_FAILED))?,
+        )?;
+        self.build_address_record(host, port)
+    }
+
+    /// Build a `{ host :: Text, port :: Num }`-shaped record (`core.net.Address`) on the GC
+    /// heap around already-computed `host`/`port` values and return a pointer to it — the
+    /// two-field counterpart of [`Self::build_handle_record`], for `Server.address()`,
+    /// which has no Quilon-level constructor call to lower instead.
+    fn build_address_record(
+        &mut self,
+        host: BasicValueEnum<'ctx>,
+        port: BasicValueEnum<'ctx>,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        use inkwell::values::AnyValue;
+        let struct_type = self
+            .context
+            .struct_type(&[host.get_type(), port.get_type()], false);
+        let size = struct_type
+            .size_of()
+            .ok_or_else(|| "address record struct type has no compile-time size".to_string())?;
+        let alloc_fn = self.get_intrinsic("__alloc")?;
+        let record_ptr = self
+            .builder
+            .build_call(alloc_fn, &[size.into()], "address_record")
+            .map_err(ctx("Failed to call __alloc for an address record"))?
+            .as_any_value_enum()
+            .into_pointer_value();
+        for (index, value) in [host, port].into_iter().enumerate() {
+            let gep = self
+                .builder
+                .build_struct_gep(struct_type, record_ptr, index as u32, "address_field")
+                .map_err(ctx("Failed to build GEP for an address record"))?;
+            self.builder
+                .build_store(gep, value)
+                .map_err(ctx("Failed to store an address record field"))?;
+        }
+        Ok(record_ptr.into())
     }
 
     /// The `handle :: Num` field of a `Connection`/`Server` receiver — the raw id every

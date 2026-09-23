@@ -6,6 +6,12 @@ All notable changes to Quilon are documented here.
 
 ### Added
 
+- **`net.Server` gains `address() -> Address`**, the `host:port` a server actually bound —
+  most useful after binding port `0`, which takes any free port the OS assigns, so a
+  program can learn which one. `Address` carries `host :: Text` (bare, never bracketed)
+  and `port :: Num`, plus `text() -> Text` rendering `host:port` with an IPv6 host wrapped
+  in brackets, exactly the form `@tcpRequest`/`@tcpServe` accept. See
+  `docs/corelib/net.md`. Part of #435.
 - **The HTTP server reads request bodies.** A body-carrying method (`Post`/`Put`/`Query`/
   `Patch`) whose request declares `Content-Length` or `Transfer-Encoding: chunked` has its
   body read — exactly `Content-Length` more bytes past the head, or dechunked to the

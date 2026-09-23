@@ -413,6 +413,30 @@ pub extern "C" fn __server_kill(server_id: f64, seconds: f64) {
     }
 }
 
+/// `Server.address()`'s `host` half: the bound `SocketAddr`'s IP, rendered bare (never
+/// bracketed — `Address.text()`, the Quilon side, is what adds brackets for an IPv6 host).
+/// `""` on an already-killed or unknown handle, the same missing-entry policy
+/// `Connection.@read()` uses.
+#[unsafe(no_mangle)]
+pub extern "C" fn __server_address_host(server_id: f64) -> QlSlice {
+    let id = server_id as u64;
+    let Some(server) = SERVERS.with(|servers| servers.borrow().get(&id).cloned()) else {
+        return alloc_text(&[]);
+    };
+    alloc_text(server.local_addr.ip().to_string().as_bytes())
+}
+
+/// `Server.address()`'s `port` half: the bound `SocketAddr`'s port — never `0`, even when
+/// `@tcpServe` was asked for one, since this reads back what the OS actually bound. `0` on
+/// an already-killed or unknown handle.
+#[unsafe(no_mangle)]
+pub extern "C" fn __server_address_port(server_id: f64) -> f64 {
+    let id = server_id as u64;
+    SERVERS
+        .with(|servers| servers.borrow().get(&id).cloned())
+        .map_or(0.0, |server| f64::from(server.local_addr.port()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -766,6 +790,41 @@ mod tests {
         });
 
         assert!(FINISHED.load(Ordering::SeqCst), "the IPv6 echo completed");
+    }
+
+    #[test]
+    fn address_after_binding_port_zero_reports_the_listeners_own_port() {
+        // `__server_address_port` must read back what the OS actually bound, not the `0`
+        // the program asked for — and `__server_address_host` must agree with the same
+        // `local_addr` on the host half.
+        extern "C" fn unreached_handler(_connection_id: f64, _environment: *mut c_void) -> u8 {
+            0
+        }
+
+        on_gc_thread(|| {
+            run(|| {
+                spawn(|| {
+                    let server_id = launch_test_server("127.0.0.1:0", unreached_handler);
+                    let bound = bound_addr(server_id);
+
+                    assert_ne!(bound.port(), 0, "the listener itself bound a real port");
+                    assert_eq!(
+                        __server_address_port(server_id),
+                        f64::from(bound.port()),
+                        "address() must report the listener's own port"
+                    );
+                    let host = __server_address_host(server_id);
+                    let host = crate::text::byte_slice(host.data as *const u8, host.len);
+                    assert_eq!(
+                        host,
+                        bound.ip().to_string().as_bytes(),
+                        "address() must report the listener's own host"
+                    );
+
+                    __server_kill(server_id, 1.0);
+                });
+            });
+        });
     }
 
     #[test]

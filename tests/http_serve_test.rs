@@ -10,22 +10,26 @@
 
 mod common;
 
-use common::{connect_once_listening, connect_with_timeout, ensure_runtime_lib, free_port};
+use common::{
+    connect_once_listening, connect_with_timeout, ensure_runtime_lib, read_announced_port,
+};
 use std::io::{Read, Write};
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
 /// The program under test: the `hummus` handler from `core.http`'s own reference, serving on
-/// `address`, with `/quit` (matched on `request.path()`, not a real router — there is none)
-/// killing the server through the top-level atomic `server` a handler declared before
-/// `@serve` returns must reach this way (the same shape `tcp_serve_test.rs`'s `program`
-/// uses for the raw layer).
+/// `address` (port `0`), announcing the port it actually bound as the first line of its own
+/// stdout before doing anything else, with `/quit` (matched on `request.path()`, not a real
+/// router — there is none) killing the server through the top-level atomic `server` a
+/// handler declared before `@serve` returns must reach this way (the same shape
+/// `tcp_serve_test.rs`'s `program` uses for the raw layer).
 fn program(address: &str) -> String {
     format!(
         r#"
 << core.http
 << core.net
+<< core.io
 
 @server := net.Server {{ handle = 0 }}
 
@@ -47,6 +51,7 @@ hummus = (request :: http.Request) -> http.Response => <
 
 ^ = () -> Num => <
   server := http.@serve("{address}", request => hummus(request))
+  io.print(server.address().port)
   0
 >
 "#
@@ -182,17 +187,17 @@ fn drive_malformed_then_quit(host: &str, port: u16) {
 
 #[test]
 fn jit_http_serve_answers_then_kill_stops_the_server() {
-    let port = free_port();
     let quilon = env!("CARGO_BIN_EXE_quilon");
-    let file = common::temp_ql("http_serve_jit", &program(&format!("127.0.0.1:{port}")));
+    let file = common::temp_ql("http_serve_jit", &program("127.0.0.1:0"));
 
-    let child = Command::new(quilon)
+    let mut child = Command::new(quilon)
         .args(["run", file.to_str().unwrap()])
         .stdin(Stdio::null())
-        .stdout(Stdio::null())
+        .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .spawn()
         .expect("spawn quilon run");
+    let port = read_announced_port(&mut child);
 
     wait_until_listening("127.0.0.1", port);
     let (code, stderr) = run_client_check(quilon, &format!("127.0.0.1:{port}"));
@@ -230,8 +235,7 @@ fn aot_http_serve_answers_then_kill_stops_the_server() {
     let quilon = env!("CARGO_BIN_EXE_quilon");
     ensure_runtime_lib(Path::new(quilon).parent().expect("binary has a parent dir"));
 
-    let port = free_port();
-    let source = common::temp_ql("http_serve_aot", &program(&format!("127.0.0.1:{port}")));
+    let source = common::temp_ql("http_serve_aot", &program("127.0.0.1:0"));
     let binary = std::env::temp_dir().join(format!("quilon_http_serve_aot_{}", std::process::id()));
     let build = Command::new(quilon)
         .args(["build", source.to_str().unwrap(), "--linker", linker])
@@ -245,12 +249,13 @@ fn aot_http_serve_answers_then_kill_stops_the_server() {
     );
     let _ = std::fs::remove_file(&source);
 
-    let child = Command::new(&binary)
+    let mut child = Command::new(&binary)
         .stdin(Stdio::null())
-        .stdout(Stdio::null())
+        .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .spawn()
         .expect("spawn the native AOT server binary");
+    let port = read_announced_port(&mut child);
 
     wait_until_listening("127.0.0.1", port);
     let (code, stderr) = run_client_check(quilon, &format!("127.0.0.1:{port}"));
@@ -280,6 +285,7 @@ fn body_echo_program(address: &str, max_body_size: u64) -> String {
         r#"
 << core.http
 << core.net
+<< core.io
 
 @server := net.Server {{ handle = 0 }}
 
@@ -302,6 +308,7 @@ hummus = (request :: http.Request) -> http.Response => <
   server := http.@serve(
     "{address}", request => hummus(request),
     http.ServerOptions {{ maxBodySize = {max_body_size} }})
+  io.print(server.address().port)
   0
 >
 "#
@@ -312,20 +319,20 @@ hummus = (request :: http.Request) -> http.Response => <
 /// listening, run `drive` against it with raw sockets, then quit and wait for a clean
 /// exit — the shape every body-cap/framing test below shares.
 fn run_body_echo_server(max_body_size: u64, drive: impl FnOnce(&str, u16)) {
-    let port = free_port();
     let quilon = env!("CARGO_BIN_EXE_quilon");
     let file = common::temp_ql(
         "http_serve_body_echo",
-        &body_echo_program(&format!("127.0.0.1:{port}"), max_body_size),
+        &body_echo_program("127.0.0.1:0", max_body_size),
     );
 
-    let child = Command::new(quilon)
+    let mut child = Command::new(quilon)
         .args(["run", file.to_str().unwrap()])
         .stdin(Stdio::null())
-        .stdout(Stdio::null())
+        .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .spawn()
         .expect("spawn quilon run");
+    let port = read_announced_port(&mut child);
 
     wait_until_listening("127.0.0.1", port);
     drive("127.0.0.1", port);

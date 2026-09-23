@@ -1,8 +1,11 @@
 //! End-to-end proof of the raw TCP server layer (`net.@tcpServe`, `Connection`, `Server`).
 //!
-//! The program under test binds a fixed port, echoes back whatever one connection sends,
-//! and stops the server when a second connection sends the word `quit` — the handler
-//! reaches the `Server` handle through a top-level atomic global `^` assigns right after
+//! The program under test binds port `0` and announces the port it actually got over its
+//! own stdout (`server.address()`) — no port is chosen ahead of time and handed to the
+//! program, which used to leave a gap between choosing a "free" port and the program
+//! binding it, a race intermittently lost on a shared box. It echoes back whatever one
+//! connection sends, and stops the server when a second connection sends the word `quit` —
+//! the handler reaches the `Server` handle through a top-level atomic global `^` assigns right after
 //! `@tcpServe` returns, since a handler is declared (and so must already compile) before
 //! the handle exists. `^`'s own block, having called `@tcpServe` directly, does not return
 //! until that `kill` has settled the accept loop — so the process's own exit is the proof
@@ -11,14 +14,18 @@
 
 mod common;
 
-use common::{connect_once_listening, connect_with_timeout, ensure_runtime_lib, free_port};
+use common::{
+    connect_once_listening, connect_with_timeout, ensure_runtime_lib, read_announced_port,
+};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
-/// The program under test: a `net.@tcpServe` echo server bound to `address` (`host:port`),
-/// stopped by the word `quit` on any connection.
+/// The program under test: a `net.@tcpServe` echo server bound to `address` (`host:port`,
+/// port `0` in every test below), announcing the port it actually bound as the first line
+/// of its own stdout before doing anything else — the test's own `read_announced_port`
+/// reads it — then stopped by the word `quit` on any connection.
 fn program(address: &str) -> String {
     format!(
         r#"
@@ -35,6 +42,7 @@ respond = (connection :: net.Connection) -> $ => <
 
 ^ = () -> Num => <
   server := net.@tcpServe("{address}", connection => respond(connection))
+  io.print(server.address().port)
   0
 >
 "#
@@ -98,16 +106,16 @@ fn drive_echo_then_quit(host: &str, port: u16) {
 
 #[test]
 fn jit_tcp_serve_echoes_then_kill_stops_the_server() {
-    let port = free_port();
-    let file = temp_ql("jit", &program(&format!("127.0.0.1:{port}")));
+    let file = temp_ql("jit", &program("127.0.0.1:0"));
 
-    let child = Command::new(env!("CARGO_BIN_EXE_quilon"))
+    let mut child = Command::new(env!("CARGO_BIN_EXE_quilon"))
         .args(["run", file.to_str().unwrap()])
         .stdin(Stdio::null())
-        .stdout(Stdio::null())
+        .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .spawn()
         .expect("spawn quilon run");
+    let port = read_announced_port(&mut child);
 
     drive_echo_then_quit("127.0.0.1", port);
 
@@ -125,16 +133,16 @@ fn jit_tcp_serve_binds_a_hostname() {
     // way `net.@tcpRequest` does — "localhost" is the one every machine running this test
     // resolves without a real network, and consistently between the server's own bind and
     // this test's client connect (both run on the same machine, through the same resolver).
-    let port = free_port();
-    let file = temp_ql("jit_hostname", &program(&format!("localhost:{port}")));
+    let file = temp_ql("jit_hostname", &program("localhost:0"));
 
-    let child = Command::new(env!("CARGO_BIN_EXE_quilon"))
+    let mut child = Command::new(env!("CARGO_BIN_EXE_quilon"))
         .args(["run", file.to_str().unwrap()])
         .stdin(Stdio::null())
-        .stdout(Stdio::null())
+        .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .spawn()
         .expect("spawn quilon run");
+    let port = read_announced_port(&mut child);
 
     drive_echo_then_quit("localhost", port);
 
@@ -163,8 +171,7 @@ fn aot_tcp_serve_echoes_then_kill_stops_the_server() {
     let quilon = env!("CARGO_BIN_EXE_quilon");
     ensure_runtime_lib(Path::new(quilon).parent().expect("binary has a parent dir"));
 
-    let port = free_port();
-    let source = temp_ql("aot", &program(&format!("127.0.0.1:{port}")));
+    let source = temp_ql("aot", &program("127.0.0.1:0"));
     let binary = std::env::temp_dir().join(format!("quilon_tcp_serve_aot_{}", std::process::id()));
     let build = Command::new(quilon)
         .args(["build", source.to_str().unwrap(), "--linker", linker])
@@ -178,12 +185,13 @@ fn aot_tcp_serve_echoes_then_kill_stops_the_server() {
     );
     let _ = std::fs::remove_file(&source);
 
-    let child = Command::new(&binary)
+    let mut child = Command::new(&binary)
         .stdin(Stdio::null())
-        .stdout(Stdio::null())
+        .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .spawn()
         .expect("spawn the native AOT server binary");
+    let port = read_announced_port(&mut child);
 
     drive_echo_then_quit("127.0.0.1", port);
 
