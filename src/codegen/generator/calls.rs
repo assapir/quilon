@@ -596,14 +596,9 @@ impl<'ctx> CodeGenerator<'ctx> {
     }
 
     /// The `(ptr, len)` bytes `net.@tcpServe`/`http.@serve`/`net.@tcpRequest`'s `address`
-    /// argument crosses the FFI as: a `Text` argument's own fields, or — for the `Address`
-    /// overload — `address.text()`'s result, called here as an ordinary method rather than
-    /// through a genuine Quilon-level forwarding call. A forwarding call would put the
-    /// launch inside THAT wrapper function's own body, whose own block-scope join would
-    /// then wait for it before the wrapper could even return the `Server` handle — a
-    /// block's join is not call-transparent (see `docs/concurrency/README.md`). Calling
-    /// `.text()` inline instead keeps the primitive call the user actually wrote as the
-    /// only thing the deferral pass sees launching.
+    /// argument crosses the FFI as. For the `Address` overload, produced by an inline
+    /// `.text()` call at the primitive's own call site — a forwarding body would instead
+    /// put the launch inside the wrapper's own block join.
     fn address_text_fields(
         &mut self,
         address: &Expression,

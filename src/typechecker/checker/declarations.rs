@@ -86,6 +86,10 @@ impl TypeChecker {
         // return annotation is one nothing calls — reported at its definition.
         self.report_unannotated_overload_member()?;
 
+        // Every call site is known now, so a bare `:: Result` parameter matched
+        // directly can be pinned from what its callers actually pass it.
+        self.pin_result_parameters(program)?;
+
         // Validate the `^` entry point's parameter signature up front, so `quilon check`
         // and `quilon run`/`build` all reject an unsupported form with the SAME clear
         // diagnostic (rather than passing the check and failing later in codegen).
@@ -1202,9 +1206,8 @@ impl TypeChecker {
             // This mirrors `check_match` preferring a concrete arm type over a generic
             // one and introduces no generics (the annotation still stands as the
             // compatibility check). A concrete annotation is left exactly as written.
-            // An overload member refines the same way, on its OWN registered return —
-            // each member stands on its own, so two members sharing a name may refine to
-            // different concrete payloads with no effect on one another.
+            // An overloaded member refines its own registered `ret` instead of `env`,
+            // since `resolve_overload` reads that.
             if annotated_type.contains_generic() {
                 if is_overloaded {
                     self.refine_overload_return_type(
@@ -1221,8 +1224,12 @@ impl TypeChecker {
                 }
             }
         } else if is_overloaded {
-            // No return annotation at all: the omission is reported at the call or at
-            // the definition (see `UnannotatedOverloadMember`), not refined from the body.
+            // An overload member's return type is its annotation, never its inferred body
+            // type. Adopting the body type here would make the member's signature depend
+            // on where a call sits relative to the definition — a call above it would see
+            // one type and a call below it another — which is precisely the order
+            // dependence the annotation requirement removes. The omission is reported
+            // instead, at the call or at the definition.
         } else {
             // Not annotated, not overloaded: `declaration.name` was left undefined for the
             // body-check window (see above), so define it now, for real, with the type its

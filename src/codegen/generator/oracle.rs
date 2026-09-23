@@ -38,18 +38,47 @@ impl<'ctx> CodeGenerator<'ctx> {
     ///     `generate_record` returns the alloca), not the struct by value. A `Named` keeps
     ///     the `type_to_llvm` lowering, which already answers by-pointer for a named record
     ///     and the tagged-union struct for a named sum.
-    ///   - `Generic` — a payload type variable that survived to a read site (e.g. a match
-    ///     whose result type was taken from a never-constructed variant's generic arm)
-    ///     has no concrete LLVM type; it falls back to the canonical numeric payload
-    ///     representation `f64`, matching how generic/unknown payloads are materialized
-    ///     elsewhere (`payload_slot_type`). This keeps such a program compiling (it did
-    ///     before the oracle existed) rather than erroring in `type_to_llvm`.
+    ///   - `Generic` — a payload type variable that survived to a READ site has no
+    ///     concrete LLVM type to materialize a value as, and the checker's own
+    ///     `pin_result_parameters` guarantees this never legitimately happens: every
+    ///     `:: Result` parameter bound-and-READ variant is either pinned from a direct
+    ///     caller's argument or rejected as `UnresolvedResultPayload` before codegen
+    ///     ever runs, so a `Generic` reaching this arm is an internal error in the
+    ///     checker or codegen, not a value the language ever asks to represent. Reported
+    ///     rather than silently defaulted to `f64` (the historical behavior, and the
+    ///     class of bug that gave a `Text`/record/array payload a `Num` representation
+    ///     and corrupted it, or crashed codegen outright) — see
+    ///     [`Self::sized_layout_repr_type`] for the one place that default is still
+    ///     correct: sizing a SLOT (not materializing a value) for a sum variant that may
+    ///     never be constructed at all.
     pub(super) fn value_repr_type(&self, ty: &Type) -> Result<BasicTypeEnum<'ctx>, String> {
         match ty {
             Type::Array(_) => Ok(self.ptr_len_struct_type().into()),
             Type::Record(_) => Ok(self.context.ptr_type(AddressSpace::default()).into()),
-            Type::Generic { .. } => Ok(self.context.f64_type().into()),
+            Type::Generic { name } => Err(format!(
+                "internal error: an unresolved payload type variable (`{name}`) reached \
+                 codegen as a value to materialize — the checker must pin or reject every \
+                 bound-and-read `Result` payload before this point"
+            )),
             _ => self.type_to_llvm(ty),
+        }
+    }
+
+    /// [`Self::value_repr_type`] for a slot whose value may never actually be
+    /// constructed at all — the LAYOUT case rule 3 carves out from the hard error above:
+    /// a sum variant's own payload slot must still be SIZED even when nothing in the
+    /// program ever builds that variant (its `Generic` field is then a genuine "nothing
+    /// to represent" rather than an unresolved read), and a match's own result slot must
+    /// still be sized even when the oracle recorded it as `Generic` because every arm
+    /// that WOULD inform it is provably unreached for this scrutinee (the
+    /// `NotOk`-never-constructed shape `composite_text_test.rs` names). Falls back to
+    /// `f64` for `Generic` — the same numeric default `payload_slot_types` and
+    /// `unpack_result_payload`'s own uninformed case already use, sound here because a
+    /// truly never-constructed slot's bits are never read regardless of width.
+    pub(super) fn sized_layout_repr_type(&self, ty: &Type) -> Result<BasicTypeEnum<'ctx>, String> {
+        match ty {
+            Type::Generic { .. } => Ok(self.context.f64_type().into()),
+            _ => self.value_repr_type(ty),
         }
     }
 
@@ -80,6 +109,22 @@ impl<'ctx> CodeGenerator<'ctx> {
     ) -> Result<BasicTypeEnum<'ctx>, String> {
         match self.oracle.expression_type(expression) {
             Some(t) => self.value_repr_type(t),
+            None => Ok(self.context.f64_type().into()),
+        }
+    }
+
+    /// [`Self::oracle_value_type`] for a MATCH's own result slot specifically — the
+    /// layout case [`Self::sized_layout_repr_type`] carves out: the oracle can record a
+    /// match's overall result as `Generic` when the only arm that would inform it binds
+    /// a sum variant nothing in the program ever constructs for that scrutinee (the
+    /// `NotOk`-never-constructed shape `composite_text_test.rs` names), which needs a
+    /// slot sized regardless of whether that arm's own branch ever actually runs.
+    pub(super) fn oracle_sized_layout_type(
+        &self,
+        expression: &Expression,
+    ) -> Result<BasicTypeEnum<'ctx>, String> {
+        match self.oracle.expression_type(expression) {
+            Some(t) => self.sized_layout_repr_type(t),
             None => Ok(self.context.f64_type().into()),
         }
     }

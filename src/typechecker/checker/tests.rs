@@ -187,6 +187,498 @@ fn test_sum_type_result_match() {
 }
 
 #[test]
+fn test_result_parameter_pinned_from_a_direct_call() {
+    // `classify`'s parameter has no payload type of its own — every bare `:: Result`
+    // annotation is the same unspecialized shape — but its one direct caller passes a
+    // concrete `Ok(Text)` argument, and the checker pins `text` to that real type
+    // rather than leaving it generic (see `sums::pin_result_parameters`).
+    assert!(
+        check_ok(
+            "classify = (result :: Result) -> Text => <\n  \
+               result ? | Ok(text) => text | NotOk(_) => \"none\"\n\
+             >\n\
+             ^ = () -> Num => <\n  \
+               a = classify(Ok(\"hi\"))\n  \
+               a.length\n\
+             >"
+        )
+        .is_ok()
+    );
+}
+
+#[test]
+fn test_result_parameter_disagreeing_callers_is_a_type_mismatch() {
+    // A second caller passing a different concrete type for a position the first
+    // caller already pinned is a `TypeMismatch` at that second call, the same rule a
+    // constructor's own argument already enforces.
+    assert!(matches!(
+        check_ok(
+            "classify = (result :: Result) -> Text => <\n  \
+               result ? | Ok(text) => text | NotOk(_) => \"none\"\n\
+             >\n\
+             ^ = () -> Num => <\n  \
+               a = classify(Ok(\"hi\"))\n  \
+               b = classify(Ok(5))\n  \
+               0\n\
+             >"
+        ),
+        Err(TypeError::TypeMismatch { .. })
+    ));
+}
+
+#[test]
+fn test_result_parameter_of_a_function_unreachable_from_the_entry_point_is_not_checked() {
+    // `classify` is called nowhere reachable from `^` at all — codegen's own
+    // `reachable_functions` prunes it, so it is never emitted, and this pass skips it
+    // entirely rather than reporting a payload nothing will ever need a representation
+    // for.
+    assert!(
+        check_ok(
+            "classify = (result :: Result) -> Text => <\n  \
+               result ? | Ok(text) => text | NotOk(_) => \"none\"\n\
+             >\n\
+             ^ = () -> Num => < 0 >"
+        )
+        .is_ok()
+    );
+}
+
+#[test]
+fn test_result_parameter_bound_and_read_but_never_demonstrated_by_a_caller_is_rejected() {
+    // `judge` is called only with `Ok(...)`, so its `NotOk` position is never
+    // demonstrated by any direct caller — and its own binding is READ (passed on to
+    // `describe`), so nothing says what its real type is. The specific thing the
+    // binding is used FOR doesn't matter under this rule (a constructor argument, a
+    // plain call, a record field, arithmetic, …) — any read of an undemonstrated
+    // payload is rejected uniformly.
+    assert!(matches!(
+        check_ok(
+            "describe = (text :: Text) -> Text => < \"got: \" + text >\n\
+             judge = (result :: Result) -> Text => <\n  \
+               result ?\n    \
+                 | Ok(text)     => text\n    \
+                 | NotOk(text2) => describe(text2)\n\
+             >\n\
+             ^ = () -> Num => < judge(Ok(\"hi\")).length >"
+        ),
+        Err(TypeError::UnresolvedResultPayload { .. })
+    ));
+}
+
+#[test]
+fn test_result_parameter_bound_but_never_read_is_accepted_even_when_never_demonstrated() {
+    // `x` is bound (`Ok(x)`, not `Ok(_)`) but never READ anywhere in its own arm — the
+    // arm's whole body is the literal `0`, which never touches `x` — so no caller
+    // needs to demonstrate `Ok`'s payload type at all. Binding a name is not itself a
+    // read; only a later USE of it is.
+    assert!(
+        check_ok(
+            "classify = (result :: Result) -> Num => <\n  \
+               result ? | Ok(x) => 0 | NotOk(_) => 1\n\
+             >\n\
+             ^ = () -> Num => < classify(NotOk(\"unused\")) >"
+        )
+        .is_ok()
+    );
+}
+
+#[test]
+fn test_result_parameter_shadow_of_an_unrelated_sibling_local_does_not_hide_a_real_match() {
+    // Regression: two SIBLING nested functions each declare their own, unrelated local
+    // named `copy`; one of them happens to copy the outer `result` alias into its OWN
+    // `copy`, the other rebinds ITS OWN `copy` to something else entirely. A shadow
+    // keyed only by BYTE RANGE (not by name) would wrongly treat the second's rebind as
+    // shadowing the first's alias, hiding a genuine match on `result` inside the
+    // SECOND function and letting an unresolved payload through uncaught. `outer` is
+    // called from `^` with `NotOk`, so it is reachable (this pass still runs on it) but
+    // `Ok` is still never demonstrated.
+    assert!(matches!(
+        check_ok(
+            "outer = (result :: Result) -> Text => <\n  \
+               branchA = () -> Num => <\n    \
+                 copy = result\n    \
+                 0\n  \
+               >\n  \
+               branchA()\n  \
+               branchB = () -> Text => <\n    \
+                 copy = Ok(5)\n    \
+                 result ? | Ok(text) => text | NotOk(_) => \"none\"\n  \
+               >\n  \
+               branchB()\n\
+             >\n\
+             ^ = () -> Num => < outer(NotOk(\"x\")).length >"
+        ),
+        Err(TypeError::UnresolvedResultPayload { .. })
+    ));
+}
+
+#[test]
+fn test_result_parameter_of_a_method_is_pinned_from_its_call_site() {
+    // `check_call` resolves a member call to its receiver's type — `Box`'s own
+    // `unwrap` here — so `sums::pin_result_parameters` pins `text` from THAT call's
+    // own `Ok("hi")` argument the same way a plain function's direct caller already
+    // does, rather than rejecting every method read unconditionally.
+    assert!(
+        check_ok(
+            "Box = {\n  \
+               value :: Num,\n  \
+               unwrap = (result :: Result) -> Text => <\n    \
+                 result ? | Ok(text) => text | NotOk(_) => \"none\"\n  \
+               >\n\
+             }\n\
+             ^ = () -> Num => <\n  \
+               b = Box { value = 1 }\n  \
+               b.unwrap(Ok(\"hi\")).length\n\
+             >"
+        )
+        .is_ok()
+    );
+}
+
+#[test]
+fn test_result_parameter_of_a_method_never_passed_ok_is_rejected() {
+    // The SAME method, but every call passes `NotOk` — `Ok`'s payload is never
+    // demonstrated by any caller, so reading `text` (bound from `Ok(text)`) is still
+    // `UnresolvedResultPayload`, exactly like an ungathered plain function parameter.
+    assert!(matches!(
+        check_ok(
+            "Box = {\n  \
+               value :: Num,\n  \
+               unwrap = (result :: Result) -> Text => <\n    \
+                 result ? | Ok(text) => text | NotOk(_) => \"none\"\n  \
+               >\n\
+             }\n\
+             ^ = () -> Num => <\n  \
+               b = Box { value = 1 }\n  \
+               b.unwrap(NotOk(\"lost\")).length\n\
+             >"
+        ),
+        Err(TypeError::UnresolvedResultPayload { .. })
+    ));
+}
+
+#[test]
+fn test_result_parameter_of_a_method_bound_but_unread_is_accepted() {
+    // The SAME method as above, but its `Ok` binding is never read (the arm's whole
+    // body is a literal) — a method's parameter has no pin at all just like the read
+    // case, but with nothing reading the payload, no type is needed either.
+    assert!(
+        check_ok(
+            "Box = {\n  \
+               value :: Num,\n  \
+               unwrap = (result :: Result) -> Num => <\n    \
+                 result ? | Ok(text) => 0 | NotOk(_) => 1\n  \
+               >\n\
+             }\n\
+             ^ = () -> Num => <\n  \
+               b = Box { value = 1 }\n  \
+               b.unwrap(Ok(\"hi\"))\n\
+             >"
+        )
+        .is_ok()
+    );
+}
+
+#[test]
+fn test_result_parameter_of_an_overloaded_function_is_pinned_from_its_call_site() {
+    // `resolve_overload` resolves a bare `describe(Ok("home"))` call to exactly one
+    // member by its argument types — the one-argument, `Result`-taking `describe` —
+    // so `sums::pin_result_parameters` pins `text` from THAT call's own argument the
+    // same way a plain (non-overloaded) function's direct caller already does.
+    assert!(
+        check_ok(
+            "describe = (result :: Result) -> Text => <\n  \
+               result ? | Ok(text) => text | NotOk(_) => \"none\"\n\
+             >\n\
+             describe = (n :: Num) -> Text => < \"num\" >\n\
+             ^ = () -> Num => < describe(Ok(\"hi\")).length >"
+        )
+        .is_ok()
+    );
+}
+
+#[test]
+fn test_result_parameter_of_an_overloaded_function_never_passed_ok_is_rejected() {
+    // A bare call to an overloaded name doesn't inform every member equally — this
+    // one-argument `handle` is only ever reached FORWARDED THROUGH the two-argument
+    // member (`handle(result)`, an identifier, not a constructor call), so its own
+    // `Ok` is never directly demonstrated — a READ of its bound payload is still
+    // `UnresolvedResultPayload`.
+    assert!(matches!(
+        check_ok(
+            "handle = (result :: Result) -> Text => <\n  \
+               result ? | Ok(text) => text | NotOk(_) => \"none\"\n\
+             >\n\
+             handle = (result :: Result, prefix :: Text) -> Text => < prefix + handle(result) >\n\
+             ^ = () -> Num => < handle(Ok(\"hi\"), \">\").length >"
+        ),
+        Err(TypeError::UnresolvedResultPayload { .. })
+    ));
+}
+
+#[test]
+fn test_result_parameter_only_self_recursive_with_a_read_binding_is_rejected() {
+    // `loopy` is called from `^` (so it is reachable, and this pass runs on it), but
+    // only with `NotOk` — its OWN self-recursive call forwards `result` rather than
+    // passing a concrete `Ok`/`NotOk` argument, so `Ok`'s payload is never
+    // demonstrated by ANY caller, direct or indirect. Since `t` IS read (it's the
+    // whole `Ok` arm's body), this is rejected: self-recursion is not a caller that
+    // can teach this pass anything.
+    assert!(matches!(
+        check_ok(
+            "loopy = (result :: Result) -> Text => <\n  \
+               result ? | Ok(t) => t | NotOk(_) => loopy(result)\n\
+             >\n\
+             ^ = () -> Num => < loopy(NotOk(\"x\")).length >"
+        ),
+        Err(TypeError::UnresolvedResultPayload { .. })
+    ));
+}
+
+#[test]
+fn test_result_parameter_only_matched_with_a_wildcard_is_accepted() {
+    // Neither variant is ever BOUND (`Ok(_)`/`NotOk(_)`), so there is no payload type to
+    // resolve at all — a function dispatched on the tag alone, every call passing a
+    // different concrete payload, is untouched by this rule.
+    assert!(
+        check_ok(
+            "okTag = (r :: Result) -> Num => < r ? | Ok(_) => 1 | NotOk(_) => 0 >\n\
+             ^ = () -> Num => <\n  \
+               a = okTag(Ok(42))\n  \
+               b = okTag(Ok(\"hi\"))\n  \
+               c = okTag(NotOk(7))\n  \
+               a + b + c\n\
+             >"
+        )
+        .is_ok()
+    );
+}
+
+#[test]
+fn test_result_parameter_shadowed_by_a_local_reassignment_is_not_falsely_rejected() {
+    // `helper`'s own local `result := Ok(x)` reuses `outer`'s parameter name, but is a
+    // fresh, already-concrete (`Num`) binding — the checker's own first-pass record of
+    // its scrutinee's real type (not just its name) keeps this from being mistaken for
+    // a read of `outer`'s own (unused, here) parameter, which would otherwise falsely
+    // reject a program that never actually needs this rule at all.
+    assert!(
+        check_ok(
+            "outer = (result :: Result) -> Num => <\n  \
+               helper = (x :: Num) -> Num => <\n    \
+                 result = Ok(x)\n    \
+                 result ? | Ok(n) => n | NotOk(_) => 0\n  \
+               >\n  \
+               helper(5)\n\
+             >\n\
+             ^ = () -> Num => < outer(Ok(\"hi\")) >"
+        )
+        .is_ok()
+    );
+}
+
+#[test]
+fn test_result_parameter_of_a_bound_lambda_is_pinned_too() {
+    // A `:=`-bound lambda's bare `:: Result` parameter is pinned from its direct
+    // caller exactly like a `FunctionDeclaration`'s — this pass visits every
+    // function-shaped declaration in the program uniformly, including one bound this
+    // way, and it is never overloaded (only a `FunctionDeclaration`'s name joins
+    // `overloaded_names`).
+    assert!(
+        check_ok(
+            "judge := (act :: Result) => < act ? | Ok(text) => text | NotOk(_) => \"n\" >\n\
+             ^ = () -> Num => < judge(Ok(\"hi\")).length >"
+        )
+        .is_ok()
+    );
+}
+
+#[test]
+fn test_result_parameter_never_matched_is_not_falsely_rejected_by_a_nested_shadow() {
+    // The method's own `result` parameter is never itself matched — only a NESTED
+    // helper's unrelated local `result := Ok(x)`, reusing the name, is. A false
+    // `UnresolvedResultPayload` here would mean the method's parameter was mistaken for
+    // that unrelated, already-concrete local.
+    assert!(
+        check_ok(
+            "Box = {\n  \
+               value :: Num,\n  \
+               unwrap = (result :: Result) -> Num => <\n    \
+                 helper = (x :: Num) -> Num => <\n      \
+                   result = Ok(x)\n      \
+                   result ? | Ok(n) => n | NotOk(_) => 0\n    \
+                 >\n    \
+                 helper(it.value)\n  \
+               >\n\
+             }\n\
+             ^ = () -> Num => <\n  \
+               b = Box { value = 5 }\n  \
+               b.unwrap(Ok(\"unused\"))\n\
+             >"
+        )
+        .is_ok()
+    );
+}
+
+#[test]
+fn test_result_parameter_of_a_nested_function_is_pinned_too() {
+    // `classify` is declared INSIDE `outer`'s body, not at the top level — this pass
+    // still visits it, at whatever depth, and pins its own bound `:: Result` parameter
+    // from its direct caller exactly like a top-level function's.
+    assert!(
+        check_ok(
+            "outer = () -> Num => <\n  \
+               classify = (result :: Result) -> Text => <\n    \
+                 result ? | Ok(text) => text | NotOk(_) => \"none\"\n  \
+               >\n  \
+               classify(Ok(\"hello world\")).length\n\
+             >\n\
+             ^ = () -> Num => < outer() >"
+        )
+        .is_ok()
+    );
+}
+
+#[test]
+fn test_result_parameter_via_a_whole_signature_annotation_is_pinned() {
+    // `classify`'s parameter has no annotation of its OWN — its type comes from the
+    // binding's whole-signature `:: (Result) -> Text` form instead
+    // (`FunctionDeclaration::declared_parameters`). This pass must resolve a
+    // parameter's type the same way the checker's own `resolve_parameter_types` does,
+    // not just read `type_annotation` directly, or this form's bound payload never
+    // gets a chance to pin.
+    assert!(
+        check_ok(
+            "classify :: (Result) -> Text = (result) => <\n  \
+               result ? | Ok(text) => text | NotOk(_) => \"none\"\n\
+             >\n\
+             ^ = () -> Num => < classify(Ok(\"hi\")).length >"
+        )
+        .is_ok()
+    );
+}
+
+#[test]
+fn test_result_parameter_alias_chain_of_several_hops_is_still_pinned() {
+    // `a`, `b`, and `c` are each a direct copy of the previous, chasing back to
+    // `result` — the alias set grows within one walk, top to bottom, so a chain isn't
+    // just a single rename away from escaping detection, and the match on `c` still
+    // pins `result`'s own payload from `classify`'s one direct caller.
+    assert!(
+        check_ok(
+            "classify = (result :: Result) -> Text => <\n  \
+               a = result\n  \
+               b = a\n  \
+               c = b\n  \
+               c ? | Ok(text) => text | NotOk(_) => \"none\"\n\
+             >\n\
+             ^ = () -> Num => < classify(Ok(\"hi\")).length >"
+        )
+        .is_ok()
+    );
+}
+
+#[test]
+fn test_result_parameter_of_a_nested_whole_signature_declaration_is_pinned() {
+    // `classify`'s whole-signature `:: (Result) -> Text` form works the same way
+    // whether it's declared at the top level or, as here, inside another function's
+    // body — `nested_function_candidates` must carry a nested `FunctionDeclaration`'s
+    // `declared_parameters()` through exactly like a top-level one's.
+    assert!(
+        check_ok(
+            "outer = () -> Num => <\n  \
+               classify :: (Result) -> Text = (result) => <\n    \
+                 result ? | Ok(text) => text | NotOk(_) => \"none\"\n  \
+               >\n  \
+               classify(Ok(\"hi\")).length\n\
+             >\n\
+             ^ = () -> Num => < outer() >"
+        )
+        .is_ok()
+    );
+}
+
+#[test]
+fn test_result_parameter_renamed_before_matching_is_still_pinned() {
+    // `renamed` is a direct copy of `result` (`renamed = result`, no transformation) —
+    // matching it must still be attributed back to `result`'s own parameter, pinning
+    // its payload from `classify`'s direct caller, not missed because the match reads
+    // a different identifier.
+    assert!(
+        check_ok(
+            "classify = (result :: Result) -> Text => <\n  \
+               renamed = result\n  \
+               renamed ? | Ok(text) => text | NotOk(_) => \"none\"\n\
+             >\n\
+             ^ = () -> Num => < classify(Ok(\"hi\")).length >"
+        )
+        .is_ok()
+    );
+}
+
+#[test]
+fn test_result_parameter_of_a_never_referenced_nested_bound_lambda_is_named_correctly() {
+    // `helper` is a `:=`-bound lambda declared INSIDE `outer`'s body, called nowhere at
+    // all — the diagnostic must still name it `helper`, not the generic "a lambda" an
+    // anonymous callback would get.
+    assert!(matches!(
+        check_ok(
+            "outer = () -> Num => <\n  \
+               helper := (result :: Result) => < result ? | Ok(x) => x | NotOk(_) => 0 >\n  \
+               0\n\
+             >\n\
+             ^ = () -> Num => < outer() >"
+        ),
+        Err(TypeError::UnresolvedResultPayload { function, .. })
+            if function == "helper"
+    ));
+}
+
+#[test]
+fn test_result_parameter_of_a_locally_declared_types_method_is_pinned_from_its_call_site() {
+    // `Box` is declared INSIDE `outer`'s body, not at the program's top level —
+    // `unwrap`'s bare `:: Result` parameter is still pinned from its own call site,
+    // exactly like a top-level type's method's is.
+    assert!(
+        check_ok(
+            "outer = () -> Num => <\n  \
+               Box = {\n    \
+                 value :: Num,\n    \
+                 unwrap = (result :: Result) -> Text => <\n      \
+                   result ? | Ok(text) => text | NotOk(_) => \"none\"\n    \
+                 >\n  \
+               }\n  \
+               b = Box { value = 1 }\n  \
+               b.unwrap(Ok(\"hi\")).length\n\
+             >\n\
+             ^ = () -> Num => < outer() >"
+        )
+        .is_ok()
+    );
+}
+
+#[test]
+fn test_result_parameter_of_a_locally_declared_types_method_never_passed_ok_is_rejected() {
+    // The SAME locally-declared method, but every call passes `NotOk` — `Ok`'s
+    // payload is never demonstrated, so reading `text` is still `UnresolvedResultPayload`.
+    assert!(matches!(
+        check_ok(
+            "outer = () -> Num => <\n  \
+               Box = {\n    \
+                 value :: Num,\n    \
+                 unwrap = (result :: Result) -> Text => <\n      \
+                   result ? | Ok(text) => text | NotOk(_) => \"none\"\n    \
+                 >\n  \
+               }\n  \
+               b = Box { value = 1 }\n  \
+               b.unwrap(NotOk(\"lost\")).length\n\
+             >\n\
+             ^ = () -> Num => < outer() >"
+        ),
+        Err(TypeError::UnresolvedResultPayload { .. })
+    ));
+}
+
+#[test]
 fn test_constructor_pattern_on_a_non_sum_scrutinee_is_rejected() {
     // A constructor pattern dispatches on a variant tag, which a `Num` has none of.
     assert!(matches!(

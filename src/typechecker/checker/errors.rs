@@ -63,6 +63,7 @@ impl TypeError {
             TypeError::AtomicBindingNotMutable { .. } => Code::AtomicBindingNotMutable,
             TypeError::AtomicBindingUsedBare { .. } => Code::AtomicBindingUsedBare,
             TypeError::SharedAcrossFibers { .. } => Code::SharedAcrossFibers,
+            TypeError::UnresolvedResultPayload { .. } => Code::UnresolvedResultPayload,
         }
     }
 
@@ -206,6 +207,11 @@ impl TypeError {
             TypeError::SharedAcrossFibers { name, touch, .. } => diagnostic
                 .label(touch, Some(format!("`{name}` touched here")))
                 .help(format!("declare it `@{name} := …`")),
+            TypeError::UnresolvedResultPayload { variant, .. } => diagnostic.help(format!(
+                "pass a caller argument shaped `{variant}(...)` so this parameter's payload \
+                 has a real type, or bind it with `_` (or simply leave it unread) since \
+                 nothing here needs its value"
+            )),
             _ => diagnostic,
         }
     }
@@ -262,7 +268,8 @@ impl TypeError {
             | TypeError::InvalidPayloadType { span, .. }
             | TypeError::AtomicBindingNotMutable { span, .. }
             | TypeError::AtomicBindingUsedBare { span, .. }
-            | TypeError::SharedAcrossFibers { span, .. } => span,
+            | TypeError::SharedAcrossFibers { span, .. }
+            | TypeError::UnresolvedResultPayload { span, .. } => span,
         }
     }
 }
@@ -765,6 +772,19 @@ impl std::fmt::Display for TypeError {
                     "`{name}` is a `:=` binding, and the handler passed to `{primitive}` \
                      runs on its own fiber and reaches it; a `:=` value reachable from \
                      more than one fiber must be declared atomic"
+                )
+            }
+            TypeError::UnresolvedResultPayload {
+                function,
+                parameter,
+                variant,
+                ..
+            } => {
+                write!(
+                    f,
+                    "`{parameter}`'s `{variant}` payload is unresolved: this binding reads it, \
+                     but no caller of `{function}` ever passes a `{parameter}` argument shaped \
+                     `{variant}(...)`, so nothing says what its real type is"
                 )
             }
         }

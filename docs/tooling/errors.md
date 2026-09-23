@@ -165,6 +165,7 @@ its name relative to the first block (`` ```quilon title="lib/util.qn" ``).
 | QN348 | atomic binding used with `@` after its declaration |
 | QN349 | atomic binding reassignment waits on a deferred value |
 | QN350 | `:=` value shared across fibers |
+| QN351 | unresolved `Result` payload |
 | QN400 | code generation failed |
 | QN401 | native build failed |
 | QN500 | assertion failed |
@@ -1214,6 +1215,39 @@ Bind it atomically:
   0
 >
 ```
+
+### QN351 — unresolved `Result` payload
+
+A `Result` parameter's payload types are the types its own call sites pass — a method
+call (pinned from its receiver's own call) and a call to one member of an overload set
+(pinned from the argument types that resolved it) count exactly like a plain function's
+direct call. A variant no call site passes has no payload type, and a match arm that
+reads that binding is this error.
+
+```quilon ignore
+describe = (result :: Result) -> Text => <
+  result ? | Ok(text) => text | NotOk(_) => "none"
+>
+~ Every caller passes NotOk, so Ok has no payload type for `text` to read.
+^ = () -> $ => < assert(describe(NotOk("lost")), equals("none")) >
+```
+
+A caller that passes `Ok` gives `text` its type — a method call works the same way:
+
+```quilon
+Parcel = {
+  label :: Text,
+  describe = (result :: Result) -> Text => <
+    result ? | Ok(text) => text | NotOk(_) => "none"
+  >
+}
+^ = () -> $ => < assert(Parcel { label = "x" }.describe(Ok("home")), equals("home")) >
+```
+
+The check covers the functions reachable from `^`, the same set codegen emits (a helper
+only called from inside a `test.describe`/`test.it` block, which `quilon run`/`check`/
+`build` erase, is outside that set under those commands); under `quilon test` the
+synthesized `^` reaches every test's helpers.
 
 ## Code generation and build
 

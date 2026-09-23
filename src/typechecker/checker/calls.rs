@@ -445,6 +445,12 @@ impl TypeChecker {
                         span,
                     )?;
 
+                    // Record this call's argument spans, for `sums::pin_result_parameters`.
+                    self.method_call_args
+                        .entry((type_name.clone(), name.clone()))
+                        .or_default()
+                        .push(call_args.iter().map(|arg| arg.span().clone()).collect());
+
                     return Ok(method_return_type);
                 }
             }

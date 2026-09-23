@@ -208,7 +208,7 @@ impl TypeChecker {
     /// coercion). Returns the matched overload's return type. Errors on no match or
     /// (with exact matching, a duplicate-signature) ambiguity, listing the candidates.
     pub(super) fn resolve_overload(
-        &self,
+        &mut self,
         name: &str,
         arg_types: &[Type],
         arg_spans: &[Span],
@@ -231,30 +231,44 @@ impl TypeChecker {
                 .unwrap_or_default()
         };
 
-        match matches.as_slice() {
-            [] => Err(TypeError::NoMatchingOverload {
-                name: name.to_string(),
-                arg_types: arg_types.to_vec(),
-                arg_spans: arg_spans.to_vec(),
-                candidates: candidates(),
-                span: span.clone(),
-            }),
-            // Re-resolve the result type: an overloaded member's return annotation may
-            // have been registered (pre-pass) before its named type existed, so a bare
-            // `Named{T, fields:[]}` is filled in to its full definition here. A member
-            // with no return annotation has no result type to give this call.
-            [only] => match &only.ret {
-                Some(ret) => Ok(self.resolve_type(ret)),
-                None => Err(TypeError::UnannotatedOverloadCall {
+        // Owned, to drop the borrow of `self.overloads` before the `overload_call_args`
+        // write below.
+        let (member_parameters, member_ret) = match matches.as_slice() {
+            [] => {
+                return Err(TypeError::NoMatchingOverload {
                     name: name.to_string(),
-                    parameters: only.parameters.clone(),
+                    arg_types: arg_types.to_vec(),
+                    arg_spans: arg_spans.to_vec(),
+                    candidates: candidates(),
                     span: span.clone(),
-                }),
-            },
-            _ => Err(TypeError::AmbiguousOverload {
+                });
+            }
+            [only] => (only.parameters.clone(), only.ret.clone()),
+            _ => {
+                return Err(TypeError::AmbiguousOverload {
+                    name: name.to_string(),
+                    arg_types: arg_types.to_vec(),
+                    candidates: candidates(),
+                    span: span.clone(),
+                });
+            }
+        };
+
+        // Record which member this call resolved to, for `sums::pin_result_parameters`.
+        self.overload_call_args
+            .entry(name.to_string())
+            .or_default()
+            .push((member_parameters.clone(), arg_spans.to_vec()));
+
+        // Re-resolve the result type: an overloaded member's return annotation may
+        // have been registered (pre-pass) before its named type existed, so a bare
+        // `Named{T, fields:[]}` is filled in to its full definition here. A member
+        // with no return annotation has no result type to give this call.
+        match member_ret {
+            Some(ret) => Ok(self.resolve_type(&ret)),
+            None => Err(TypeError::UnannotatedOverloadCall {
                 name: name.to_string(),
-                arg_types: arg_types.to_vec(),
-                candidates: candidates(),
+                parameters: member_parameters,
                 span: span.clone(),
             }),
         }
@@ -367,6 +381,37 @@ impl TypeChecker {
         Ok(())
     }
 
+    /// The member of overload set `name` whose parameters exactly match
+    /// `parameter_types`, mutably.
+    fn overload_member_mut(
+        &mut self,
+        name: &str,
+        parameter_types: &[Type],
+    ) -> Option<&mut Overload> {
+        self.overloads.get_mut(name)?.iter_mut().find(|overload| {
+            overload.parameters.len() == parameter_types.len()
+                && overload
+                    .parameters
+                    .iter()
+                    .zip(parameter_types)
+                    .all(|(a, b)| types_match(a, b))
+        })
+    }
+
+    /// Refine an overload member's generic return annotation (in practice only
+    /// `-> Result`) to `refined`, the type its body just proved — mirrors
+    /// `check_function_declaration`'s `env` refinement, but on the member's `ret`.
+    pub(super) fn refine_overload_return_type(
+        &mut self,
+        name: &str,
+        parameter_types: &[Type],
+        refined: Type,
+    ) {
+        if let Some(member) = self.overload_member_mut(name, parameter_types) {
+            member.ret = Some(refined);
+        }
+    }
+
     /// Record a user overload member's classified result aliasing on the member whose
     /// parameter types these are, once its body has been checked.
     pub(super) fn set_overload_result_aliasing(
@@ -375,41 +420,8 @@ impl TypeChecker {
         parameter_types: &[Type],
         result_aliasing: ResultAliasing,
     ) {
-        if let Some(set) = self.overloads.get_mut(name)
-            && let Some(member) = set.iter_mut().find(|overload| {
-                overload.parameters.len() == parameter_types.len()
-                    && overload
-                        .parameters
-                        .iter()
-                        .zip(parameter_types)
-                        .all(|(a, b)| types_match(a, b))
-            })
-        {
+        if let Some(member) = self.overload_member_mut(name, parameter_types) {
             member.result_aliasing = Some(result_aliasing);
-        }
-    }
-
-    /// Refine one overload member's registered return type to `refined`, once its body has
-    /// been checked — the overloaded counterpart of `check_function_declaration`'s own
-    /// generic-to-concrete refinement for a single declaration, keyed by this member's own
-    /// parameter types so it never touches any other member of the same set.
-    pub(super) fn refine_overload_return_type(
-        &mut self,
-        name: &str,
-        parameter_types: &[Type],
-        refined: Type,
-    ) {
-        if let Some(set) = self.overloads.get_mut(name)
-            && let Some(member) = set.iter_mut().find(|overload| {
-                overload.parameters.len() == parameter_types.len()
-                    && overload
-                        .parameters
-                        .iter()
-                        .zip(parameter_types)
-                        .all(|(a, b)| types_match(a, b))
-            })
-        {
-            member.ret = Some(refined);
         }
     }
 
