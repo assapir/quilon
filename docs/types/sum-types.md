@@ -103,7 +103,7 @@ variant no caller passes has no payload type, and a match arm that reads that bi
 is [QN351](../tooling/errors.md#qn351--unresolved-result-payload); binding it unread, or
 as `_`, is allowed. A method's or an overloaded function's `Result` parameter has no
 callers to learn from, so every read of its payload is QN351. See
-`examples/result_helper.qn`.
+`examples/result_payload.qn`.
 
 Every `Result` shares **one uniform layout** regardless of its payload, so a `Result`
 carrying *any* payload — `Num`, `Text`, `[]Text`, a composite — passes through a generic

@@ -19,6 +19,16 @@ lookup = (key :: Text) -> Result => <
 describe = (s :: Text) -> Num => < s.size >
 describe = (n :: Num)  -> Num => < n >
 
+~ A `Result` parameter takes its payload types from its callers: both calls below
+~ pass a `Text`, so `judge` reads `text` as a `Text`.
+Verdict = Cheer(Text) / Boo(Text)
+
+judge = (result :: Result) -> Verdict => <
+  result ?
+    | Ok(text)    => Cheer(text)
+    | NotOk(text) => Boo(text)
+>
+
 ^ = () -> $ => <
   ~ Ok(Text): the match binds `p : Text` and yields it — a usable `Text` value.
   path = lookup("home") ?
@@ -45,4 +55,14 @@ describe = (n :: Num)  -> Num => < n >
   unit = Ok($) ? | Ok(_) => 1     | NotOk(_) => 0  ~ 1
   assert(num, equals(10))
   assert(unit, equals(1))
+
+  cheer = judge(Ok("a seal on a skateboard")) ?
+    | Cheer(text) => "the crowd cheers: " + text
+    | Boo(text)   => "the crowd boos: " + text
+  assert(cheer, equals("the crowd cheers: a seal on a skateboard"))
+
+  boo = judge(NotOk("stage fright")) ?
+    | Cheer(text) => "the crowd cheers: " + text
+    | Boo(text)   => "the crowd boos: " + text
+  assert(boo, equals("the crowd boos: stage fright"))
 >
