@@ -21,21 +21,23 @@
 
 use crate::blocking::run_blocking;
 use crate::scheduler::{
-    deregister_readiness, park_on_readiness, register_readiness, reregister_readiness,
+    deregister_readiness, park_on_readiness, park_on_readiness_or_deadline, register_readiness,
+    reregister_readiness,
 };
 use mio::event::Source;
 use mio::{Interest, Token};
 use std::io::{self, Read, Write};
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::os::unix::io::{AsRawFd, RawFd};
+use std::time::Instant;
 
 pub mod client;
 pub mod server;
 
 pub use client::__tcp_request_launch;
 pub use server::{
-    __connection_close, __connection_read_launch, __connection_write, __server_kill,
-    __tcp_serve_launch,
+    __connection_close, __connection_read_launch, __connection_read_with_timeout_launch,
+    __connection_write, __server_kill, __tcp_serve_launch,
 };
 
 fn would_block(e: &io::Error) -> bool {
@@ -107,6 +109,35 @@ impl TcpStream {
         io_loop(&mut self.inner, self.token, Interest::READABLE, |s| {
             s.read(&mut *buf)
         })
+    }
+
+    /// Read once, parking until readable OR until `deadline` passes, whichever comes
+    /// first — `Connection.@read(seconds)`'s own read. `Ok(0)` both at EOF and once the
+    /// deadline passes with nothing readable: a caller with no channel to distinguish
+    /// "closed" from "timed out" (`Text` carries neither) treats them alike, the same way
+    /// a plain [`Self::read`]'s `Ok(0)` already means EOF. Checks the deadline both before
+    /// parking (a call already past it never parks at all) and after waking (the wake may
+    /// be the deadline itself, or a spurious readiness ping before it) rather than trusting
+    /// which one fired — resuming a fiber carries no reason back, so re-checking the clock
+    /// is simpler than a scheduler API that would report one.
+    pub fn read_with_deadline(&mut self, buf: &mut [u8], deadline: Instant) -> io::Result<usize> {
+        loop {
+            match self.inner.read(buf) {
+                Ok(count) => return Ok(count),
+                Err(ref e) if e.kind() == io::ErrorKind::Interrupted => continue,
+                Err(ref e) if would_block(e) => {
+                    if Instant::now() >= deadline {
+                        return Ok(0);
+                    }
+                    reregister_readiness(&mut self.inner, self.token, Interest::READABLE)?;
+                    park_on_readiness_or_deadline(self.token, deadline);
+                    if Instant::now() >= deadline {
+                        return Ok(0);
+                    }
+                }
+                Err(e) => return Err(e),
+            }
+        }
     }
 
     /// Write once, parking until writable. May write fewer bytes than offered; use
