@@ -558,8 +558,11 @@ fn importing_core_http_contributes_exactly_this_surface() {
         "core.test.runCase",
         "core.test.it",
         "core.test.reportSummary",
-        // core.net, and the client itself.
+        // core.net, and the client itself. `@tcpRequest`/`@tcpServe` each have a Text
+        // overload and an Address overload: one item each.
         "core.net.@tcpRequest",
+        "core.net.@tcpRequest",
+        "core.net.@tcpServe",
         "core.net.@tcpServe",
         "core.net.Connection",
         "core.net.Server",
@@ -572,7 +575,10 @@ fn importing_core_http_contributes_exactly_this_surface() {
         "core.http.Headers",
         "core.http.Params",
         "core.http.RequestOptions",
-        // `@serve`'s two-argument and three-argument overloads: one item each.
+        // `@serve`'s two-argument and three-argument overloads, each with a Text and an
+        // Address form: one item apiece.
+        "core.http.@serve",
+        "core.http.@serve",
         "core.http.@serve",
         "core.http.@serve",
         // The server's own per-server settings, `@serve`'s three-argument overload takes.
