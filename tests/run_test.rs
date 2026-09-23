@@ -2,6 +2,7 @@
 // codegen -> JIT) and assert the program's real exit code. This is the backbone
 // that makes documented example behavior ("factorial(5) -> 120") actually verified.
 
+use quilon::diagnostic::codes::Code;
 use quilon::jit;
 use quilon::lexer::Lexer;
 use quilon::parser;
@@ -12,8 +13,8 @@ use std::process::Command;
 mod common;
 use common::{
     JIT_LOCK, assert_exit, assert_exit_linked, assert_exit_linked_from, assert_type_error,
-    build_and_run_native, build_and_run_native_with_stderr, ensure_runtime_lib, run_program,
-    tool_available,
+    assert_type_error_code, build_and_run_native, build_and_run_native_with_stderr,
+    ensure_runtime_lib, run_program, tool_available,
 };
 
 #[test]
@@ -1291,7 +1292,10 @@ fn run_match_arm_binding_shadowed_by_nested_ok_arm_leaves_outer_binding_intact()
     // each stash either a `walnut` (`Ok`) or an excuse (`NotOk`); the second squirrel's
     // stash is checked from inside the first's `Ok` arm, reusing `walnut` — and the first
     // squirrel's own `walnut` (10) must still read as 10 once the inner match (20) is done:
-    // 20 + 10 = 30.
+    // 20 + 10 = 30. Every bound-and-read position is demonstrated by SOME direct call: a
+    // throwaway first call passes `first`'s `NotOk` and `second`'s `Ok` (both `Num`, the
+    // one payload type this program ever reads either position as), before the real call
+    // whose own result is the exit code.
     let src = r#"
 tallySquirrels = (first :: Result, second :: Result) -> Num => <
   first ?
@@ -1301,7 +1305,10 @@ tallySquirrels = (first :: Result, second :: Result) -> Num => <
     | NotOk(sulk) => sulk
 >
 
-^ = () -> Num => < tallySquirrels(Ok(10), NotOk(20)) >
+^ = () -> Num => <
+  tallySquirrels(NotOk(0), Ok(0))
+  tallySquirrels(Ok(10), NotOk(20))
+>
 "#;
     assert_exit(src, 30);
 }
@@ -1312,7 +1319,9 @@ fn run_match_arm_binding_shadowed_by_nested_notok_arm_leaves_outer_binding_intac
     // `NotOk` one. Two grumpy cats each either purr (`Ok`) or hiss a `complaint`
     // (`NotOk`); the second cat's mood is checked from inside the first's `NotOk` arm,
     // reusing `complaint` — and the first cat's own `complaint` (7) must still read as 7
-    // once the inner match (3) is done: 3 + 7 = 10.
+    // once the inner match (3) is done: 3 + 7 = 10. Every bound-and-read position is
+    // demonstrated by SOME direct call: a throwaway first call passes `first`'s `Ok` and
+    // `second`'s `Ok`, before the real call whose own result is the exit code.
     let src = r#"
 tallyCats = (first :: Result, second :: Result) -> Num => <
   first ?
@@ -1322,7 +1331,10 @@ tallyCats = (first :: Result, second :: Result) -> Num => <
         | NotOk(complaint) => complaint) + complaint
 >
 
-^ = () -> Num => < tallyCats(NotOk(7), NotOk(3)) >
+^ = () -> Num => <
+  tallyCats(Ok(0), Ok(0))
+  tallyCats(NotOk(7), NotOk(3))
+>
 "#;
     assert_exit(src, 10);
 }
@@ -1513,6 +1525,357 @@ fn aot_array_of_results_unifies_variant_payloads() {
     "#;
     let (code, _) = build_and_run_native("array_result_unification", src);
     assert_eq!(code, 3, "a native build must exit 3 on the same program");
+}
+
+/// A bare `:: Result` parameter's payload is pinned from what its one direct caller
+/// passes: `classify` matches `result` directly and binds `Ok(text)`, and the checker
+/// recovers `Text` from `classify(Ok("hi"))` rather than leaving it generic.
+/// "hi".length = 2.
+#[test]
+fn run_result_parameter_payload_pinned_from_a_call_site() {
+    let src = r#"
+        Progress = Done(Text) / Broken(Text)
+
+        classify = (result :: Result) -> Progress => <
+          result ?
+            | Ok(text) => Done(text)
+            | NotOk(_) => Broken("stop")
+        >
+        ^ = () -> Num => <
+          classify(Ok("hi")) ?
+            | Done(text)   => text.length
+            | Broken(text) => text.length
+        >
+    "#;
+    assert_exit(src, 2);
+}
+
+/// AOT: the same pinning holds through a native build, not just the JIT.
+#[test]
+fn aot_result_parameter_payload_pinned_from_a_call_site() {
+    if !tool_available("clang") {
+        eprintln!("skipping the native Result-parameter-pinning check: clang is not on PATH");
+        return;
+    }
+    let src = r#"
+        Progress = Done(Text) / Broken(Text)
+
+        classify = (result :: Result) -> Progress => <
+          result ?
+            | Ok(text) => Done(text)
+            | NotOk(_) => Broken("stop")
+        >
+        ^ = () -> Num => <
+          classify(Ok("hi")) ?
+            | Done(text)   => text.length
+            | Broken(text) => text.length
+        >
+    "#;
+    let (code, _) = build_and_run_native("result_parameter_payload_pinning", src);
+    assert_eq!(code, 2, "a native build must exit 2 on the same program");
+}
+
+/// A nested function reusing its enclosing function's `:: Result` parameter NAME for its
+/// own, unrelated `:: Result` parameter must not have the outer's pinned payload type
+/// applied to it (or vice versa): `outer`'s own `result` is pinned `Text` from its
+/// caller, `inner`'s own (differently-scoped) `result` is pinned `Num` from ITS caller,
+/// and each must keep its own binding's real type. "hi".length = 2.
+#[test]
+fn run_nested_function_reusing_a_result_parameter_name_is_not_cross_contaminated() {
+    let src = r#"
+        outer = (result :: Result) -> Text => <
+          inner = (result :: Result) -> Num => < result ? | Ok(n) => n | NotOk(_) => 0 >
+          inner(Ok(5))
+          result ? | Ok(text) => text | NotOk(_) => "none"
+        >
+        ^ = () -> Num => < outer(Ok("hi")).length >
+    "#;
+    assert_exit(src, 2);
+}
+
+/// A function nothing reachable from `^` calls is never emitted (codegen's own
+/// `ast::reachability::reachable_functions`), so this pass skips it entirely rather
+/// than reporting a payload nothing will ever need a representation for.
+#[test]
+fn run_result_parameter_of_a_function_unreachable_from_the_entry_point_is_not_checked() {
+    let src = r#"
+        classify = (result :: Result) -> Text => <
+          result ? | Ok(text) => text | NotOk(_) => "none"
+        >
+        ^ = () -> Num => < 0 >
+    "#;
+    assert_exit(src, 0);
+}
+
+/// A bare `:: Result` parameter called with only ONE variant (here, only `Ok`) still
+/// binds AND READS the OTHER variant's payload (passed on to `describe`): no caller
+/// ever demonstrates `NotOk`'s payload type, so nothing says what the read value's real
+/// type is — reported at check time rather than left for codegen to default to `Num`.
+#[test]
+fn reject_result_parameter_bound_and_read_but_never_demonstrated_by_a_caller() {
+    let src = r#"
+        describe = (text :: Text) -> Text => < "got: " + text >
+
+        judge = (result :: Result) -> Text => <
+          result ?
+            | Ok(text)     => text
+            | NotOk(text2) => describe(text2)
+        >
+        ^ = () -> Num => < judge(Ok("hi")).length >
+    "#;
+    assert_type_error_code(src, Code::UnresolvedResultPayload);
+}
+
+/// The same undemonstrated `NotOk` position, but its binding is never READ (the arm's
+/// whole body is a literal) — binding a payload is not itself a use of it, so no caller
+/// needs to demonstrate its type at all, and this compiles and runs normally.
+/// "hi".length = 2.
+#[test]
+fn run_result_parameter_bound_but_unread_needs_no_caller_to_demonstrate_it() {
+    let src = r#"
+        judge = (result :: Result) -> Text => <
+          result ?
+            | Ok(text)     => text
+            | NotOk(text2) => "unused"
+        >
+        ^ = () -> Num => < judge(Ok("hi")).length >
+    "#;
+    assert_exit(src, 2);
+}
+
+/// A `Result`'s payload also crosses an OVERLOADED callee: the one-argument `make`'s
+/// return type is refined from its own body (`Ok(Thing)`), so a call to it through the
+/// two-argument overload sees the real payload instead of the opaque annotation.
+/// "a" + "b" = "ab", length 2.
+#[test]
+fn run_result_payload_pinned_through_an_overloaded_callee() {
+    let src = r#"
+        Thing = { name :: Text }
+
+        make = (name :: Text) -> Result => < Ok(Thing { name = name }) >
+        make = (name :: Text, suffix :: Text) -> Result => <
+          make(name) ?
+            | Ok(thing)    => Ok(Thing { name = thing.name + suffix })
+            | NotOk(error) => NotOk(error)
+        >
+        ^ = () -> Num => <
+          make("a", "b") ?
+            | Ok(thing) => thing.name.length
+            | NotOk(_)  => 0
+        >
+    "#;
+    assert_exit(src, 2);
+}
+
+/// AOT: the overloaded-callee refinement holds through a native build too.
+#[test]
+fn aot_result_payload_pinned_through_an_overloaded_callee() {
+    if !tool_available("clang") {
+        eprintln!("skipping the native overloaded-callee check: clang is not on PATH");
+        return;
+    }
+    let src = r#"
+        Thing = { name :: Text }
+
+        make = (name :: Text) -> Result => < Ok(Thing { name = name }) >
+        make = (name :: Text, suffix :: Text) -> Result => <
+          make(name) ?
+            | Ok(thing)    => Ok(Thing { name = thing.name + suffix })
+            | NotOk(error) => NotOk(error)
+        >
+        ^ = () -> Num => <
+          make("a", "b") ?
+            | Ok(thing) => thing.name.length
+            | NotOk(_)  => 0
+        >
+    "#;
+    let (code, _) = build_and_run_native("result_payload_overloaded_callee", src);
+    assert_eq!(code, 2, "a native build must exit 2 on the same program");
+}
+
+/// A LOCAL reassignment inside a nested function, reusing the outer parameter's exact
+/// name, must not be mistaken for a read of the outer's still-generic parameter: the
+/// local's own value (`Ok(x)`, already concrete `Num`) is what the nested match reads,
+/// unaffected by whatever `outer`'s own parameter gets pinned to. `helper(5)` = 5.
+#[test]
+fn run_result_parameter_shadowed_by_a_local_reassignment_reads_its_own_value() {
+    let src = r#"
+        outer = (result :: Result) -> Num => <
+          helper = (x :: Num) -> Num => <
+            result = Ok(x)
+            result ? | Ok(n) => n | NotOk(_) => 0
+          >
+          helper(5)
+        >
+        ^ = () -> Num => < outer(Ok("hi")) >
+    "#;
+    assert_exit(src, 5);
+}
+
+/// `check_call` resolves a member call to its receiver's type — `Parcel`'s own
+/// `describe` here — so `sums::pin_result_parameters` pins `text` from THAT call's own
+/// `Ok("home")` argument the same way a plain function's direct caller already does.
+/// "home".length = 4.
+#[test]
+fn run_result_parameter_of_a_method_is_pinned_from_its_call_site() {
+    let src = r#"
+        Parcel = {
+          label :: Text,
+          describe = (result :: Result) -> Text => <
+            result ? | Ok(text) => text | NotOk(_) => "none"
+          >
+        }
+        ^ = () -> Num => < Parcel { label = "x" }.describe(Ok("home")).length >
+    "#;
+    assert_exit(src, 4);
+}
+
+/// AOT: the same method pinning holds through a native build, not just the JIT.
+#[test]
+fn aot_result_parameter_of_a_method_is_pinned_from_its_call_site() {
+    if !tool_available("clang") {
+        eprintln!("skipping the native method-pinning check: clang is not on PATH");
+        return;
+    }
+    let src = r#"
+        Parcel = {
+          label :: Text,
+          describe = (result :: Result) -> Text => <
+            result ? | Ok(text) => text | NotOk(_) => "none"
+          >
+        }
+        ^ = () -> Num => < Parcel { label = "x" }.describe(Ok("home")).length >
+    "#;
+    let (code, _) = build_and_run_native("method_result_parameter_pinning", src);
+    assert_eq!(code, 4, "a native build must exit 4 on the same program");
+}
+
+/// A method whose own `Ok` is never passed by any caller still gets `UnresolvedResultPayload`
+/// — a method's pinning is the same "no caller, no type" rule a plain function's is, not
+/// an unconditional pass.
+#[test]
+fn reject_result_parameter_of_a_method_never_passed_ok() {
+    let src = r#"
+        Parcel = {
+          label :: Text,
+          describe = (result :: Result) -> Text => <
+            result ? | Ok(text) => text | NotOk(_) => "none"
+          >
+        }
+        ^ = () -> Num => < Parcel { label = "x" }.describe(NotOk("lost")).length >
+    "#;
+    assert_type_error_code(src, Code::UnresolvedResultPayload);
+}
+
+/// `resolve_overload` resolves a bare `describe(Ok("home"))` call to exactly one member
+/// by its argument types — the one-argument, `Result`-taking `describe` — so
+/// `sums::pin_result_parameters` pins `text` from THAT call's own argument the same way
+/// a plain (non-overloaded) function's direct caller already does. "home".length = 4.
+#[test]
+fn run_result_parameter_of_an_overloaded_function_is_pinned_from_its_call_site() {
+    let src = r#"
+        describe = (result :: Result) -> Text => <
+          result ? | Ok(text) => text | NotOk(_) => "none"
+        >
+        describe = (n :: Num) -> Text => < "num" >
+        ^ = () -> Num => < describe(Ok("home")).length >
+    "#;
+    assert_exit(src, 4);
+}
+
+/// AOT: the same overload-member pinning holds through a native build too.
+#[test]
+fn aot_result_parameter_of_an_overloaded_function_is_pinned_from_its_call_site() {
+    if !tool_available("clang") {
+        eprintln!("skipping the native overload-pinning check: clang is not on PATH");
+        return;
+    }
+    let src = r#"
+        describe = (result :: Result) -> Text => <
+          result ? | Ok(text) => text | NotOk(_) => "none"
+        >
+        describe = (n :: Num) -> Text => < "num" >
+        ^ = () -> Num => < describe(Ok("home")).length >
+    "#;
+    let (code, _) = build_and_run_native("overload_result_parameter_pinning", src);
+    assert_eq!(code, 4, "a native build must exit 4 on the same program");
+}
+
+/// A function nothing reachable from `^` calls — here, a top-level function only ever
+/// called from inside a `test.describe`/`test.it` block, which `run`/`check`/`build`
+/// erase entirely — is never checked for an unresolved payload, matching codegen's own
+/// `ast::reachability::reachable_functions`, which never emits it either. Passes under
+/// `quilon run` (this test) and `quilon check`; see
+/// `test_command_runs_a_program_whose_helper_is_only_reachable_from_its_own_test_block`
+/// for the same program under `quilon test`, where the synthesized `^` DOES reach it and
+/// its bound-and-read `Ok` IS pinned from the `test.it` call.
+#[test]
+fn run_program_whose_only_result_parameter_caller_is_inside_an_erased_test_block() {
+    let src = r#"
+        << core.test
+        describe = (result :: Result) -> Text => <
+          result ? | Ok(text) => text | NotOk(_) => "none"
+        >
+        test.describe("describe", () => <
+          test.it("ok", () => < expect(describe(Ok("home")), equals("home")) >)
+        >)
+        ^ = () -> Num => < 0 >
+    "#;
+    assert_exit(src, 0);
+}
+
+/// The same program as
+/// `run_program_whose_only_result_parameter_caller_is_inside_an_erased_test_block`, run
+/// through the REAL `quilon test` command (not the JIT harness above, which erases
+/// `test.describe` blocks the way `run`/`check`/`build` do) — the synthesized `^` this
+/// command builds DOES call `describe`, pinning its `Ok` from that call the same way any
+/// other reachable caller would.
+#[test]
+fn test_command_runs_a_program_whose_helper_is_only_reachable_from_its_own_test_block() {
+    let quilon = std::path::PathBuf::from(env!("CARGO_BIN_EXE_quilon"));
+    let seq = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let dir = std::env::temp_dir().join(format!(
+        "quilon_test_command_unreachable_helper_{}_{seq}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&dir).expect("create temp dir");
+    let file = dir.join("describe.qn");
+    std::fs::write(
+        &file,
+        r#"
+<< core.test
+describe = (result :: Result) -> Text => <
+  result ? | Ok(text) => text | NotOk(_) => "none"
+>
+test.describe("describe", () => <
+  test.it("ok", () => < expect(describe(Ok("home")), equals("home")) >)
+>)
+^ = () -> Num => < 0 >
+"#,
+    )
+    .expect("write temp program");
+
+    let output = Command::new(&quilon)
+        .arg("test")
+        .arg(&file)
+        .output()
+        .expect("spawn quilon test");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "`quilon test` failed on a program whose only caller of `describe` is its own \
+         test block:\nstdout:\n{stdout}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        stdout.contains("1 passed, 0 failed"),
+        "expected the one `ok` case to pass, got:\n{stdout}"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]

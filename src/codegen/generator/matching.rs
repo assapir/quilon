@@ -50,8 +50,11 @@ impl<'ctx> CodeGenerator<'ctx> {
         // The result type of the match (the common type of its arm bodies) comes from
         // the type oracle — NOT a hardcoded `f64` — so a match yielding `Text` (e.g. the
         // `Ok(text)` payload) allocates and loads a `Text` struct rather than corrupting
-        // it through an f64 slot. Falls back to `f64` if the oracle didn't record it.
-        let result_llvm = self.oracle_value_type(match_expression)?;
+        // it through an f64 slot. `oracle_sized_layout_type` (not `oracle_value_type`)
+        // because the oracle may record this match's OWN result as `Generic` when the
+        // only informing arm binds a variant nothing ever constructs for this
+        // scrutinee — a slot that still needs sizing even though nothing reaches it.
+        let result_llvm = self.oracle_sized_layout_type(match_expression)?;
         let result_alloca = self.create_entry_block_alloca("match_result", result_llvm)?;
 
         let no_match_block = self.no_match_block_for(arms, match_expression.span())?;

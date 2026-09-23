@@ -75,11 +75,10 @@ Result = Ok(...) / NotOk(...)    ~ predefined; `Ok` = success, `NotOk` = failure
 ```
 Use it exactly like any other sum type:
 ```quilon
-classify = (v :: Result) => <
-  v ?
-    | Ok(x)    => x * 2
-    | NotOk(e) => 0
->
+v = Ok(21)
+doubled = v ?
+  | Ok(x)    => x * 2
+  | NotOk(e) => 0
 ```
 Payloads work end-to-end for `Num`, `Bool`, and `Text` (e.g. `Ok("done")` /
 `NotOk("error")`). A **pattern-bound payload carries its concrete type**, so it is
@@ -98,6 +97,15 @@ return type inferred or annotated `-> Result` — hands the caller a usable `Tex
 And a `-> Result` whose branches are `Ok(Text)` / `NotOk(Text)` — the `getEnv`/`getOpt`
 shape — carries **both** arms' payloads. (See `examples/result.qn` and
 `examples/result_payload.qn`.)
+
+A bare `:: Result` **parameter**'s payload types are the types its own call sites pass —
+a method call and a call to one member of an overload set count the same as a plain
+function's direct call. A variant no call site passes has no payload type, and a match
+arm that reads that binding is
+[QN351](../tooling/errors.md#qn351--unresolved-result-payload); binding it unread, or as
+`_`, is allowed. The check covers the functions reachable from `^`, the same set codegen
+emits; under `quilon test` the synthesized `^` reaches every test's helpers. See
+`examples/result_payload.qn`.
 
 Every `Result` shares **one uniform layout** regardless of its payload, so a `Result`
 carrying *any* payload — `Num`, `Text`, `[]Text`, a composite — passes through a generic

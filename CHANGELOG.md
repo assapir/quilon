@@ -293,6 +293,16 @@ All notable changes to Quilon are documented here.
   a read of one exactly like a read of a deferred local. A store into such a global still
   never forces — `@testimony := io.@readStdin()` stays accepted. See
   `docs/concurrency/README.md` and `examples/deferred_global.qn`. Closes #445.
+- **A bare `:: Result` parameter matched directly and bound (`Ok(x) => …`) now has its
+  payload pinned from its own call sites, instead of silently defaulting to `Num`'s
+  representation and sometimes crashing at codegen.** This includes a plain function's,
+  a method's, and an overload member's calls alike. Reading an undemonstrated variant is
+  [QN351](docs/tooling/errors.md#qn351--unresolved-result-payload); binding it unread
+  (`Ok(x) => 0`) needs no payload type. A function nothing reachable from `^` calls is
+  not checked. An overload member's `-> Result` return is now refined from its body the
+  way a plain function's already was. Codegen no longer defaults an unresolved payload to
+  `Num` either. See `docs/types/sum-types.md` and `examples/result_payload.qn`. Closes
+  #469. Closes #468.
 - **A match arm's binding is no longer corrupted by a nested match inside it reusing the
   same name.** `| Ok(body) => (second ? | Ok(body) => body | NotOk(reason) => reason) +
   body` used to read the outer `body` back as whatever the inner `Ok(body)` arm's own slot

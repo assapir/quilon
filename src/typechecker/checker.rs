@@ -405,6 +405,15 @@ pub enum TypeError {
         touch: Span,
         span: Span,
     },
+    /// A bare `:: Result` parameter's `variant` is bound and read, but no call site of
+    /// `function` ever demonstrated that variant's payload type (see
+    /// `sums::pin_result_parameters`).
+    UnresolvedResultPayload {
+        function: String,
+        parameter: String,
+        variant: String,
+        span: Span,
+    },
 }
 
 /// What the position a lambda sits in states about its type — the target of **contextual
@@ -543,6 +552,10 @@ pub struct Environment {
 /// type is always resolved — `check_type_methods` infers it from the body when the method
 /// has no `-> Type` annotation, so a registered method always has a concrete one.
 type MethodDef = (Vec<Parameter>, Type, Expression);
+
+/// Per overloaded name, each call's resolved member (by its parameter types — `Type` has
+/// no `Hash`, so this is a linear scan, not a nested map key) and argument spans.
+type OverloadCallArgs = std::collections::HashMap<String, Vec<(Vec<Type>, Vec<Span>)>>;
 
 /// The **type oracle**: a side-table mapping each expression's — and each function
 /// parameter's — source `Span` to the `Type` the checker inferred for it. Produced by
@@ -692,6 +705,12 @@ pub struct TypeChecker {
     // (`FunctionDeclaration::from_corelib`) — a bare `__`-prefixed intrinsic resolves only
     // there.
     checking_corelib_declaration: bool,
+    // Each method call's argument spans, recorded as `check_call` resolves it to a
+    // receiver type — a member call has no name a whole-program scan could key on.
+    method_call_args: std::collections::HashMap<(String, String), Vec<Vec<Span>>>,
+    // Each overloaded call's argument spans, recorded as `resolve_overload` resolves it
+    // to one member.
+    overload_call_args: OverloadCallArgs,
 }
 
 impl Default for TypeChecker {
@@ -725,6 +744,8 @@ impl TypeChecker {
             case_depth: 0,
             pending_return_type: None,
             checking_corelib_declaration: false,
+            method_call_args: std::collections::HashMap::new(),
+            overload_call_args: std::collections::HashMap::new(),
         };
 
         checker.add_builtins();
