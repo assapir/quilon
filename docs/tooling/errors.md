@@ -1273,9 +1273,8 @@ sift = (n :: Num) -> Num => < n + 1 >
 ### QN353 — top-level function reachable only from test blocks
 
 `run`, `build` and `check` erase a file's `test.describe` blocks before compiling it — only
-`quilon test`'s synthesized `^` runs them. A function that [QN352](#qn352--top-level-function-never-called)
-would otherwise call dead, but that one of those blocks mentions, looked alive on the page
-for a reason: this error names it.
+`quilon test`'s synthesized `^` runs them. A function only those blocks mention is dead in
+the program; testing a function nothing uses has no meaning, so this is its own error.
 
 ```quilon ignore
 << core.test

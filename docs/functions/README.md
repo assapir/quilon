@@ -133,12 +133,11 @@ g = (t :: Text) -> Text => < "b" >
 recursive overload member included. A mutually recursive pair is written as one
 self-recursive function.
 
-A non-exported top-level function that nothing reachable from `^` calls — or, in a module
-with no `^` of its own, that none of the module's `>>`-exported functions call — is a
-compile error: `>>` is a module's only public surface, so an unreachable private function
-has no way to ever run (see
-[`docs/tooling/errors.md`](../tooling/errors.md#qn352--top-level-function-never-called)).
-A function reachable only through an erased `test.describe` block is a narrower, separate
-error: exercising a function nothing else calls proves nothing about the program
-(`errors.md`'s
-[QN353](../tooling/errors.md#qn353--top-level-function-reachable-only-from-test-blocks)).
+A non-exported top-level function that nothing reachable from `^` calls is a compile
+error. In a module with no `^` of its own, the same rule runs against the module's own
+`>>`-exported functions instead — an exported function is always reachable, whatever
+calls it inside the module. See
+[QN352](../tooling/errors.md#qn352--top-level-function-never-called). A function
+reachable only from an erased `test.describe` block is
+[QN353](../tooling/errors.md#qn353--top-level-function-reachable-only-from-test-blocks)
+instead.

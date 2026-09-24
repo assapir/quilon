@@ -45,13 +45,19 @@ use std::collections::{HashMap, HashSet};
 /// its own (no public surface at all yet) means every function is something a later
 /// program might still call, not that all of it is dead.
 pub fn reachable_functions(program: &Program) -> Option<HashSet<&str>> {
-    let mut pending: Vec<&str> = Vec::new();
-    let mut has_root = false;
-    if program.items.iter().any(
-        |item| matches!(item, Item::FunctionDeclaration(declaration) if declaration.name == "^"),
-    ) {
-        pending.push("^");
-        has_root = true;
+    // Whether there is a root at all — `^`, or an export of the program's own — decided
+    // up front and independently of the pass below: that pass pushes onto `pending`
+    // unconditionally for a method body or a top-level binding's value too (both are
+    // roots regardless of `^`/export), so an empty-`pending` check taken only after it
+    // runs would wrongly see a root in a `^`-less, export-less module that merely has a
+    // method or a computed global — and prune the rest of it, rather than keeping
+    // everything the way no reachable root at all calls for.
+    let has_root = program.items.iter().any(|item| {
+        matches!(item, Item::FunctionDeclaration(declaration)
+            if declaration.name == "^" || (declaration.exported && !declaration.from_corelib))
+    });
+    if !has_root {
+        return None;
     }
 
     // One pass over the items collects both halves of the problem: the roots — `^`, every
@@ -60,13 +66,18 @@ pub fn reachable_functions(program: &Program) -> Option<HashSet<&str>> {
     // name. The index matters: looking a name up by walking the item list would make the
     // analysis quadratic in the number of functions, costing more on a large program than
     // the emission it saves.
+    let mut pending: Vec<&str> = Vec::new();
+    if program.items.iter().any(
+        |item| matches!(item, Item::FunctionDeclaration(declaration) if declaration.name == "^"),
+    ) {
+        pending.push("^");
+    }
     let mut defined: HashMap<&str, Vec<&Expression>> = HashMap::new();
     for item in &program.items {
         match item {
             Item::FunctionDeclaration(declaration) => {
                 if declaration.exported && !declaration.from_corelib {
                     pending.push(declaration.name.as_str());
-                    has_root = true;
                 }
                 defined
                     .entry(declaration.name.as_str())
@@ -80,10 +91,6 @@ pub fn reachable_functions(program: &Program) -> Option<HashSet<&str>> {
                 }
             }
         }
-    }
-
-    if !has_root {
-        return None;
     }
 
     let mut reached: HashSet<&str> = HashSet::new();
