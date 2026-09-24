@@ -1275,7 +1275,7 @@ sift = (n :: Num) -> Num => < n + 1 >
 `run`, `build` and `check` erase a file's `test.describe` blocks before compiling it — only
 `quilon test`'s synthesized `^` runs them. A function that [QN352](#qn352--top-level-function-never-called)
 would otherwise call dead, but that one of those blocks mentions, looked alive on the page
-for a reason: this error says so, rather than reporting it as ordinary dead code.
+for a reason: this error names it.
 
 ```quilon ignore
 << core.test

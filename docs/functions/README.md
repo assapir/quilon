@@ -135,10 +135,10 @@ self-recursive function.
 
 A non-exported top-level function that nothing reachable from `^` calls — or, in a module
 with no `^` of its own, that none of the module's `>>`-exported functions call — is a
-compile error rather than silently dropped: `>>` is a module's only public surface, so an
-unreachable private function has no way to ever run (see
+compile error: `>>` is a module's only public surface, so an unreachable private function
+has no way to ever run (see
 [`docs/tooling/errors.md`](../tooling/errors.md#qn352--top-level-function-never-called)).
-A function `run`/`build`/`check` can only reach because an erased `test.describe` block
-mentions it is a narrower, separate error, since exercising a function nothing else calls
-proves nothing about the program (`errors.md`'s
+A function reachable only through an erased `test.describe` block is a narrower, separate
+error: exercising a function nothing else calls proves nothing about the program
+(`errors.md`'s
 [QN353](../tooling/errors.md#qn353--top-level-function-reachable-only-from-test-blocks)).
