@@ -4,8 +4,8 @@
 //! raw-syscall helper the fail-loud paths in `core`/`text` reuse, and `@streamFile` — the
 //! chunk-callback file read.
 
-use crate::deferred::{QlResult, read_once};
-use crate::report::{QlSite, RUNTIME_EXIT_CODE, codes, fail_at};
+use crate::deferred::{QnResult, read_once};
+use crate::report::{QnSite, RUNTIME_EXIT_CODE, codes, fail_at};
 use std::os::raw::{c_int, c_void};
 use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::io::AsRawFd;
@@ -45,10 +45,10 @@ fn check_write_fd(fd: f64) -> Result<i32, String> {
 ///
 /// # Safety contract (upheld by the compiler)
 /// `ptr` is null or points at a header `quilon-rt` wrote, followed by `len` readable
-/// bytes; `site` is null or points to a valid [`QlSite`].
+/// bytes; `site` is null or points to a valid [`QnSite`].
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
 #[unsafe(no_mangle)]
-pub extern "C" fn __write_bytes(fd: f64, ptr: *const u8, len: i64, site: *const QlSite) -> i64 {
+pub extern "C" fn __write_bytes(fd: f64, ptr: *const u8, len: i64, site: *const QnSite) -> i64 {
     let fd = match check_write_fd(fd) {
         Ok(fd) => fd,
         Err(message) => fail_at(site, codes::WRITE_FD_NOT_WHOLE, &message, RUNTIME_EXIT_CODE),
@@ -67,10 +67,10 @@ pub extern "C" fn __write_bytes(fd: f64, ptr: *const u8, len: i64, site: *const 
 ///
 /// # Safety contract (upheld by the compiler)
 /// `ptr` is null or points to at least `len` readable bytes; `site` is null or points to
-/// a valid [`QlSite`].
+/// a valid [`QnSite`].
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
 #[unsafe(no_mangle)]
-pub extern "C" fn __print_text_fd(fd: i64, ptr: *const u8, len: i64, site: *const QlSite) {
+pub extern "C" fn __print_text_fd(fd: i64, ptr: *const u8, len: i64, site: *const QnSite) {
     let rendered = crate::text::text_str(ptr, len);
     // Text and newline in one buffer, so one `print` is one write: on a pipe that keeps a
     // line whole against a concurrent writer, and it costs one allocation either way.
@@ -165,13 +165,13 @@ pub extern "C" fn __color_enabled(fd: i64) -> i64 {
 /// returns `false`, or `NotOk(message)` on any failure — never fails the process.
 ///
 /// # Safety contract (upheld by the compiler)
-/// `out` points to writable storage for one [`QlResult`]; `path_data` is null, or points to
+/// `out` points to writable storage for one [`QnResult`]; `path_data` is null, or points to
 /// `path_len` readable bytes; `on_chunk` is the function pointer of a live `(ptr,i64,ptr)->i8`
 /// trampoline, called with `environment` as its last argument.
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
 #[unsafe(no_mangle)]
 pub extern "C" fn __stream_file_run(
-    out: *mut QlResult,
+    out: *mut QnResult,
     path_data: *const u8,
     path_len: i64,
     chunk_size: f64,
@@ -183,7 +183,7 @@ pub extern "C" fn __stream_file_run(
         unsafe { std::mem::transmute(on_chunk) };
     let path = crate::text::text_str(path_data, path_len).into_owned();
     let result = stream_file(&path, chunk_size, on_chunk, environment);
-    // SAFETY: `out` is writable storage for one `QlResult` (the code generator's alloca).
+    // SAFETY: `out` is writable storage for one `QnResult` (the code generator's alloca).
     unsafe { *out = result };
 }
 
@@ -206,9 +206,9 @@ fn stream_file(
     chunk_size: f64,
     on_chunk: extern "C" fn(*const u8, i64, *mut c_void) -> u8,
     environment: *mut c_void,
-) -> QlResult {
+) -> QnResult {
     if chunk_size.fract() != 0.0 || chunk_size <= 0.0 {
-        return QlResult::not_ok(&format!(
+        return QnResult::not_ok(&format!(
             "core.io.@streamFile: chunkSize must be a positive whole number, got {}",
             crate::mem::format_num(chunk_size)
         ));
@@ -219,7 +219,7 @@ fn stream_file(
     let chunk_size = chunk_size as usize;
     let mut buffer: Vec<u8> = Vec::new();
     if buffer.try_reserve_exact(chunk_size).is_err() {
-        return QlResult::not_ok(&format!(
+        return QnResult::not_ok(&format!(
             "core.io.@streamFile: cannot allocate a {chunk_size}-byte chunk buffer"
         ));
     }
@@ -235,7 +235,7 @@ fn stream_file(
     {
         Ok(file) => file,
         Err(error) => {
-            return QlResult::not_ok(&format!(
+            return QnResult::not_ok(&format!(
                 "core.io.@streamFile failed to open {path}: {error}"
             ));
         }
@@ -249,7 +249,7 @@ fn stream_file(
         let count = match read_once(fd, &mut buffer) {
             Ok(count) => count,
             Err(error) => {
-                return QlResult::not_ok(&format!(
+                return QnResult::not_ok(&format!(
                     "core.io.@streamFile failed to read {path}: {error}"
                 ));
             }
@@ -258,12 +258,12 @@ fn stream_file(
         if !at_eof {
             carry.extend_from_slice(&buffer[..count]);
         } else if carry.is_empty() {
-            return QlResult::ok_num(delivered as f64);
+            return QnResult::ok_num(delivered as f64);
         }
 
         let cut = match split_chunk(&carry, at_eof) {
             Ok(cut) => cut,
-            Err(message) => return QlResult::not_ok(&message),
+            Err(message) => return QnResult::not_ok(&message),
         };
         if cut == 0 {
             continue;
@@ -272,7 +272,7 @@ fn stream_file(
         let keep_going = call_on_chunk(on_chunk, environment, &carry[..cut]);
         carry.drain(..cut);
         if at_eof || !keep_going {
-            return QlResult::ok_num(delivered as f64);
+            return QnResult::ok_num(delivered as f64);
         }
     }
 }

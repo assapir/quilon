@@ -486,8 +486,8 @@ impl<'ctx> CodeGenerator<'ctx> {
     /// The LLVM struct a `Site` record lowers to — `{ {ptr,i64}, double, double, {ptr,i64},
     /// double }` for the declared [`crate::ast::site_fields`].
     ///
-    /// Public so a test can hold the runtime's hand-written `QlSite` mirror
-    /// (`quilon_rt::QlSite`, which every fallible intrinsic receives) to the layout actually
+    /// Public so a test can hold the runtime's hand-written `QnSite` mirror
+    /// (`quilon_rt::QnSite`, which every fallible intrinsic receives) to the layout actually
     /// emitted: the two are connected by nothing but agreement, and a drifted field order
     /// would make the runtime read a text pointer as a line number rather than fail to build.
     pub fn site_struct_type(

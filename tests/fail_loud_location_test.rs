@@ -132,7 +132,7 @@ fn a_native_build_reports_the_same_location() {
     );
 }
 
-/// The runtime's `QlSite` mirrors the compiler's built-in `Site` record by hand, and a
+/// The runtime's `QnSite` mirrors the compiler's built-in `Site` record by hand, and a
 /// mismatch would not fail to compile — it would make the runtime read a `Text` pointer as a
 /// line number. So check the two layouts against each other: the LLVM struct codegen emits
 /// for `ast::site_fields()` must have exactly the size, field count, and per-field sizes of
@@ -162,8 +162,8 @@ fn the_runtime_site_mirrors_the_compilers_site_layout() {
         .expect("Site lowers to a struct");
     assert_eq!(
         target_data.get_store_size(&site) as usize,
-        std::mem::size_of::<quilon_rt::QlSite>(),
-        "the runtime's QlSite and the compiler's Site record must have the same size"
+        std::mem::size_of::<quilon_rt::QnSite>(),
+        "the runtime's QnSite and the compiler's Site record must have the same size"
     );
     assert_eq!(
         site.count_fields() as usize,

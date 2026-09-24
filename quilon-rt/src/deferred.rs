@@ -11,11 +11,11 @@
 //!
 //! [`__read_launch`] backs `@read` (read one line from stdin): it allocates a `Deferred`,
 //! spawns a reader fiber that parks on stdin readiness and fills the cell, and returns the
-//! deferred [`QlSlice`] representation. [`__force_text`] is the force: park-until-ready,
+//! deferred [`QnSlice`] representation. [`__force_text`] is the force: park-until-ready,
 //! then return the stored bytes.
 //!
 //! Representation (hybrid, per the concurrency design): a `Text` is a `{ ptr, i64 }`
-//! `QlSlice`. A *ready* `Text` carries its byte length (`>= 0`) in the second field; a
+//! `QnSlice`. A *ready* `Text` carries its byte length (`>= 0`) in the second field; a
 //! *deferred* `Text` carries [`DEFERRED_SENTINEL`] (`-1`) there and the deferred pointer in
 //! the first — a real byte length is never negative, so the two are unambiguous. The code
 //! generator forces exactly at the strict-use sites the deferred-taint pass marks, and only
@@ -32,8 +32,8 @@
 //! ever owns the descriptor and the shared line buffer at a time. Two concurrent `@readStdin`
 //! calls therefore read consecutive lines in launch order rather than racing the fd.
 
-use crate::mem::{__alloc, QlSlice, alloc_text};
-use crate::report::{QlSite, RUNTIME_EXIT_CODE, codes, fail_at};
+use crate::mem::{__alloc, QnSlice, alloc_text};
+use crate::report::{QnSite, RUNTIME_EXIT_CODE, codes, fail_at};
 use crate::scheduler::{
     deregister_readiness, park_on_address, park_on_readiness, register_readiness,
     reregister_readiness, spawn, wake_address,
@@ -45,7 +45,7 @@ use std::io;
 use std::os::raw::c_void;
 use std::ptr;
 
-/// The second (`i64`) field of a deferred `Text`'s `QlSlice`: a real byte length is never
+/// The second (`i64`) field of a deferred `Text`'s `QnSlice`: a real byte length is never
 /// negative, so `-1` unambiguously flags "the first field is a deferred pointer, not data".
 /// The code generator's force check compares against this exact value.
 pub const DEFERRED_SENTINEL: i64 = -1;
@@ -57,9 +57,9 @@ pub const DEFERRED_SENTINEL: i64 = -1;
 /// construction. The tags are the code generator's built-in Result discriminants.
 #[repr(C)]
 #[derive(Clone, Copy)]
-pub struct QlResult {
+pub struct QnResult {
     pub(crate) tag: i8,
-    pub(crate) slot: QlSlice,
+    pub(crate) slot: QnSlice,
 }
 
 /// The `Ok` discriminant — the code generator's built-in Result tag for the success variant.
@@ -72,18 +72,18 @@ pub(crate) const RESULT_NOTOK_TAG: i8 = 1;
 /// one.
 pub const DEFERRED_RESULT_TAG: i8 = -1;
 
-impl QlResult {
+impl QnResult {
     /// A ready `Ok(text)` carrying `bytes` as its `Text` payload.
-    pub(crate) fn ok(bytes: &[u8]) -> QlResult {
-        QlResult {
+    pub(crate) fn ok(bytes: &[u8]) -> QnResult {
+        QnResult {
             tag: RESULT_OK_TAG,
             slot: alloc_text(bytes),
         }
     }
 
     /// A ready `NotOk(message)` carrying `message` as its `Text` payload.
-    pub(crate) fn not_ok(message: &str) -> QlResult {
-        QlResult {
+    pub(crate) fn not_ok(message: &str) -> QnResult {
+        QnResult {
             tag: RESULT_NOTOK_TAG,
             slot: alloc_text(message.as_bytes()),
         }
@@ -92,10 +92,10 @@ impl QlResult {
     /// A ready `Ok(number)` carrying `number` as its `Num` payload — the slot packed the same
     /// way the code generator's `pack_result_payload` packs a Num (`{ null, bitcast(f64) }`),
     /// so a Rust-built `Ok(Num)` reads back identically to one `.qn` source constructs.
-    pub(crate) fn ok_num(number: f64) -> QlResult {
-        QlResult {
+    pub(crate) fn ok_num(number: f64) -> QnResult {
+        QnResult {
             tag: RESULT_OK_TAG,
-            slot: QlSlice {
+            slot: QnSlice {
                 data: ptr::null(),
                 len: number.to_bits() as i64,
             },
@@ -268,9 +268,9 @@ pub(crate) unsafe fn settle<T>(cell: *mut Deferred<T>) -> Option<String> {
 /// [`launch`] that EVERY value-returning `@` primitive shares (`@readStdin`, `@tcpRequest`), so
 /// none re-copies the sentinel-tagging. The result threads through the program as an ordinary
 /// `Text`; the code generator forces it (via [`__force_text`]) at its strict-use site.
-pub(crate) fn launch_deferred_text(producer: impl FnOnce() -> QlSlice + 'static) -> QlSlice {
+pub(crate) fn launch_deferred_text(producer: impl FnOnce() -> QnSlice + 'static) -> QnSlice {
     let cell = launch(producer);
-    QlSlice {
+    QnSlice {
         data: cell as *const c_void,
         len: DEFERRED_SENTINEL,
     }
@@ -283,11 +283,11 @@ pub(crate) fn launch_deferred_text(producer: impl FnOnce() -> QlSlice + 'static)
 /// `Result` value tagged [`DEFERRED_RESULT_TAG`] with the deferred cell in its slot's `data`
 /// field; the result threads through the program as an ordinary `Result` and the code generator
 /// forces it (via [`__force_result`]) at the strict use that reads it.
-pub(crate) fn launch_deferred_result(producer: impl FnOnce() -> QlResult + 'static) -> QlResult {
+pub(crate) fn launch_deferred_result(producer: impl FnOnce() -> QnResult + 'static) -> QnResult {
     let cell = launch(producer);
-    QlResult {
+    QnResult {
         tag: DEFERRED_RESULT_TAG,
-        slot: QlSlice {
+        slot: QnSlice {
             data: cell as *const c_void,
             len: 0,
         },
@@ -302,15 +302,15 @@ pub(crate) fn launch_deferred_result(producer: impl FnOnce() -> QlResult + 'stat
 /// check saw [`DEFERRED_RESULT_TAG`], so `deferred_ptr` is always a live `Result` deferred.
 ///
 /// # Safety contract (upheld by the compiler)
-/// `out` points to writable storage for one [`QlResult`]; `deferred_ptr` is the slot `data` of a
+/// `out` points to writable storage for one [`QnResult`]; `deferred_ptr` is the slot `data` of a
 /// deferred `Result` produced by `launch_deferred_result` and is still reachable (the taint pass
 /// keeps it live to here).
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
 #[unsafe(no_mangle)]
-pub extern "C" fn __force_result(out: *mut QlResult, deferred_ptr: *const c_void) {
-    // SAFETY: per the contract, this is a live `Result` deferred (a `Deferred<QlResult>`).
-    let value = unsafe { force(deferred_ptr as *mut Deferred<QlResult>) };
-    // SAFETY: `out` is writable storage for one `QlResult` (the code generator's alloca).
+pub extern "C" fn __force_result(out: *mut QnResult, deferred_ptr: *const c_void) {
+    // SAFETY: per the contract, this is a live `Result` deferred (a `Deferred<QnResult>`).
+    let value = unsafe { force(deferred_ptr as *mut Deferred<QnResult>) };
+    // SAFETY: `out` is writable storage for one `QnResult` (the code generator's alloca).
     unsafe { *out = value };
 }
 
@@ -320,10 +320,10 @@ pub extern "C" fn __force_result(out: *mut QlResult, deferred_ptr: *const c_void
 /// used to frame a fault report; it may be null if unknown.
 ///
 /// # Safety contract (upheld by the compiler)
-/// `site` is null or points to a [`QlSite`] constant that outlives the program (the code
+/// `site` is null or points to a [`QnSite`] constant that outlives the program (the code
 /// generator emits one read-only global per call site).
 #[unsafe(no_mangle)]
-pub extern "C" fn __read_launch(site: *const QlSite) -> QlSlice {
+pub extern "C" fn __read_launch(site: *const QnSite) -> QnSlice {
     // The site is a read-only constant in the module, so it outlives the launched read.
     launch_deferred_text(move || read_stdin_text(site))
 }
@@ -337,15 +337,15 @@ pub extern "C" fn __read_launch(site: *const QlSite) -> QlSlice {
 /// `__read_launch` result and is still reachable (the taint pass keeps it live to here).
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
 #[unsafe(no_mangle)]
-pub extern "C" fn __force_text(deferred_ptr: *const c_void) -> QlSlice {
-    // SAFETY: per the contract, this is a live `Text` deferred (a `Deferred<QlSlice>`).
-    unsafe { force(deferred_ptr as *mut Deferred<QlSlice>) }
+pub extern "C" fn __force_text(deferred_ptr: *const c_void) -> QnSlice {
+    // SAFETY: per the contract, this is a live `Text` deferred (a `Deferred<QnSlice>`).
+    unsafe { force(deferred_ptr as *mut Deferred<QnSlice>) }
 }
 
 /// The `@readStdin` producer: read one line from stdin as a `Text`, serialized on the stdin
 /// gate so concurrent reads take consecutive lines rather than racing fd 0. Yields the empty
 /// `Text` at end-of-input; a genuine IO error faults at the launch site (fail-loud).
-fn read_stdin_text(site: *const QlSite) -> QlSlice {
+fn read_stdin_text(site: *const QnSite) -> QnSlice {
     acquire_stdin();
     let read = read_stdin_line();
     release_stdin();
@@ -359,8 +359,8 @@ fn read_stdin_text(site: *const QlSite) -> QlSlice {
 /// process (fail-loud). A genuine IO error on stdin is neither EOF nor `WouldBlock`.
 ///
 /// # Safety contract (upheld by the compiler)
-/// `site` is null or points to a valid [`QlSite`].
-fn fail_read(site: *const QlSite, error: &io::Error) -> ! {
+/// `site` is null or points to a valid [`QnSite`].
+fn fail_read(site: *const QnSite, error: &io::Error) -> ! {
     fail_at(
         site,
         codes::READ_FAILED,
@@ -538,7 +538,7 @@ mod tests {
     /// Like [`__read_launch`] but reading one line from an arbitrary `fd` (a pipe), so a test
     /// can drive the producer with a controllable writer. Exercises the generic [`launch`] core
     /// with a pipe-reading producer and returns the deferred `{deferred, -1}` representation.
-    fn launch_read_from_fd(fd: i32) -> QlSlice {
+    fn launch_read_from_fd(fd: i32) -> QnSlice {
         launch_deferred_text(move || {
             let mut buffer = Vec::new();
             let bytes = read_line_from(fd, &mut buffer).expect("pipe read");
@@ -647,7 +647,7 @@ mod tests {
                     let a = __force_text(deferred_ptr);
                     let b = __force_text(deferred_ptr);
                     let read =
-                        |s: QlSlice| crate::text::byte_slice(s.data as *const u8, s.len).to_vec();
+                        |s: QnSlice| crate::text::byte_slice(s.data as *const u8, s.len).to_vec();
                     *FIRST.lock().unwrap() = read(a);
                     *SECOND.lock().unwrap() = read(b);
                 });

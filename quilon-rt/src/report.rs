@@ -4,7 +4,7 @@
 //!
 //! Everything that reports at a call site frames it here — a failing `assert`/`expect`, and
 //! the runtime's own fail-loud checks (an invalid `arr[i]`, a `Text.replace`/`repeat`
-//! contract violation), all from the [`QlSite`] the code generator hands in at the check.
+//! contract violation), all from the [`QnSite`] the code generator hands in at the check.
 //!
 //! The frame is the compiler's own (`diagnostic::Diagnostic::render`, drawn by `miette`),
 //! composed here by hand since a compiled program carries no renderer;
@@ -12,7 +12,7 @@
 //! compile error and a runtime failure read identically.
 
 use crate::io::{__color_enabled, write_to_fd};
-use crate::mem::{QlSlice, format_num};
+use crate::mem::{QnSlice, format_num};
 use crate::process::__exit;
 use crate::scheduler::{abort_current_case, abort_current_trap, abort_trap_active};
 use crate::test_registry::{Failure, mark_case_failed};
@@ -32,11 +32,11 @@ pub(crate) const RUNTIME_EXIT_CODE: c_int = 5;
 /// (`{ {ptr,i64}, double, double, {ptr,i64}, double }`). An intrinsic that can fail takes a
 /// pointer to one of these constants; nothing writes through it.
 #[repr(C)]
-pub struct QlSite {
-    pub file: QlSlice,
+pub struct QnSite {
+    pub file: QnSlice,
     pub line: f64,
     pub column: f64,
-    pub excerpt: QlSlice,
+    pub excerpt: QnSlice,
     pub width: f64,
 }
 
@@ -129,8 +129,8 @@ impl Style {
 /// [`crate::scheduler::run_abort_trap_guarded`] and never resumed here.
 ///
 /// # Safety contract (upheld by the compiler)
-/// `site` is null or points to a `QlSite` whose slices point to valid UTF-8 for their length.
-pub(crate) fn fail_at(site: *const QlSite, code: u16, message: &str, exit_code: c_int) -> ! {
+/// `site` is null or points to a `QnSite` whose slices point to valid UTF-8 for their length.
+pub(crate) fn fail_at(site: *const QnSite, code: u16, message: &str, exit_code: c_int) -> ! {
     if abort_trap_active() {
         let report = render_report(site, code, message, &Style::for_stderr());
         abort_current_trap(report);
@@ -143,15 +143,15 @@ pub(crate) fn fail_at(site: *const QlSite, code: u16, message: &str, exit_code: 
 /// same frame [`fail_at`] ends the process with.
 ///
 /// # Safety contract (upheld by the compiler)
-/// `site` is null or points to a `QlSite` whose slices point to valid UTF-8 for their length.
-pub(crate) fn report_at(site: *const QlSite, code: u16, message: &str) {
+/// `site` is null or points to a `QnSite` whose slices point to valid UTF-8 for their length.
+pub(crate) fn report_at(site: *const QnSite, code: u16, message: &str) {
     let out = render_report(site, code, message, &Style::for_stderr());
     let _ = write_to_fd(2, out.as_bytes());
 }
 
 /// Render the frame [`report_at`] writes to stderr, WITHOUT writing it — the pure half
 /// [`fail_at`] uses to carry a withheld report into an `aborts()` trap instead.
-fn render_report(site: *const QlSite, code: u16, message: &str, style: &Style) -> String {
+fn render_report(site: *const QnSite, code: u16, message: &str, style: &Style) -> String {
     let mut out = format!(
         "{}error[QN{code:03}]:{} {message}\n",
         style.problem, style.plain
@@ -190,9 +190,9 @@ fn render_report(site: *const QlSite, code: u16, message: &str, style: &Style) -
 /// terminate with `RUNTIME_EXIT_CODE`. Never returns.
 ///
 /// # Safety contract (upheld by the compiler)
-/// `site` is null or points to a valid `QlSite`; `message`/`length` are a UTF-8 `Text`.
+/// `site` is null or points to a valid `QnSite`; `message`/`length` are a UTF-8 `Text`.
 #[unsafe(no_mangle)]
-pub extern "C" fn __assert_failed(site: *const QlSite, message: *const u8, length: i64) -> ! {
+pub extern "C" fn __assert_failed(site: *const QnSite, message: *const u8, length: i64) -> ! {
     fail_at(
         site,
         codes::ASSERTION_FAILED,
@@ -206,9 +206,9 @@ pub extern "C" fn __assert_failed(site: *const QlSite, message: *const u8, lengt
 /// (`crate::scheduler::run_case_guarded`) can move on to the next case.
 ///
 /// # Safety contract (upheld by the compiler)
-/// `site` is null or points to a valid `QlSite`; `message`/`length` are a UTF-8 `Text`.
+/// `site` is null or points to a valid `QnSite`; `message`/`length` are a UTF-8 `Text`.
 #[unsafe(no_mangle)]
-pub extern "C" fn __expect_failed(site: *const QlSite, message: *const u8, length: i64) {
+pub extern "C" fn __expect_failed(site: *const QnSite, message: *const u8, length: i64) {
     let message = message_text(message, length);
     report_at(site, codes::ASSERTION_FAILED, &message);
     let (file, line) = location_of(site);
@@ -224,8 +224,8 @@ pub extern "C" fn __expect_failed(site: *const QlSite, message: *const u8, lengt
 /// site with no source (see [`report_at`]).
 ///
 /// # Safety contract (upheld by the compiler)
-/// `site` is null or points to a `QlSite` whose slices point to valid UTF-8 for their length.
-fn location_of(site: *const QlSite) -> (String, u64) {
+/// `site` is null or points to a `QnSite` whose slices point to valid UTF-8 for their length.
+fn location_of(site: *const QnSite) -> (String, u64) {
     match unsafe { site.as_ref() } {
         Some(site) => (site.file.as_text().into_owned(), site.line as u64),
         None => (String::new(), 0),
@@ -240,9 +240,9 @@ fn location_of(site: *const QlSite) -> (String, u64) {
 /// letting the match yield a result slot no arm wrote.
 ///
 /// # Safety contract (upheld by the compiler)
-/// `site` is null or points to a valid [`QlSite`].
+/// `site` is null or points to a valid [`QnSite`].
 #[unsafe(no_mangle)]
-pub extern "C" fn __match_fail(site: *const QlSite) -> ! {
+pub extern "C" fn __match_fail(site: *const QnSite) -> ! {
     fail_at(
         site,
         codes::MATCH_FAILED,

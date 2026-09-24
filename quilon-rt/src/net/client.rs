@@ -12,7 +12,7 @@
 //! `super::resolve`, the plumbing shared with [`super::server`].
 
 use super::{TcpStream, bytes_to_string, copy_bytes, resolve};
-use crate::deferred::{QlResult, launch_deferred_result};
+use crate::deferred::{QnResult, launch_deferred_result};
 use std::io;
 
 /// The most bytes `@tcpRequest` buffers for one response. A close-delimited read has no length
@@ -37,13 +37,13 @@ const MAX_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
 /// the FFI boundary free of an aggregate return (see [`crate::deferred::__force_result`]).
 ///
 /// # Safety contract (upheld by the compiler)
-/// `out` points to writable storage for one [`QlResult`]; `address_data`/`request_data` are null,
+/// `out` points to writable storage for one [`QnResult`]; `address_data`/`request_data` are null,
 /// or point to `address_len`/`request_len` readable bytes for the duration of this call (a
 /// `Text`'s live bytes at the call site).
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
 #[unsafe(no_mangle)]
 pub extern "C" fn __tcp_request_launch(
-    out: *mut QlResult,
+    out: *mut QnResult,
     address_data: *const u8,
     address_len: i64,
     request_data: *const u8,
@@ -52,7 +52,7 @@ pub extern "C" fn __tcp_request_launch(
     let address = bytes_to_string(address_data, address_len);
     let request = copy_bytes(request_data, request_len);
     let deferred = launch_deferred_result(move || tcp_request(&address, &request));
-    // SAFETY: `out` is writable storage for one `QlResult` (the code generator's alloca).
+    // SAFETY: `out` is writable storage for one `QnResult` (the code generator's alloca).
     unsafe { *out = deferred };
 }
 
@@ -60,7 +60,7 @@ pub extern "C" fn __tcp_request_launch(
 /// its outcome as a `Result`. On success it yields `Ok(responseBytes)`; on ANY failure — address
 /// resolution, connect, write, read, or an over-cap response — it yields `NotOk(message)` naming
 /// the failing stage and the address. Fail-soft: no failure terminates the process.
-fn tcp_request(address: &str, request: &[u8]) -> QlResult {
+fn tcp_request(address: &str, request: &[u8]) -> QnResult {
     let target = match resolve(address) {
         Ok(target) => target,
         Err(error) => return request_error(address, "resolve", &error),
@@ -73,7 +73,7 @@ fn tcp_request(address: &str, request: &[u8]) -> QlResult {
         return request_error(address, "write", &error);
     }
     match read_to_close(&mut stream) {
-        Ok(response) => QlResult::ok(&response),
+        Ok(response) => QnResult::ok(&response),
         Err(error) => request_error(address, "read", &error),
     }
 }
@@ -103,8 +103,8 @@ fn read_to_close(stream: &mut TcpStream) -> io::Result<Vec<u8>> {
 
 /// Build the `NotOk(message)` a failed `@tcpRequest` yields: the failing `stage`
 /// (`resolve`/`connect`/`write`/`read`), the target `address`, and the underlying error.
-fn request_error(address: &str, stage: &str, error: &io::Error) -> QlResult {
-    QlResult::not_ok(&format!(
+fn request_error(address: &str, stage: &str, error: &io::Error) -> QnResult {
+    QnResult::not_ok(&format!(
         "core.net.@tcpRequest to {address} failed at {stage}: {error}"
     ))
 }
@@ -126,12 +126,12 @@ mod tests {
         // peer closes; a separate fiber FORCES the deferred value; the `Ok(responseBytes)` flows
         // back.
         use crate::deferred::{__force_result, RESULT_OK_TAG};
-        use crate::mem::QlSlice;
+        use crate::mem::QnSlice;
 
         // A zeroed `Result` out-parameter for the FFI calls to fill.
-        let blank = || QlResult {
+        let blank = || QnResult {
             tag: 0,
-            slot: QlSlice::empty(),
+            slot: QnSlice::empty(),
         };
 
         static GOT: Mutex<Vec<u8>> = Mutex::new(Vec::new());

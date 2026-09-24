@@ -18,8 +18,8 @@
 
 use super::{TcpListener, TcpStream, bytes_to_string, copy_bytes, resolve};
 use crate::deferred::{launch, launch_deferred_text, settle};
-use crate::mem::{QlSlice, alloc_text};
-use crate::report::{QlSite, RUNTIME_EXIT_CODE, codes, fail_at};
+use crate::mem::{QnSlice, alloc_text};
+use crate::report::{QnSite, RUNTIME_EXIT_CODE, codes, fail_at};
 use crate::scheduler::{current_fiber_id, sleep, spawn};
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
@@ -97,7 +97,7 @@ fn next_handle() -> u64 {
 /// -> i8` trampoline — codegen's fixed-shape wrapper (see
 /// `CodeGenerator::emit_tcp_serve_handler_thunk`) over the user's `(Connection) -> $`
 /// closure — called with `handler_env` as its second argument; `site` is null or points to
-/// a valid [`QlSite`].
+/// a valid [`QnSite`].
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
 #[unsafe(no_mangle)]
 pub extern "C" fn __tcp_serve_launch(
@@ -105,7 +105,7 @@ pub extern "C" fn __tcp_serve_launch(
     address_len: i64,
     handler_fn: *const c_void,
     handler_env: *mut c_void,
-    site: *const QlSite,
+    site: *const QnSite,
 ) -> f64 {
     let address = bytes_to_string(address_data, address_len);
     // SAFETY: per the contract, a live `(f64, ptr) -> i8` trampoline.
@@ -269,14 +269,14 @@ fn force_shutdown_connection(id: u64) {
 /// read error reads the same way, since `Text` carries no channel to report one and no
 /// per-connection failure is fatal on this layer.
 #[unsafe(no_mangle)]
-pub extern "C" fn __connection_read_launch(connection_id: f64) -> QlSlice {
+pub extern "C" fn __connection_read_launch(connection_id: f64) -> QnSlice {
     let id = connection_id as u64;
     launch_deferred_text(move || read_connection_once(id))
 }
 
 /// Read once from connection `id`'s stream, parking on readiness until data or EOF/an error
 /// arrives. `""` when the connection has already closed, at EOF, or on any read error.
-fn read_connection_once(id: u64) -> QlSlice {
+fn read_connection_once(id: u64) -> QnSlice {
     let Some(state) = CONNECTIONS.with(|connections| connections.borrow().get(&id).cloned()) else {
         return alloc_text(&[]);
     };
@@ -299,7 +299,7 @@ fn read_connection_once(id: u64) -> QlSlice {
 pub extern "C" fn __connection_read_with_timeout_launch(
     connection_id: f64,
     seconds: f64,
-) -> QlSlice {
+) -> QnSlice {
     let id = connection_id as u64;
     // `bounded_duration`, not a bare `Duration::from_secs_f64`: `seconds` is ordinary
     // Quilon arithmetic (`1.0 / 0.0` is infinity, not a language error), and that call
@@ -313,7 +313,7 @@ pub extern "C" fn __connection_read_with_timeout_launch(
 /// missing/already-closed connection (exactly as before), OR once `deadline` passes with
 /// nothing arriving — the four cases a `Text` result cannot tell apart, since none of
 /// them carries a channel to report which one happened.
-fn read_connection_once_with_deadline(id: u64, deadline: Instant) -> QlSlice {
+fn read_connection_once_with_deadline(id: u64, deadline: Instant) -> QnSlice {
     let Some(state) = CONNECTIONS.with(|connections| connections.borrow().get(&id).cloned()) else {
         return alloc_text(&[]);
     };
@@ -459,7 +459,7 @@ fn bound_address(server_id: f64) -> Option<SocketAddr> {
 
 /// `Server.address()`'s `host` half, rendered bare (`Address.text()` adds brackets).
 #[unsafe(no_mangle)]
-pub extern "C" fn __server_address_host(server_id: f64) -> QlSlice {
+pub extern "C" fn __server_address_host(server_id: f64) -> QnSlice {
     bound_address(server_id).map_or_else(
         || alloc_text(&[]),
         |a| alloc_text(a.ip().to_string().as_bytes()),

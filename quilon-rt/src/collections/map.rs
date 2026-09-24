@@ -5,9 +5,9 @@
 
 #![allow(clippy::not_unsafe_ptr_arg_deref)]
 
-use super::common::{FixedState, QlKey, TAG_TEXT, debug_check_user_key};
+use super::common::{FixedState, QnKey, TAG_TEXT, debug_check_user_key};
 use crate::mem::alloc_slots;
-use crate::mem::{QlSlice, alloc_text};
+use crate::mem::{QnSlice, alloc_text};
 use std::collections::HashMap;
 use std::os::raw::c_void;
 
@@ -15,7 +15,7 @@ use std::os::raw::c_void;
 /// collector anchors all three with one GC-allocated array (see [`refresh_snapshot`])
 /// instead of three arrays that must be rebuilt, and stay the same length, in lockstep.
 #[repr(C)]
-struct QlMapEntry {
+struct QnMapEntry {
     key_a: u64,
     key_b: u64,
     value: *const c_void,
@@ -23,20 +23,20 @@ struct QlMapEntry {
 
 /// GC-managed native map header. See the module docs for the GC-visibility contract.
 #[repr(C)]
-struct QlMap {
-    table: HashMap<QlKey, *const c_void, FixedState>,
-    snapshot: *const QlMapEntry,
+struct QnMap {
+    table: HashMap<QnKey, *const c_void, FixedState>,
+    snapshot: *const QnMapEntry,
     len: i64,
 }
 
 /// Move `table` into a fresh GC-allocated header, building the ordered snapshot (which
 /// also anchors every key's bytes and value box for the collector).
-unsafe fn build_map(table: HashMap<QlKey, *const c_void, FixedState>) -> *mut QlMap {
-    let header = alloc_slots::<QlMap>(1);
+unsafe fn build_map(table: HashMap<QnKey, *const c_void, FixedState>) -> *mut QnMap {
+    let header = alloc_slots::<QnMap>(1);
     unsafe {
         std::ptr::write(
             header,
-            QlMap {
+            QnMap {
                 table,
                 snapshot: std::ptr::null(),
                 len: 0,
@@ -50,15 +50,15 @@ unsafe fn build_map(table: HashMap<QlKey, *const c_void, FixedState>) -> *mut Ql
 /// Rebuild `header`'s ordered snapshot array and `len` from its current `table`. Called
 /// after every in-place mutation (`__map_set`/`__map_remove`) so `keys`/`values`/`each`
 /// keep seeing a consistent, freshly GC-anchored snapshot.
-unsafe fn refresh_snapshot(header: *mut QlMap) {
+unsafe fn refresh_snapshot(header: *mut QnMap) {
     let table = unsafe { &(*header).table };
     let n = table.len();
-    let snapshot = alloc_slots::<QlMapEntry>(n);
+    let snapshot = alloc_slots::<QnMapEntry>(n);
     for (i, (key, value)) in table.iter().enumerate() {
         unsafe {
             std::ptr::write(
                 snapshot.add(i),
-                QlMapEntry {
+                QnMapEntry {
                     key_a: key.a,
                     key_b: key.b,
                     value: *value,
@@ -95,14 +95,14 @@ pub(crate) fn build_text_map<'a>(pairs: impl Iterator<Item = (&'a [u8], &'a [u8]
     let mut table = HashMap::with_hasher(FixedState);
     for (key_bytes, value_bytes) in pairs {
         let key_text = alloc_text(key_bytes);
-        let key = QlKey::new(
+        let key = QnKey::new(
             TAG_TEXT as i64,
             key_text.data as i64,
             key_text.len,
             std::ptr::null(),
             std::ptr::null(),
         );
-        let value_box = alloc_slots::<QlSlice>(1);
+        let value_box = alloc_slots::<QnSlice>(1);
         unsafe { std::ptr::write(value_box, alloc_text(value_bytes)) };
         table.insert(key, value_box as *const c_void);
     }
@@ -124,8 +124,8 @@ pub extern "C" fn __map_set(
     eq_fn: *const c_void,
     value: *const c_void,
 ) -> *mut c_void {
-    let header = map as *mut QlMap;
-    let key = QlKey::new(tag, a, b, hash_fn, eq_fn);
+    let header = map as *mut QnMap;
+    let key = QnKey::new(tag, a, b, hash_fn, eq_fn);
     unsafe {
         debug_check_user_key((*header).table.keys(), &key);
         (*header).table.insert(key, value);
@@ -144,11 +144,11 @@ pub extern "C" fn __map_remove(
     hash_fn: *const c_void,
     eq_fn: *const c_void,
 ) -> *mut c_void {
-    let header = map as *mut QlMap;
+    let header = map as *mut QnMap;
     unsafe {
         (*header)
             .table
-            .remove(&QlKey::new(tag, a, b, hash_fn, eq_fn));
+            .remove(&QnKey::new(tag, a, b, hash_fn, eq_fn));
         refresh_snapshot(header);
     }
     header as *mut c_void
@@ -165,8 +165,8 @@ pub extern "C" fn __map_get(
     eq_fn: *const c_void,
     found_out: *mut i64,
 ) -> *const c_void {
-    let map = map as *const QlMap;
-    match unsafe { (*map).table.get(&QlKey::new(tag, a, b, hash_fn, eq_fn)) } {
+    let map = map as *const QnMap;
+    match unsafe { (*map).table.get(&QnKey::new(tag, a, b, hash_fn, eq_fn)) } {
         Some(value) => {
             unsafe { *found_out = 1 };
             *value
@@ -187,30 +187,30 @@ pub extern "C" fn __map_has(
     hash_fn: *const c_void,
     eq_fn: *const c_void,
 ) -> i64 {
-    let map = map as *const QlMap;
+    let map = map as *const QnMap;
     unsafe {
         (*map)
             .table
-            .contains_key(&QlKey::new(tag, a, b, hash_fn, eq_fn)) as i64
+            .contains_key(&QnKey::new(tag, a, b, hash_fn, eq_fn)) as i64
     }
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn __map_len(map: *const c_void) -> i64 {
-    unsafe { (*(map as *const QlMap)).len }
+    unsafe { (*(map as *const QnMap)).len }
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn __map_key_a(map: *const c_void, i: i64) -> i64 {
-    unsafe { (*(*(map as *const QlMap)).snapshot.add(i as usize)).key_a as i64 }
+    unsafe { (*(*(map as *const QnMap)).snapshot.add(i as usize)).key_a as i64 }
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn __map_key_b(map: *const c_void, i: i64) -> i64 {
-    unsafe { (*(*(map as *const QlMap)).snapshot.add(i as usize)).key_b as i64 }
+    unsafe { (*(*(map as *const QnMap)).snapshot.add(i as usize)).key_b as i64 }
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn __map_val(map: *const c_void, i: i64) -> *const c_void {
-    unsafe { (*(*(map as *const QlMap)).snapshot.add(i as usize)).value }
+    unsafe { (*(*(map as *const QnMap)).snapshot.add(i as usize)).value }
 }
