@@ -209,6 +209,9 @@ All notable changes to Quilon are documented here.
 
 ### Changed
 
+- **The error reference is now a folder split by family**, `docs/tooling/errors/`
+  (`README.md`, `syntax.md`, `modules.md`, `semantics.md`, `build.md`, `runtime.md`) in
+  place of the single `docs/tooling/errors.md`. No issue to close.
 - **The runtime's `Ql`-prefixed ABI types (`QlSlice`, `QlResult`, `QlSite`, `QlKey`,
   `QlSet`, `QlMap`, `QlSetEntry`, `QlMapEntry`) are renamed to `Qn*`.** Internal to
   `quilon-rt`; no behavior change. Closes #474.

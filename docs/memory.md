@@ -10,4 +10,4 @@ automatically. A compiled program runs on a machine with the operating system al
 Allocation is **checked**. An allocation the collector fails to satisfy, and an array whose
 element count times its element size is too large to represent, both stop the program with
 a message on stderr and exit status 5 — the contract of a bad `array[i]` (see
-[error messages](tooling/errors.md)).
+[error messages](tooling/errors/README.md)).

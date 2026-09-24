@@ -33,7 +33,7 @@ argument or environment entry containing a NUL byte is refused by `run`, exactly
 operating system refuses to start a native binary with one. Any other `^` signature (e.g.
 a non-`Text` array element, or an unexpected parameter) is a compile-time error, reported
 by `check` as well as `run`/`build`, and exits with its own code's family digit (see
-[Exit codes](../tooling/errors.md#exit-codes)); the convention below is for a program that ran.
+[Exit codes](../tooling/errors/README.md#exit-codes)); the convention below is for a program that ran.
 
 **Exit code:** when `^`'s body evaluates to a `Num`, that value becomes the exit code by
 converting it to a whole number, clamping it to the 32-bit signed range first, then letting
@@ -45,6 +45,6 @@ effect-only `main` ends without a trailing `0`. (The implicit 0 applies to `^`; 
 function returns its last expression's value.) A fail-loud runtime check — a failing
 `assert`, a bad `array[i]`, a broken pipe — bypasses this convention too, exiting 5
 regardless of what `^` would otherwise have returned (see [Exit
-codes](../tooling/errors.md#exit-codes)).
+codes](../tooling/errors/README.md#exit-codes)).
 
 (See `examples/hello_world.qn` and `examples/args.qn`.)
