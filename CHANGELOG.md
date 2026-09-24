@@ -6,6 +6,15 @@ All notable changes to Quilon are documented here.
 
 ### Added
 
+- **A dead top-level function is a compile error, not silently dropped.** A non-exported
+  top-level function that nothing reachable from `^` calls — or, in a module with no `^`
+  of its own, that none of the module's `>>`-exported functions call — is `QN352`:
+  `>>` is a module's only public surface, so the function has no way to ever run. A
+  function that only looks alive because an erased `test.describe`/`test.it` block
+  mentions it (`run`/`build`/`check` erase test blocks before compiling; only `quilon
+  test`'s synthesized `^` runs them) is `QN353` instead, which says why. See
+  `docs/tooling/errors.md` and `docs/functions/README.md`. Every example, doc sample, and
+  corelib file with a `^` now passes the new rule. Closes #475.
 - **`net.Server` gains `address() -> Address`**, the `host:port` a server bound — most
   useful after binding port `0`, which takes any free port the OS assigns, so a program
   can learn which one. `Address` carries `host :: Text` and `port :: Num`, plus `text()`

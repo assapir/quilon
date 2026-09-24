@@ -118,6 +118,11 @@ impl TypeChecker {
         // declaration checked first) — see `fiber_sharing`.
         self.check_fiber_sharing(program)?;
 
+        // Dead-code check runs last: it reads reachability the same way codegen's own
+        // tree-shaker does, over the program exactly as the rest of this pass has settled
+        // it (overload sets registered, every declaration's own checks already passed).
+        self.check_dead_functions(program)?;
+
         Ok(std::mem::take(&mut self.type_table))
     }
 

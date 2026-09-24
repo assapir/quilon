@@ -80,7 +80,7 @@ A function type may be a **parameter type**, which is what makes a function *hig
 apply = (f :: (Num) -> Num, x :: Num) -> Num => < f(x) >
 twice = (f :: (Num) -> Num, x :: Num) -> Num => < f(f(x)) >
 
-^ = () -> Num => < twice((n) => n * 2, 3) > ~ ((3*2)*2) = 12
+^ = () -> Num => < twice((n) => n * 2, apply((n) => n * 2, 3)) > ~ ((3*2)*2)*2 = 24
 ```
 
 The value passed in is a closure — a lambda literal (as above) or a named closure passed
@@ -132,3 +132,13 @@ g = (t :: Text) -> Text => < "b" >
 **Recursion between top-level functions is self-recursion**: a function calls itself, a
 recursive overload member included. A mutually recursive pair is written as one
 self-recursive function.
+
+A non-exported top-level function that nothing reachable from `^` calls — or, in a module
+with no `^` of its own, that none of the module's `>>`-exported functions call — is a
+compile error rather than silently dropped: `>>` is a module's only public surface, so an
+unreachable private function has no way to ever run (see
+[`docs/tooling/errors.md`](../tooling/errors.md#qn352--top-level-function-never-called)).
+A function `run`/`build`/`check` can only reach because an erased `test.describe` block
+mentions it is a narrower, separate error, since exercising a function nothing else calls
+proves nothing about the program (`errors.md`'s
+[QN353](../tooling/errors.md#qn353--top-level-function-reachable-only-from-test-blocks)).

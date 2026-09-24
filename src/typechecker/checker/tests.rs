@@ -229,17 +229,22 @@ fn test_result_parameter_disagreeing_callers_is_a_type_mismatch() {
 #[test]
 fn test_result_parameter_of_a_function_unreachable_from_the_entry_point_is_not_checked() {
     // `classify` is called nowhere reachable from `^` at all — codegen's own
-    // `reachable_functions` prunes it, so it is never emitted, and this pass skips it
-    // entirely rather than reporting a payload nothing will ever need a representation
-    // for.
-    assert!(
-        check_ok(
-            "classify = (result :: Result) -> Text => <\n  \
+    // `reachable_functions` prunes it, so it is never emitted, and this pass skips its
+    // payload entirely rather than reporting a shape nothing will ever need a
+    // representation for. The program is still rejected — a non-exported function
+    // nothing calls is dead code (`NeverReachable`) — but the skip means THAT is the
+    // error raised, not a spurious `UnresolvedResultPayload` for a payload the dead
+    // function never demonstrates.
+    let err = check_ok(
+        "classify = (result :: Result) -> Text => <\n  \
                result ? | Ok(text) => text | NotOk(_) => \"none\"\n\
              >\n\
-             ^ = () -> Num => < 0 >"
-        )
-        .is_ok()
+             ^ = () -> Num => < 0 >",
+    )
+    .unwrap_err();
+    assert!(
+        matches!(err, TypeError::NeverReachable { ref name, .. } if name == "classify"),
+        "expected `classify` reported as dead code, not a Result-payload error: {err:?}"
     );
 }
 
@@ -833,7 +838,11 @@ after = () -> Bool => <
   pick(5) ? | Ok(b) => b | NotOk(_) => false
 >
 
-^ = () -> Num => < 0 >
+^ = () -> Num => <
+  between()
+  after()
+  0
+>
 ";
     let tokens = Lexer::tokenize(src).unwrap();
     let program = parse(&tokens).unwrap();
@@ -1248,7 +1257,7 @@ fn test_overload_member_must_annotate_its_return_type() {
     // Annotating it is all the fix takes.
     assert!(
         check_ok(
-            "g = (n :: Num) -> Text => < \"a\" >\ng = (t :: Text) -> Text => < \"b\" >\nh = () -> Text => < g(1) >\n^ = () -> Num => < 0 >"
+            "g = (n :: Num) -> Text => < \"a\" >\ng = (t :: Text) -> Text => < \"b\" >\nh = () -> Text => < g(1) >\n^ = () -> Num => <\n  h()\n  0\n>"
         )
         .is_ok()
     );
@@ -1675,4 +1684,100 @@ fn test_http_serve_handler_writing_an_atomic_global_is_accepted() {
                  0\n\
                >";
     assert!(check_linked(src).is_ok());
+}
+
+// Dead-code (`checker::dead_functions`) tests: QN352 (never reachable) and QN353
+// (reachable only from test blocks), and the shapes that must NOT be reported.
+
+#[test]
+fn test_a_never_called_top_level_function_is_rejected() {
+    let err =
+        check_ok("sift = (n :: Num) -> Num => < n + 1 >\n^ = () -> Num => < 0 >").unwrap_err();
+    assert!(matches!(err, TypeError::NeverReachable { ref name, .. } if name == "sift"));
+}
+
+#[test]
+fn test_a_called_top_level_function_is_not_reported() {
+    assert!(
+        check_ok("sift = (n :: Num) -> Num => < n + 1 >\n^ = () -> Num => < sift(1) >").is_ok()
+    );
+}
+
+#[test]
+fn test_an_exported_top_level_function_is_never_reported_even_if_uncalled() {
+    // `>>` is a module's public surface: an importer elsewhere may call it, so it is
+    // never dead, however this program itself treats it.
+    assert!(check_ok(">> sift = (n :: Num) -> Num => < n + 1 >\n^ = () -> Num => < 0 >").is_ok());
+}
+
+#[test]
+fn test_a_module_with_no_entry_point_and_no_export_is_not_checked() {
+    // No `^` and no export: `ast::reachability::reachable_functions` returns `None`, the
+    // same signal codegen's own pruning reads as "keep everything, a later program may
+    // call any of it" — so a private helper nothing here calls is not reported.
+    assert!(check_ok("sift = (n :: Num) -> Num => < n + 1 >").is_ok());
+}
+
+#[test]
+fn test_a_module_with_no_entry_point_whose_export_calls_its_helper_is_accepted() {
+    assert!(
+        check_ok(
+            "sift = (n :: Num) -> Num => < n + 1 >\n\
+             >> grind = (n :: Num) -> Num => < sift(n) >"
+        )
+        .is_ok()
+    );
+}
+
+#[test]
+fn test_a_module_with_no_entry_point_whose_helper_nothing_calls_is_rejected() {
+    // No `^`, so the module's own `>>` exports are the only roots — `sift` is reachable
+    // from neither `grind` nor anything else, exactly as dead as it would be under a
+    // real entry point.
+    let err = check_ok(
+        ">> grind = (n :: Num) -> Num => < n * 2 >\nsift = (n :: Num) -> Num => < n + 1 >",
+    )
+    .unwrap_err();
+    assert!(matches!(err, TypeError::NeverReachable { ref name, .. } if name == "sift"));
+}
+
+#[test]
+fn test_a_function_reachable_only_from_a_test_block_is_reported_as_such() {
+    // `run`/`build`/`check` erase `test.describe` blocks before compiling — this is what
+    // that erasure leaves behind: `describe` looked alive on the page, but nothing
+    // `run`/`build`/`check` actually keeps calls it.
+    let src = "\
+<< core.test
+describe = (result :: Result) -> Text => <
+  result ? | Ok(text) => text | NotOk(_) => \"none\"
+>
+test.describe(\"describe\", () => <
+  test.it(\"ok\", () => < expect(describe(Ok(\"home\")), equals(\"home\")) >)
+>)
+^ = () -> Num => < 0 >
+";
+    let err = check_ok(src).unwrap_err();
+    assert!(
+        matches!(err, TypeError::ReachableOnlyFromTests { ref name, .. } if name == "describe")
+    );
+}
+
+#[test]
+fn test_a_method_calling_nothing_is_never_reported() {
+    // Only a top-level `FunctionDeclaration` is a dead-code candidate — a type's method
+    // rides along with its declaration (a root, per `ast::reachability`), never checked
+    // for reachability on its own.
+    assert!(
+        check_ok(
+            "Box = { size :: Num, unused = => < 0 > }\n^ = () -> Num => < Box { size = 1 }.size >"
+        )
+        .is_ok()
+    );
+}
+
+#[test]
+fn test_an_uncalled_top_level_binding_is_never_reported() {
+    // A top-level binding's value is always emitted (never pruned by codegen), and this
+    // check only ever looks at `FunctionDeclaration` items.
+    assert!(check_ok("unused = 5\n^ = () -> Num => < 0 >").is_ok());
 }

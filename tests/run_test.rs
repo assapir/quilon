@@ -823,8 +823,10 @@ fn a_name_rebound_in_an_inner_scope_is_not_still_the_outer_record() {
 fn a_top_level_function_named_like_a_mangled_method_is_not_that_method() {
     // Method dispatch asks what the type declares, not whether a symbol of the mangled
     // shape exists — otherwise a top-level `Counter_bump` answers `bump(c, 3)`. 5 + 3 = 8.
+    // `Counter_bump` is exported so it stands as a decoy nothing calls, without itself
+    // being dead code (QN352) — the point here is that it is inert, not absent.
     assert_exit(
-        "Counter = {\n  value :: Num\n}\nCounter_bump = (c :: Counter, n :: Num) -> Num => < 900 + n >\nbump = (c :: Counter, n :: Num) -> Num => < c.value + n >\n^ = () -> Num => <\n  c :: Counter = Counter { value = 5 }\n  bump(c, 3)\n>",
+        "Counter = {\n  value :: Num\n}\n>> Counter_bump = (c :: Counter, n :: Num) -> Num => < 900 + n >\nbump = (c :: Counter, n :: Num) -> Num => < c.value + n >\n^ = () -> Num => <\n  c :: Counter = Counter { value = 5 }\n  bump(c, 3)\n>",
         8,
     );
 }
@@ -1594,8 +1596,11 @@ fn run_nested_function_reusing_a_result_parameter_name_is_not_cross_contaminated
 }
 
 /// A function nothing reachable from `^` calls is never emitted (codegen's own
-/// `ast::reachability::reachable_functions`), so this pass skips it entirely rather
-/// than reporting a payload nothing will ever need a representation for.
+/// `ast::reachability::reachable_functions`), so the Result-payload pass skips its
+/// payload entirely rather than reporting a shape nothing will ever need a
+/// representation for. The program is still rejected — a non-exported function nothing
+/// calls is dead code (QN352, `typechecker::checker::dead_functions`) — but that is the
+/// error raised, not a spurious payload complaint about a function that never runs.
 #[test]
 fn run_result_parameter_of_a_function_unreachable_from_the_entry_point_is_not_checked() {
     let src = r#"
@@ -1604,7 +1609,7 @@ fn run_result_parameter_of_a_function_unreachable_from_the_entry_point_is_not_ch
         >
         ^ = () -> Num => < 0 >
     "#;
-    assert_exit(src, 0);
+    assert_type_error_code(src, Code::NeverReachable);
 }
 
 /// A bare `:: Result` parameter called with only ONE variant (here, only `Ok`) still
@@ -1803,12 +1808,14 @@ fn aot_result_parameter_of_an_overloaded_function_is_pinned_from_its_call_site()
 
 /// A function nothing reachable from `^` calls — here, a top-level function only ever
 /// called from inside a `test.describe`/`test.it` block, which `run`/`check`/`build`
-/// erase entirely — is never checked for an unresolved payload, matching codegen's own
-/// `ast::reachability::reachable_functions`, which never emits it either. Passes under
+/// erase entirely — is `ReachableOnlyFromTests` (QN353,
+/// `typechecker::checker::dead_functions`): it looked alive on the page, but nothing
+/// `quilon run` actually keeps calls it, and codegen's own
+/// `ast::reachability::reachable_functions` would never emit it either. Fails under
 /// `quilon run` (this test) and `quilon check`; see
 /// `test_command_runs_a_program_whose_helper_is_only_reachable_from_its_own_test_block`
-/// for the same program under `quilon test`, where the synthesized `^` DOES reach it and
-/// its bound-and-read `Ok` IS pinned from the `test.it` call.
+/// for the same program under `quilon test`, where the synthesized `^` DOES reach it, so
+/// neither this error nor the payload question it would otherwise raise ever fires.
 #[test]
 fn run_program_whose_only_result_parameter_caller_is_inside_an_erased_test_block() {
     let src = r#"
@@ -1821,15 +1828,15 @@ fn run_program_whose_only_result_parameter_caller_is_inside_an_erased_test_block
         >)
         ^ = () -> Num => < 0 >
     "#;
-    assert_exit(src, 0);
+    assert_type_error_code(src, Code::ReachableOnlyFromTests);
 }
 
 /// The same program as
 /// `run_program_whose_only_result_parameter_caller_is_inside_an_erased_test_block`, run
 /// through the REAL `quilon test` command (not the JIT harness above, which erases
 /// `test.describe` blocks the way `run`/`check`/`build` do) — the synthesized `^` this
-/// command builds DOES call `describe`, pinning its `Ok` from that call the same way any
-/// other reachable caller would.
+/// command builds DOES call `describe`, so it is not dead code (QN353), and its
+/// bound-and-read `Ok` IS pinned from the `test.it` call.
 #[test]
 fn test_command_runs_a_program_whose_helper_is_only_reachable_from_its_own_test_block() {
     let quilon = std::path::PathBuf::from(env!("CARGO_BIN_EXE_quilon"));

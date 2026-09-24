@@ -28,31 +28,51 @@ use super::nodes::{
 use std::collections::{HashMap, HashSet};
 
 /// The names of every top-level function that program execution could reach, starting from
-/// the `^` entry point.
+/// the `^` entry point plus every `>>`-exported top-level function OF THE PROGRAM'S OWN
+/// FILES — a module's public surface is reachable by definition, whether or not this
+/// program happens to call it itself, since an importer elsewhere might.
 ///
-/// `None` means "prune nothing": a program with no `^` is a module being compiled on its
-/// own, where there is no entry point to be reachable from and every function is something
-/// a later program might call.
+/// A corelib module's own exports (`from_corelib`) do NOT seed this on their own: a
+/// linked program carries the whole of every corelib module one of its calls pulled in
+/// (`core.text`'s composables, `core.test`'s harness, …), and the corelib's `>>` there
+/// marks what a PROGRAM may reach through it, not "always emit this" — a corelib function
+/// nothing reachable actually calls stays pruned exactly as before, so pulling in one
+/// composable Text method does not drag in the rest of `core.text` (or, transitively,
+/// `core.test`'s harness, which `core.text`'s own suite imports) along with it.
+///
+/// `None` means "prune nothing": with no `^` and no export of the program's own, nothing
+/// here is reachable from anything this analysis can see, which for a module compiled on
+/// its own (no public surface at all yet) means every function is something a later
+/// program might still call, not that all of it is dead.
 pub fn reachable_functions(program: &Program) -> Option<HashSet<&str>> {
-    if !program.items.iter().any(
+    let mut pending: Vec<&str> = Vec::new();
+    let mut has_root = false;
+    if program.items.iter().any(
         |item| matches!(item, Item::FunctionDeclaration(declaration) if declaration.name == "^"),
     ) {
-        return None;
+        pending.push("^");
+        has_root = true;
     }
 
-    // One pass over the items collects both halves of the problem: the roots — `^` plus
-    // everything emitted unconditionally, which is every top-level binding's value and every
-    // method body — and an index of function bodies by name. The index matters: looking a
-    // name up by walking the item list would make the analysis quadratic in the number of
-    // functions, costing more on a large program than the emission it saves.
-    let mut pending: Vec<&str> = vec!["^"];
+    // One pass over the items collects both halves of the problem: the roots — `^`, every
+    // export of the program's own, and everything emitted unconditionally, which is every
+    // top-level binding's value and every method body — and an index of function bodies by
+    // name. The index matters: looking a name up by walking the item list would make the
+    // analysis quadratic in the number of functions, costing more on a large program than
+    // the emission it saves.
     let mut defined: HashMap<&str, Vec<&Expression>> = HashMap::new();
     for item in &program.items {
         match item {
-            Item::FunctionDeclaration(declaration) => defined
-                .entry(declaration.name.as_str())
-                .or_default()
-                .push(&declaration.body),
+            Item::FunctionDeclaration(declaration) => {
+                if declaration.exported && !declaration.from_corelib {
+                    pending.push(declaration.name.as_str());
+                    has_root = true;
+                }
+                defined
+                    .entry(declaration.name.as_str())
+                    .or_default()
+                    .push(&declaration.body);
+            }
             Item::VariableDeclaration(declaration) => mentions(&declaration.value, &mut pending),
             Item::TypeDeclaration(declaration) => {
                 for method in declaration.type_definition.methods() {
@@ -60,6 +80,10 @@ pub fn reachable_functions(program: &Program) -> Option<HashSet<&str>> {
                 }
             }
         }
+    }
+
+    if !has_root {
+        return None;
     }
 
     let mut reached: HashSet<&str> = HashSet::new();
@@ -75,6 +99,20 @@ pub fn reachable_functions(program: &Program) -> Option<HashSet<&str>> {
         }
     }
     Some(reached)
+}
+
+/// The names mentioned anywhere in `expressions` — the same over-approximate walk
+/// [`reachable_functions`] uses, without treating any of them as a root or following them
+/// transitively. `run`/`build`/`check` erase a program's `test.describe` blocks before
+/// compiling it (only `quilon test`'s synthesized `^` runs them — see `driver.rs`), so a
+/// name only these blocks mention is not itself alive; the checker's dead-function check
+/// reads this to tell that case apart from a function nothing anywhere reaches.
+pub fn names_mentioned(expressions: &[Expression]) -> HashSet<&str> {
+    let mut pending = Vec::new();
+    for expression in expressions {
+        mentions(expression, &mut pending);
+    }
+    pending.into_iter().collect()
 }
 
 /// Push every name `expression` mentions onto `out`: identifiers, the symbols of the operators it

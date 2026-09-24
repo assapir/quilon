@@ -15,6 +15,7 @@ use crate::lexer::Span;
 mod aliasing;
 mod assertions;
 mod calls;
+mod dead_functions;
 mod declarations;
 mod env;
 mod errors;
@@ -412,6 +413,23 @@ pub enum TypeError {
         function: String,
         parameter: String,
         variant: String,
+        span: Span,
+    },
+    /// A non-exported top-level function that nothing reachable from `^` — or, in a module
+    /// with no `^`, from anything the module exports — calls. `>>` is a module's only
+    /// public surface, so an unexported name nothing reaches is dead by construction. See
+    /// `checker::dead_functions`.
+    NeverReachable {
+        name: String,
+        span: Span,
+    },
+    /// A [`TypeError::NeverReachable`] candidate that a `test.describe` block mentions.
+    /// `run`/`build`/`check` erase those blocks before compiling, so what kept this
+    /// function looking alive on the page does not keep it alive in the build — under
+    /// `quilon test` the synthesized `^` reaches it instead, and this never fires. See
+    /// `checker::dead_functions`.
+    ReachableOnlyFromTests {
+        name: String,
         span: Span,
     },
 }
