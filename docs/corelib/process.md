@@ -31,8 +31,8 @@ a `Signal` sum, nothing else.
 | `UserDefined2(Sender)` | `SIGUSR2` |
 
 A trap's arms match `Signal` by these bare names — `Interrupt`, `Terminate`, and so on —
-the way `Ok`/`NotOk` resolve for a `Result`, rather than through the qualified
-`process.Interrupt` spelling an ordinary match on a `Signal` value would need. See the
+the way `Ok`/`NotOk` resolve for a `Result`; an ordinary match on a `Signal` value takes
+the qualified `process.Interrupt` spelling instead. See the
 [signal trap](../concurrency/README.md#signal-trap) section for the trap itself.
 
 `SIGKILL` and `SIGSTOP` end a process without ever reaching it, on every OS that has them,
@@ -40,6 +40,6 @@ so neither is a `Signal` variant. `SIGPIPE` — the default a write to a peer th
 its end raises — is left ignored by the runtime, so a socket write past a closed peer is a
 `Result`/`NotOk` a program matches, not a signal it would otherwise need to catch. A fault
 (`SIGSEGV`, `SIGBUS`, `SIGFPE`, `SIGILL`) reports a runtime diagnostic (see
-[`docs/tooling/errors/runtime.md`](../tooling/errors/runtime.md)) rather than reaching a
-trap's arms — a program's own logic cannot meaningfully resume from one, so there is
-nothing a caught value would let it do.
+[`docs/tooling/errors/runtime.md`](../tooling/errors/runtime.md)) directly, its own report
+the only thing there is for it: a program's own logic has no state left to meaningfully
+resume from one.
