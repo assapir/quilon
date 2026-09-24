@@ -10,15 +10,15 @@
 //! All are UTF-8 correct and grapheme-based where an index/length is
 //! user-visible (matching `Text.length`). A `Text` argument arrives as
 //! `(ptr, len)`; a `Text` / `[]Text` result is returned as a GC-allocated
-//! `QlSlice` so it outlives this call and is collected like any heap value. See
+//! `QnSlice` so it outlives this call and is collected like any heap value. See
 //! `CodeGenerator::get_intrinsic` for the matching prototypes.
 
 use crate::mem::{
-    GRAPHEME_MERGE_FLOOR, QlSlice, TEXT_HEADER_BYTES, alloc_slots, alloc_text, alloc_text_buffer,
+    GRAPHEME_MERGE_FLOOR, QnSlice, TEXT_HEADER_BYTES, alloc_slots, alloc_text, alloc_text_buffer,
     alloc_text_with_count, format_num, inherited_flags, text_header_of, text_is_ascii,
     text_is_valid_utf8, text_no_bidi_controls,
 };
-use crate::report::{QlSite, RUNTIME_EXIT_CODE, codes, fail_at};
+use crate::report::{QnSite, RUNTIME_EXIT_CODE, codes, fail_at};
 use std::os::raw::c_void;
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -26,7 +26,7 @@ use unicode_segmentation::UnicodeSegmentation;
 /// render path for string interpolation and `print`). Whole values render without a
 /// fractional part (`5`, not `5.0`); other values use the shortest round-trip form.
 #[unsafe(no_mangle)]
-pub extern "C" fn __num_to_text(x: f64) -> QlSlice {
+pub extern "C" fn __num_to_text(x: f64) -> QnSlice {
     alloc_text(format_num(x).as_bytes())
 }
 
@@ -34,7 +34,7 @@ pub extern "C" fn __num_to_text(x: f64) -> QlSlice {
 /// `False`, capitalized — deliberately distinct from the lowercase `true`/`false`
 /// literals. `b` is the bool zero-extended to an integer (0 = false).
 #[unsafe(no_mangle)]
-pub extern "C" fn __bool_to_text(b: i64) -> QlSlice {
+pub extern "C" fn __bool_to_text(b: i64) -> QnSlice {
     alloc_text(if b != 0 { b"True" } else { b"False" })
 }
 
@@ -93,28 +93,28 @@ pub(crate) fn text_str<'a>(ptr: *const u8, len: i64) -> std::borrow::Cow<'a, str
 /// composes the two walks in `core.text`, so it needs no own intrinsic.)
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
 #[unsafe(no_mangle)]
-pub extern "C" fn __text_trim_start(ptr: *const u8, len: i64) -> QlSlice {
+pub extern "C" fn __text_trim_start(ptr: *const u8, len: i64) -> QnSlice {
     alloc_text(text_str(ptr, len).trim_start().as_bytes())
 }
 
 /// Strip trailing-only (Unicode) whitespace. Backs `Text.trimEnd()`.
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
 #[unsafe(no_mangle)]
-pub extern "C" fn __text_trim_end(ptr: *const u8, len: i64) -> QlSlice {
+pub extern "C" fn __text_trim_end(ptr: *const u8, len: i64) -> QnSlice {
     alloc_text(text_str(ptr, len).trim_end().as_bytes())
 }
 
 /// Unicode-aware uppercase. Backs `Text.toUpper()`.
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
 #[unsafe(no_mangle)]
-pub extern "C" fn __text_to_upper(ptr: *const u8, len: i64) -> QlSlice {
+pub extern "C" fn __text_to_upper(ptr: *const u8, len: i64) -> QnSlice {
     alloc_text(text_str(ptr, len).to_uppercase().as_bytes())
 }
 
 /// Unicode-aware lowercase. Backs `Text.toLower()`.
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
 #[unsafe(no_mangle)]
-pub extern "C" fn __text_to_lower(ptr: *const u8, len: i64) -> QlSlice {
+pub extern "C" fn __text_to_lower(ptr: *const u8, len: i64) -> QnSlice {
     alloc_text(text_str(ptr, len).to_lowercase().as_bytes())
 }
 
@@ -188,13 +188,13 @@ pub extern "C" fn __text_index_of_from(
 /// whole call is a byte-range copy with no grapheme walk.
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
 #[unsafe(no_mangle)]
-pub extern "C" fn __text_slice(ptr: *const u8, len: i64, start: i64, end: i64) -> QlSlice {
+pub extern "C" fn __text_slice(ptr: *const u8, len: i64, start: i64, end: i64) -> QnSlice {
     let (_, flags) = text_header_of(ptr);
     if text_is_ascii(flags) {
         let clamp = |i: i64| i.clamp(0, len);
         let (lo, hi) = (clamp(start), clamp(end));
         if hi <= lo {
-            return QlSlice::empty();
+            return QnSlice::empty();
         }
         let bytes = byte_slice(ptr, len);
         return alloc_text_with_count(&bytes[lo as usize..hi as usize], hi - lo);
@@ -208,25 +208,25 @@ pub extern "C" fn __text_slice(ptr: *const u8, len: i64, start: i64, end: i64) -
     let clamp = |i: i64| i.clamp(0, n) as usize;
     let (lo, hi) = (clamp(start), clamp(end));
     if hi <= lo {
-        return QlSlice::empty();
+        return QnSlice::empty();
     }
     alloc_text_with_count(s[bounds[lo]..bounds[hi]].as_bytes(), (hi - lo) as i64)
 }
 
-/// Build a `[]Text` (a `QlSlice` over `parts.len()` contiguous `Text` structs — the
+/// Build a `[]Text` (a `QnSlice` over `parts.len()` contiguous `Text` structs — the
 /// layout codegen loads) with one length-`parts[i].len()` `Text` per slice, each
 /// GC-allocated. Shared by every native primitive that answers with an array of pieces
 /// (`graphemes`, `split`).
-fn text_array(parts: &[&str]) -> QlSlice {
+fn text_array(parts: &[&str]) -> QnSlice {
     if parts.is_empty() {
-        return QlSlice::empty();
+        return QnSlice::empty();
     }
-    let elems = alloc_slots::<QlSlice>(parts.len());
+    let elems = alloc_slots::<QnSlice>(parts.len());
     for (i, part) in parts.iter().enumerate() {
-        // SAFETY: `elems` has room for `parts.len()` `QlSlice`s and `i < parts.len()`.
+        // SAFETY: `elems` has room for `parts.len()` `QnSlice`s and `i < parts.len()`.
         unsafe { std::ptr::write(elems.add(i), alloc_text(part.as_bytes())) };
     }
-    QlSlice {
+    QnSlice {
         data: elems as *const c_void,
         len: parts.len() as i64,
     }
@@ -238,7 +238,7 @@ fn text_array(parts: &[&str]) -> QlSlice {
 /// empty text has no graphemes: `[]`.
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
 #[unsafe(no_mangle)]
-pub extern "C" fn __text_graphemes(ptr: *const u8, len: i64) -> QlSlice {
+pub extern "C" fn __text_graphemes(ptr: *const u8, len: i64) -> QnSlice {
     let s = text_str(ptr, len);
     let parts: Vec<&str> = s.graphemes(true).collect();
     text_array(&parts)
@@ -249,14 +249,14 @@ pub extern "C" fn __text_graphemes(ptr: *const u8, len: i64) -> QlSlice {
 /// `Text.at(index)`. On an ASCII-aligned receiver, `index` is its own byte offset.
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
 #[unsafe(no_mangle)]
-pub extern "C" fn __text_at(ptr: *const u8, len: i64, index: i64) -> QlSlice {
+pub extern "C" fn __text_at(ptr: *const u8, len: i64, index: i64) -> QnSlice {
     if index < 0 {
-        return QlSlice::empty();
+        return QnSlice::empty();
     }
     let (_, flags) = text_header_of(ptr);
     if text_is_ascii(flags) {
         if index >= len {
-            return QlSlice::empty();
+            return QnSlice::empty();
         }
         let bytes = byte_slice(ptr, len);
         return alloc_text_with_count(&bytes[index as usize..index as usize + 1], 1);
@@ -264,7 +264,7 @@ pub extern "C" fn __text_at(ptr: *const u8, len: i64, index: i64) -> QlSlice {
     let s = text_str(ptr, len);
     match s.graphemes(true).nth(index as usize) {
         Some(grapheme) => alloc_text_with_count(grapheme.as_bytes(), 1),
-        None => QlSlice::empty(),
+        None => QnSlice::empty(),
     }
 }
 
@@ -281,7 +281,7 @@ pub extern "C" fn __text_at(ptr: *const u8, len: i64, index: i64) -> QlSlice {
 /// `hptr`/`sptr` are null or point to at least `hlen`/`slen` readable bytes.
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
 #[unsafe(no_mangle)]
-pub extern "C" fn __text_split(hptr: *const u8, hlen: i64, sptr: *const u8, slen: i64) -> QlSlice {
+pub extern "C" fn __text_split(hptr: *const u8, hlen: i64, sptr: *const u8, slen: i64) -> QnSlice {
     let sep = text_str(sptr, slen);
     if sep.is_empty() {
         return __text_graphemes(hptr, hlen);
@@ -302,7 +302,7 @@ pub extern "C" fn __text_split(hptr: *const u8, hlen: i64, sptr: *const u8, slen
 ///
 /// # Safety contract (upheld by the compiler)
 /// `hptr`/`fptr`/`tptr` are null or point to at least `hlen`/`flen`/`tlen` readable
-/// bytes; `site` is null or points to a valid [`QlSite`].
+/// bytes; `site` is null or points to a valid [`QnSite`].
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
 #[unsafe(no_mangle)]
 pub extern "C" fn __text_replace_all(
@@ -312,8 +312,8 @@ pub extern "C" fn __text_replace_all(
     flen: i64,
     tptr: *const u8,
     tlen: i64,
-    site: *const QlSite,
-) -> QlSlice {
+    site: *const QnSite,
+) -> QnSlice {
     let from = text_str(fptr, flen);
     if from.is_empty() {
         fail_at(
@@ -332,7 +332,7 @@ pub extern "C" fn __text_replace_all(
 /// `hay`, replaced by `to`, left to right; `count` truncates toward zero. `Err` names the
 /// runtime code and message for an ill-defined request — an empty `from`, a `count` that
 /// truncates to less than 1, or a `count` past the occurrences `from` actually has (no
-/// clamp, no no-op) — split out so the three failures are testable without a `QlSite` or
+/// clamp, no no-op) — split out so the three failures are testable without a `QnSite` or
 /// `fail_at`'s process exit.
 fn replace_text(hay: &str, from: &str, to: &str, count: f64) -> Result<String, (u16, String)> {
     if from.is_empty() {
@@ -368,7 +368,7 @@ fn replace_text(hay: &str, from: &str, to: &str, count: f64) -> Result<String, (
 ///
 /// # Safety contract (upheld by the compiler)
 /// `hptr`/`fptr`/`tptr` are null or point to at least `hlen`/`flen`/`tlen` readable
-/// bytes; `site` is null or points to a valid [`QlSite`].
+/// bytes; `site` is null or points to a valid [`QnSite`].
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
 #[unsafe(no_mangle)]
 pub extern "C" fn __text_replace(
@@ -379,8 +379,8 @@ pub extern "C" fn __text_replace(
     tptr: *const u8,
     tlen: i64,
     count: f64,
-    site: *const QlSite,
-) -> QlSlice {
+    site: *const QnSite,
+) -> QnSlice {
     let (hay, from, to) = (
         text_str(hptr, hlen),
         text_str(fptr, flen),
@@ -463,10 +463,10 @@ fn concat_header(
 /// allocation either way, filled by two direct copies (no intermediate buffer).
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
 #[unsafe(no_mangle)]
-pub extern "C" fn __text_concat(lptr: *const u8, llen: i64, rptr: *const u8, rlen: i64) -> QlSlice {
+pub extern "C" fn __text_concat(lptr: *const u8, llen: i64, rptr: *const u8, rlen: i64) -> QnSlice {
     let total = llen.max(0) + rlen.max(0);
     if total <= 0 {
-        return QlSlice::empty();
+        return QnSlice::empty();
     }
     let (l_count, l_flags) = text_header_of(lptr);
     let (r_count, r_flags) = text_header_of(rptr);
@@ -498,7 +498,7 @@ pub extern "C" fn __text_concat(lptr: *const u8, llen: i64, rptr: *const u8, rle
 /// the same seam a chain of `+` would see at each junction. Only reached when at least one
 /// piece or the separator is not ASCII-aligned (`__text_join`'s own fast path otherwise).
 fn join_count_with_seams(
-    parts: &[QlSlice],
+    parts: &[QnSlice],
     sep_ptr: *const u8,
     sep_len: i64,
     sep_count: i64,
@@ -566,13 +566,13 @@ pub extern "C" fn __text_join(
     parts_len: i64,
     sep_ptr: *const u8,
     sep_len: i64,
-) -> QlSlice {
+) -> QnSlice {
     if parts_ptr.is_null() || parts_len <= 0 {
-        return QlSlice::empty();
+        return QnSlice::empty();
     }
     // SAFETY: upheld by the caller (see the contract above).
     let parts =
-        unsafe { std::slice::from_raw_parts(parts_ptr as *const QlSlice, parts_len as usize) };
+        unsafe { std::slice::from_raw_parts(parts_ptr as *const QnSlice, parts_len as usize) };
     let sep_bytes = byte_slice(sep_ptr, sep_len);
     let (sep_count, sep_flags) = text_header_of(sep_ptr);
     let sep_ascii = sep_bytes.is_empty() || text_is_ascii(sep_flags);
@@ -895,7 +895,7 @@ mod tests {
     /// The byte right after a `Text` result's content — where every producer must have
     /// written a NUL explicitly now that the atomic allocator backing it does not zero
     /// fresh memory for free.
-    fn trailing_byte(t: QlSlice) -> u8 {
+    fn trailing_byte(t: QnSlice) -> u8 {
         let content = t.data as *const u8;
         unsafe { *content.add(TEXT_HEADER_BYTES as usize + t.len as usize) }
     }
@@ -917,11 +917,11 @@ mod tests {
 
         let (sep_p, sep_l) = text_of(",");
         let parts = [
-            QlSlice {
+            QnSlice {
                 data: ap as *const c_void,
                 len: al,
             },
-            QlSlice {
+            QnSlice {
                 data: bp as *const c_void,
                 len: bl,
             },
@@ -1066,11 +1066,11 @@ mod tests {
         let (ep, el) = text_of("e");
         let (mp, ml) = text_of("\u{0301}");
         let parts = [
-            QlSlice {
+            QnSlice {
                 data: ep as *const c_void,
                 len: el,
             },
-            QlSlice {
+            QnSlice {
                 data: mp as *const c_void,
                 len: ml,
             },
@@ -1109,7 +1109,7 @@ mod tests {
         let (comma_p, comma_l) = text_of(",");
         let parts = __text_split(hp, hl, comma_p, comma_l);
         let elems =
-            unsafe { std::slice::from_raw_parts(parts.data as *const QlSlice, parts.len as usize) };
+            unsafe { std::slice::from_raw_parts(parts.data as *const QnSlice, parts.len as usize) };
         assert_eq!(
             header_bits(elems[0].data as *const u8),
             (5, false, true, true)
@@ -1143,11 +1143,11 @@ mod tests {
         let (ap, al) = text_of("ab");
         let (ep, el) = text_of("é");
         let parts = [
-            QlSlice {
+            QnSlice {
                 data: ap as *const c_void,
                 len: al,
             },
-            QlSlice {
+            QnSlice {
                 data: ep as *const c_void,
                 len: el,
             },
@@ -1166,7 +1166,7 @@ mod tests {
         );
         assert_eq!(unsafe { slice_str(joined) }, "ab,é");
 
-        let empty: [QlSlice; 0] = [];
+        let empty: [QnSlice; 0] = [];
         let empty_join = __text_join(empty.as_ptr() as *const c_void, 0, sep_p, sep_l);
         assert!(empty_join.data.is_null());
     }

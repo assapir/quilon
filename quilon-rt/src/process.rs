@@ -5,7 +5,7 @@
 //! startup conversions that turn the C `argv`/`envp` `main` receives into a Quilon
 //! `[]Text` (args) and a `[|Text => Text|]` Map (env).
 
-use crate::mem::{QlSlice, alloc_slots, alloc_text};
+use crate::mem::{QnSlice, alloc_slots, alloc_text};
 use std::ffi::CStr;
 use std::os::raw::{c_char, c_int, c_void};
 
@@ -44,7 +44,7 @@ pub extern "C" fn __exit(code: c_int) -> ! {
 /// `Text` per argument (including `argv[0]`, the program name), in order. Backs an `^`
 /// entry point that declares `args :: []Text`.
 ///
-/// Returns the array as a `{ ptr, i64 }` `QlSlice` whose `data` points to `argc`
+/// Returns the array as a `{ ptr, i64 }` `QnSlice` whose `data` points to `argc`
 /// contiguous `Text` structs — exactly the layout codegen loads for a `[]Text` value.
 ///
 /// # Safety contract (upheld by the C runtime / `main`)
@@ -54,13 +54,13 @@ pub extern "C" fn __exit(code: c_int) -> ! {
 // intentional (the contract is upheld by the compiler emitting the call).
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
 #[unsafe(no_mangle)]
-pub extern "C" fn __argv_to_text_array(argc: i64, argv: *const *const c_char) -> QlSlice {
+pub extern "C" fn __argv_to_text_array(argc: i64, argv: *const *const c_char) -> QnSlice {
     if argv.is_null() || argc <= 0 {
-        return QlSlice::empty();
+        return QnSlice::empty();
     }
     let n = argc as usize;
     // Allocate the backing array of `n` Text structs (GC-owned).
-    let elems = alloc_slots::<QlSlice>(n);
+    let elems = alloc_slots::<QnSlice>(n);
     for i in 0..n {
         // SAFETY: `argv[0..argc]` are valid C strings per the `main` contract.
         let cstr = unsafe { *argv.add(i) };
@@ -68,7 +68,7 @@ pub extern "C" fn __argv_to_text_array(argc: i64, argv: *const *const c_char) ->
         let text = alloc_text(&bytes);
         unsafe { std::ptr::write(elems.add(i), text) };
     }
-    QlSlice {
+    QnSlice {
         data: elems as *const c_void,
         len: argc,
     }

@@ -11,7 +11,7 @@
 //! `readBody` knows when to stop reading. Head parsing (status/request line, headers)
 //! stays Quilon either way.
 
-use crate::deferred::QlResult;
+use crate::deferred::QnResult;
 
 /// The four spellings of a blank line `Response.blankLine()` measures on the SAME bytes,
 /// earliest match wins.
@@ -134,31 +134,31 @@ fn frame_body(
     bodiless: bool,
     transfer_encoding: &str,
     content_length: &str,
-) -> QlResult {
+) -> QnResult {
     let Some((at, spelling_len)) = find_blank_line(raw) else {
-        return QlResult::ok(&[]);
+        return QnResult::ok(&[]);
     };
     let body = &raw[at + spelling_len..];
     if bodiless {
-        return QlResult::ok(&[]);
+        return QnResult::ok(&[]);
     }
     if is_chunked(transfer_encoding) {
         return match dechunk(body) {
-            Ok(decoded) => QlResult::ok(&decoded),
-            Err(reason) => QlResult::not_ok(reason),
+            Ok(decoded) => QnResult::ok(&decoded),
+            Err(reason) => QnResult::not_ok(reason),
         };
     }
     if !content_length.is_empty() {
         return match content_length.trim().parse::<usize>() {
-            Ok(expected) if body.len() >= expected => QlResult::ok(&body[..expected]),
-            Ok(expected) => QlResult::not_ok(&format!(
+            Ok(expected) if body.len() >= expected => QnResult::ok(&body[..expected]),
+            Ok(expected) => QnResult::not_ok(&format!(
                 "truncated body: expected {expected} bytes, got {}",
                 body.len()
             )),
-            Err(_) => QlResult::not_ok("malformed Content-Length"),
+            Err(_) => QnResult::not_ok("malformed Content-Length"),
         };
     }
-    QlResult::ok(body)
+    QnResult::ok(body)
 }
 
 /// The framing rule `core.http`'s connection handler applies to a REQUEST body still being
@@ -204,13 +204,13 @@ fn body_progress(
 /// here.
 ///
 /// # Safety contract (upheld by the compiler)
-/// `out` points to writable storage for one [`QlResult`]; each `(*_data, *_len)` pair is
+/// `out` points to writable storage for one [`QnResult`]; each `(*_data, *_len)` pair is
 /// null with a non-positive length, or points to `*_len` readable bytes for this call (the
 /// `Text` arguments' live bytes at the call site).
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
 #[unsafe(no_mangle)]
 pub extern "C" fn __http_body_progress(
-    out: *mut QlResult,
+    out: *mut QnResult,
     raw_data: *const u8,
     raw_len: i64,
     transfer_encoding_data: *const u8,
@@ -226,12 +226,12 @@ pub extern "C" fn __http_body_progress(
     // `core.io.@streamFile`'s own chunk size takes (`quilon-rt/src/io.rs`).
     let max_body_size = max_body_size as usize;
     let result = match body_progress(raw, &transfer_encoding, &content_length, max_body_size) {
-        BodyProgress::Complete(bytes) => QlResult::ok(&bytes),
-        BodyProgress::Incomplete => QlResult::not_ok("incomplete"),
-        BodyProgress::TooLarge => QlResult::not_ok("too large"),
-        BodyProgress::Malformed(reason) => QlResult::not_ok(reason),
+        BodyProgress::Complete(bytes) => QnResult::ok(&bytes),
+        BodyProgress::Incomplete => QnResult::not_ok("incomplete"),
+        BodyProgress::TooLarge => QnResult::not_ok("too large"),
+        BodyProgress::Malformed(reason) => QnResult::not_ok(reason),
     };
-    // SAFETY: `out` is writable storage for one `QlResult` (the code generator's alloca).
+    // SAFETY: `out` is writable storage for one `QnResult` (the code generator's alloca).
     unsafe { *out = result };
 }
 
@@ -242,13 +242,13 @@ pub extern "C" fn __http_body_progress(
 /// machinery `launch`/`force` share.
 ///
 /// # Safety contract (upheld by the compiler)
-/// `out` points to writable storage for one [`QlResult`]; each `(*_data, *_len)` pair is
+/// `out` points to writable storage for one [`QnResult`]; each `(*_data, *_len)` pair is
 /// null with a non-positive length, or points to `*_len` readable bytes for this call (the
 /// `Text` arguments' live bytes at the call site).
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
 #[unsafe(no_mangle)]
 pub extern "C" fn __http_frame_body(
-    out: *mut QlResult,
+    out: *mut QnResult,
     raw_data: *const u8,
     raw_len: i64,
     bodiless: i8,
@@ -261,7 +261,7 @@ pub extern "C" fn __http_frame_body(
     let transfer_encoding = text_of(transfer_encoding_data, transfer_encoding_len);
     let content_length = text_of(content_length_data, content_length_len);
     let result = frame_body(raw, bodiless != 0, &transfer_encoding, &content_length);
-    // SAFETY: `out` is writable storage for one `QlResult` (the code generator's alloca).
+    // SAFETY: `out` is writable storage for one `QnResult` (the code generator's alloca).
     unsafe { *out = result };
 }
 
@@ -298,9 +298,9 @@ mod tests {
     ) -> (i8, Vec<u8>) {
         let _guard = GC_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         __gc_init();
-        let mut out = QlResult {
+        let mut out = QnResult {
             tag: 0,
-            slot: crate::mem::QlSlice::empty(),
+            slot: crate::mem::QnSlice::empty(),
         };
         let (raw_ptr, raw_len) = crate::test_support::text_of_bytes(raw);
         let (transfer_encoding_ptr, transfer_encoding_len) =
@@ -331,9 +331,9 @@ mod tests {
     ) -> (i8, String) {
         let _guard = GC_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         __gc_init();
-        let mut out = QlResult {
+        let mut out = QnResult {
             tag: 0,
-            slot: crate::mem::QlSlice::empty(),
+            slot: crate::mem::QnSlice::empty(),
         };
         let (raw_ptr, raw_len) = crate::test_support::text_of_bytes(raw);
         let (transfer_encoding_ptr, transfer_encoding_len) =

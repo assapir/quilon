@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only WITH Classpath-exception-2.0
 
 //! Internal runtime primitives with no `core.*` language home: allocation and the
-//! Boehm-GC binding (`__alloc`, `__alloc_array`, `__gc_init`), the shared `QlSlice`
+//! Boehm-GC binding (`__alloc`, `__alloc_array`, `__gc_init`), the shared `QnSlice`
 //! `{ ptr, len }` ABI type and its `alloc_text` helper, the `format_num` render helper,
 //! and the fail-loud primitives behind checked `arr[i]` (`__index_fail`) and a range's
 //! endpoints (`__range_endpoint`) — neither operation has a `core.*` module,
@@ -10,7 +10,7 @@
 
 use crate::io::write_to_fd;
 use crate::process::__exit;
-use crate::report::{QlSite, RUNTIME_EXIT_CODE, codes, fail_at};
+use crate::report::{QnSite, RUNTIME_EXIT_CODE, codes, fail_at};
 use std::os::raw::c_void;
 use std::sync::Mutex;
 use unicode_segmentation::UnicodeSegmentation;
@@ -323,9 +323,9 @@ pub(crate) fn alloc_slots<T>(count: usize) -> *mut T {
 /// assertion does. Codegen calls this from the invalid branch of every `arr[i]` bounds check.
 ///
 /// # Safety contract (upheld by the compiler)
-/// `site` is null or points to a valid [`QlSite`].
+/// `site` is null or points to a valid [`QnSite`].
 #[unsafe(no_mangle)]
-pub extern "C" fn __index_fail(index: f64, size: i64, site: *const QlSite) -> ! {
+pub extern "C" fn __index_fail(index: f64, size: i64, site: *const QnSite) -> ! {
     fail_at(
         site,
         codes::INDEX_OUT_OF_BOUNDS,
@@ -370,9 +370,9 @@ pub fn check_range_endpoint(value: f64) -> Result<i64, String> {
 /// `i64`, or a report at the range expression and exit status 5.
 ///
 /// # Safety contract (upheld by the compiler)
-/// `site` is null or points to a valid [`QlSite`].
+/// `site` is null or points to a valid [`QnSite`].
 #[unsafe(no_mangle)]
-pub extern "C" fn __range_endpoint(value: f64, site: *const QlSite) -> i64 {
+pub extern "C" fn __range_endpoint(value: f64, site: *const QnSite) -> i64 {
     match check_range_endpoint(value) {
         Ok(endpoint) => endpoint,
         Err(message) => fail_at(
@@ -391,16 +391,16 @@ pub extern "C" fn __range_endpoint(value: f64, site: *const QlSite) -> i64 {
 /// `#[repr(C)]` so the field offsets (ptr at 0, i64 at 8) match what LLVM emits.
 #[repr(C)]
 #[derive(Clone, Copy)]
-pub struct QlSlice {
+pub struct QnSlice {
     pub(crate) data: *const c_void,
     pub(crate) len: i64,
 }
 
-impl QlSlice {
+impl QnSlice {
     /// The empty slice (`{ null, 0 }`) — a zero-length `Text`/array. Returned when there
     /// is nothing to build (null/empty `argv`/`envp`).
-    pub(crate) fn empty() -> QlSlice {
-        QlSlice {
+    pub(crate) fn empty() -> QnSlice {
+        QnSlice {
             data: std::ptr::null(),
             len: 0,
         }
@@ -531,7 +531,7 @@ pub fn literal_header(bytes: &[u8]) -> (i64, i64) {
 /// but NOT zeroed, so the NUL is written explicitly rather than left free. `data` points
 /// AT the header, not past it, so a debugger's `p *t.data` shows every field alongside the
 /// bytes. Written once, here, for every producer.
-pub(crate) fn alloc_text_with_header(bytes: &[u8], count: i64, flags: i64) -> QlSlice {
+pub(crate) fn alloc_text_with_header(bytes: &[u8], count: i64, flags: i64) -> QnSlice {
     let (slice, content) = alloc_text_buffer(bytes.len(), count, flags);
     if !content.is_null() {
         // SAFETY: `content` has room for exactly `bytes.len()` bytes.
@@ -545,9 +545,9 @@ pub(crate) fn alloc_text_with_header(bytes: &[u8], count: i64, flags: i64) -> Ql
 /// still to fill — a producer building its content from more than one source (`+`, `join`)
 /// writes each piece straight into place instead of assembling a Vec first. `content` is
 /// null exactly when `len == 0` (the empty text, which needs no buffer).
-pub(crate) fn alloc_text_buffer(len: usize, count: i64, flags: i64) -> (QlSlice, *mut u8) {
+pub(crate) fn alloc_text_buffer(len: usize, count: i64, flags: i64) -> (QnSlice, *mut u8) {
     if len == 0 {
-        return (QlSlice::empty(), std::ptr::null_mut());
+        return (QnSlice::empty(), std::ptr::null_mut());
     }
     let buf = __alloc_atomic(TEXT_HEADER_BYTES + len as i64 + 1) as *mut u8;
     // SAFETY: `__alloc_atomic` returned at least that many writable bytes (UNZEROED), so
@@ -562,7 +562,7 @@ pub(crate) fn alloc_text_buffer(len: usize, count: i64, flags: i64) -> (QlSlice,
         content
     };
     (
-        QlSlice {
+        QnSlice {
             data: buf as *const c_void,
             len: len as i64,
         },
@@ -572,7 +572,7 @@ pub(crate) fn alloc_text_buffer(len: usize, count: i64, flags: i64) -> (QlSlice,
 
 /// [`alloc_text_with_header`] when `count` is already known (`slice`, `at`) and `bytes` is
 /// a byte-range of an already-decoded `&str`, so it is always valid UTF-8 for free too.
-pub(crate) fn alloc_text_with_count(bytes: &[u8], count: i64) -> QlSlice {
+pub(crate) fn alloc_text_with_count(bytes: &[u8], count: i64) -> QnSlice {
     let flags = if is_ascii_grapheme_aligned(bytes) {
         TEXT_ASCII_ALIGNED | TEXT_VALID_UTF8 | TEXT_NO_BIDI_CONTROLS
     } else {
@@ -581,7 +581,7 @@ pub(crate) fn alloc_text_with_count(bytes: &[u8], count: i64) -> QlSlice {
     alloc_text_with_header(bytes, count, flags)
 }
 
-pub(crate) fn alloc_text(bytes: &[u8]) -> QlSlice {
+pub(crate) fn alloc_text(bytes: &[u8]) -> QnSlice {
     let (count, flags) = text_header(bytes);
     alloc_text_with_header(bytes, count, flags)
 }
@@ -790,11 +790,11 @@ mod tests {
     fn slots_size_themselves_from_the_type() {
         let _g = GC_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         __gc_init();
-        let slots = alloc_slots::<QlSlice>(3);
+        let slots = alloc_slots::<QnSlice>(3);
         assert!(!slots.is_null());
         unsafe {
             for i in 0..3 {
-                std::ptr::write(slots.add(i), QlSlice::empty());
+                std::ptr::write(slots.add(i), QnSlice::empty());
             }
             assert_eq!((*slots.add(2)).len, 0);
         }

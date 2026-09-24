@@ -209,6 +209,9 @@ All notable changes to Quilon are documented here.
 
 ### Changed
 
+- **The runtime's `Ql`-prefixed ABI types (`QlSlice`, `QlResult`, `QlSite`, `QlKey`,
+  `QlSet`, `QlMap`, `QlSetEntry`, `QlMapEntry`) are renamed to `Qn*`.** Internal to
+  `quilon-rt`; no behavior change. Closes #474.
 - **A diagnostic naming `@sleep`, `@readStdin`, `@tcpRequest`, or `@streamFile` now names
   it fully qualified** — `core.time.@sleep`, `core.io.@readStdin`, `core.net.@tcpRequest`,
   `core.io.@streamFile` — the same way `core.net.@tcpServe`'s own diagnostics always have,

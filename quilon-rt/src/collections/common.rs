@@ -54,7 +54,7 @@ impl BuildHasher for FixedState {
 /// `Num`/`Bool` keys hash by their word bits. A `TAG_USER` key carries the boxed key value
 /// in `a` and hashes/compares by calling back into the type's monomorphized `%`/`==`.
 #[derive(Clone, Copy)]
-pub(crate) struct QlKey {
+pub(crate) struct QnKey {
     pub(crate) tag: u8,
     pub(crate) a: u64,
     pub(crate) b: u64,
@@ -62,14 +62,14 @@ pub(crate) struct QlKey {
     pub(crate) eq_fn: Option<KeyEqFn>,
 }
 
-impl QlKey {
+impl QnKey {
     pub(crate) fn new(
         tag: i64,
         a: i64,
         b: i64,
         hash_fn: *const c_void,
         eq_fn: *const c_void,
-    ) -> QlKey {
+    ) -> QnKey {
         let tag = tag as u8;
         let a = if tag == TAG_NUM {
             canonical_num_bits(a as u64)
@@ -86,7 +86,7 @@ impl QlKey {
         } else {
             Some(unsafe { std::mem::transmute::<*const c_void, KeyEqFn>(eq_fn) })
         };
-        QlKey {
+        QnKey {
             tag,
             a,
             b: b as u64,
@@ -107,7 +107,7 @@ impl QlKey {
     }
 }
 
-impl PartialEq for QlKey {
+impl PartialEq for QnKey {
     fn eq(&self, other: &Self) -> bool {
         if self.tag != other.tag {
             return false;
@@ -123,9 +123,9 @@ impl PartialEq for QlKey {
     }
 }
 
-impl Eq for QlKey {}
+impl Eq for QnKey {}
 
-impl Hash for QlKey {
+impl Hash for QnKey {
     fn hash<H: Hasher>(&self, state: &mut H) {
         state.write_u8(self.tag);
         match self.tag {
@@ -141,7 +141,7 @@ impl Hash for QlKey {
 /// keys hashing apart would silently split into duplicate logical entries), so fail loud.
 /// The O(n) scan is compiled OUT of release builds.
 #[cfg(debug_assertions)]
-pub(crate) fn debug_check_user_key<'a>(existing: impl Iterator<Item = &'a QlKey>, new_key: &QlKey) {
+pub(crate) fn debug_check_user_key<'a>(existing: impl Iterator<Item = &'a QnKey>, new_key: &QnKey) {
     if new_key.tag != TAG_USER {
         return;
     }
@@ -165,7 +165,7 @@ pub(crate) fn debug_check_user_key<'a>(existing: impl Iterator<Item = &'a QlKey>
 #[cfg(not(debug_assertions))]
 #[inline]
 pub(crate) fn debug_check_user_key<'a>(
-    _existing: impl Iterator<Item = &'a QlKey>,
-    _new_key: &QlKey,
+    _existing: impl Iterator<Item = &'a QnKey>,
+    _new_key: &QnKey,
 ) {
 }

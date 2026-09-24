@@ -29,7 +29,7 @@
 //! [`abort_trap`] (the `aborts()` matcher — run a lambda on a guarded fiber and report
 //! whether it ended in a fail-loud exit), [`launch_scope`] (a `< >` block's own launch
 //! registry — open on entry, joined before its value flows out), and [`mem`] (general
-//! memory primitives: allocation, GC, the shared `QlSlice` ABI type, bounds-check and
+//! memory primitives: allocation, GC, the shared `QnSlice` ABI type, bounds-check and
 //! range-endpoint failure). Each `#[no_mangle]`
 //! intrinsic is re-exported at the crate root so callers reach it as
 //! `quilon_rt::__name` regardless of which module defines it.
@@ -68,7 +68,7 @@ pub use collections::{
     __map_val, __set_add, __set_diff, __set_has, __set_intersect, __set_item_a, __set_item_b,
     __set_len, __set_new, __set_remove, __set_union,
 };
-pub use deferred::{__force_result, __force_text, __read_launch, QlResult};
+pub use deferred::{__force_result, __force_text, __read_launch, QnResult};
 pub use http::{__http_body_progress, __http_frame_body};
 pub use io::{__color_enabled, __print_text_fd, __stream_file_run, __write_bytes};
 pub use launch_scope::{__block_scope_enter, __block_scope_join};
@@ -84,7 +84,7 @@ pub use net::{
 };
 pub use process::{__argv_to_text_array, __envp_to_map, __exit};
 pub use report::{
-    __assert_failed, __expect_failed, __match_fail, MAX_PATH_WIDTH, QlSite, shorten_path,
+    __assert_failed, __expect_failed, __match_fail, MAX_PATH_WIDTH, QnSite, shorten_path,
 };
 pub use scheduler::__run_fiber_main;
 pub use test_registry::{
@@ -99,7 +99,7 @@ pub use text::{
 };
 pub use time::{__now, __sleep};
 
-use mem::QlSlice;
+use mem::QnSlice;
 use std::os::raw::{c_char, c_int, c_void};
 
 /// Every runtime intrinsic, listed once.
@@ -159,12 +159,12 @@ macro_rules! intrinsic_registry {
 intrinsic_registry! {
     __gc_init: extern "C" fn(),
     __gc_add_root: extern "C" fn(*mut c_void, i64),
-    __num_to_text: extern "C" fn(f64) -> QlSlice,
-    __bool_to_text: extern "C" fn(i64) -> QlSlice,
+    __num_to_text: extern "C" fn(f64) -> QnSlice,
+    __bool_to_text: extern "C" fn(i64) -> QnSlice,
     __exit: extern "C" fn(c_int) -> !,
-    __index_fail: extern "C" fn(f64, i64, *const QlSite) -> !,
-    __match_fail: extern "C" fn(*const QlSite) -> !,
-    __range_endpoint: extern "C" fn(f64, *const QlSite) -> i64,
+    __index_fail: extern "C" fn(f64, i64, *const QnSite) -> !,
+    __match_fail: extern "C" fn(*const QnSite) -> !,
+    __range_endpoint: extern "C" fn(f64, *const QnSite) -> i64,
     __alloc: extern "C" fn(i64) -> *mut c_void,
     __alloc_atomic: extern "C" fn(i64) -> *mut c_void,
     __alloc_array: extern "C" fn(i64, i64) -> *mut c_void,
@@ -172,48 +172,48 @@ intrinsic_registry! {
     __render_c_string: extern "C" fn(*const u8, i64) -> *const u8,
     __text_length: extern "C" fn(*const u8, i64) -> i64,
     __text_cmp: extern "C" fn(*const u8, i64, *const u8, i64) -> i32,
-    __write_bytes: extern "C" fn(f64, *const u8, i64, *const QlSite) -> i64,
-    __print_text_fd: extern "C" fn(i64, *const u8, i64, *const QlSite),
+    __write_bytes: extern "C" fn(f64, *const u8, i64, *const QnSite) -> i64,
+    __print_text_fd: extern "C" fn(i64, *const u8, i64, *const QnSite),
     __color_enabled: extern "C" fn(i64) -> i64,
-    __argv_to_text_array: extern "C" fn(i64, *const *const c_char) -> QlSlice,
+    __argv_to_text_array: extern "C" fn(i64, *const *const c_char) -> QnSlice,
     __envp_to_map: extern "C" fn(*const *const c_char) -> *mut c_void,
-    __text_trim_start: extern "C" fn(*const u8, i64) -> QlSlice,
-    __text_trim_end: extern "C" fn(*const u8, i64) -> QlSlice,
-    __text_to_upper: extern "C" fn(*const u8, i64) -> QlSlice,
-    __text_to_lower: extern "C" fn(*const u8, i64) -> QlSlice,
+    __text_trim_start: extern "C" fn(*const u8, i64) -> QnSlice,
+    __text_trim_end: extern "C" fn(*const u8, i64) -> QnSlice,
+    __text_to_upper: extern "C" fn(*const u8, i64) -> QnSlice,
+    __text_to_lower: extern "C" fn(*const u8, i64) -> QnSlice,
     __text_contains: extern "C" fn(*const u8, i64, *const u8, i64) -> i64,
     __text_index_of: extern "C" fn(*const u8, i64, *const u8, i64) -> i64,
     __text_index_of_from: extern "C" fn(*const u8, i64, *const u8, i64, i64) -> i64,
-    __text_concat: extern "C" fn(*const u8, i64, *const u8, i64) -> QlSlice,
-    __text_join: extern "C" fn(*const c_void, i64, *const u8, i64) -> QlSlice,
-    __text_slice: extern "C" fn(*const u8, i64, i64, i64) -> QlSlice,
-    __text_graphemes: extern "C" fn(*const u8, i64) -> QlSlice,
-    __text_at: extern "C" fn(*const u8, i64, i64) -> QlSlice,
-    __text_split: extern "C" fn(*const u8, i64, *const u8, i64) -> QlSlice,
+    __text_concat: extern "C" fn(*const u8, i64, *const u8, i64) -> QnSlice,
+    __text_join: extern "C" fn(*const c_void, i64, *const u8, i64) -> QnSlice,
+    __text_slice: extern "C" fn(*const u8, i64, i64, i64) -> QnSlice,
+    __text_graphemes: extern "C" fn(*const u8, i64) -> QnSlice,
+    __text_at: extern "C" fn(*const u8, i64, i64) -> QnSlice,
+    __text_split: extern "C" fn(*const u8, i64, *const u8, i64) -> QnSlice,
     __text_replace_all:
-        extern "C" fn(*const u8, i64, *const u8, i64, *const u8, i64, *const QlSite) -> QlSlice,
+        extern "C" fn(*const u8, i64, *const u8, i64, *const u8, i64, *const QnSite) -> QnSlice,
     __text_replace:
-        extern "C" fn(*const u8, i64, *const u8, i64, *const u8, i64, f64, *const QlSite) -> QlSlice,
+        extern "C" fn(*const u8, i64, *const u8, i64, *const u8, i64, f64, *const QnSite) -> QnSlice,
     __sleep: extern "C" fn(f64),
     __now: extern "C" fn() -> f64,
-    __read_launch: extern "C" fn(*const QlSite) -> QlSlice,
-    __tcp_request_launch: extern "C" fn(*mut QlResult, *const u8, i64, *const u8, i64),
+    __read_launch: extern "C" fn(*const QnSite) -> QnSlice,
+    __tcp_request_launch: extern "C" fn(*mut QnResult, *const u8, i64, *const u8, i64),
     __tcp_serve_launch:
-        extern "C" fn(*const u8, i64, *const c_void, *mut c_void, *const QlSite) -> f64,
-    __connection_read_launch: extern "C" fn(f64) -> QlSlice,
-    __connection_read_with_timeout_launch: extern "C" fn(f64, f64) -> QlSlice,
+        extern "C" fn(*const u8, i64, *const c_void, *mut c_void, *const QnSite) -> f64,
+    __connection_read_launch: extern "C" fn(f64) -> QnSlice,
+    __connection_read_with_timeout_launch: extern "C" fn(f64, f64) -> QnSlice,
     __connection_write: extern "C" fn(f64, *const u8, i64),
     __connection_close: extern "C" fn(f64),
-    __server_address_host: extern "C" fn(f64) -> QlSlice,
+    __server_address_host: extern "C" fn(f64) -> QnSlice,
     __server_address_port: extern "C" fn(f64) -> f64,
     __server_kill: extern "C" fn(f64, f64),
-    __stream_file_run: extern "C" fn(*mut QlResult, *const u8, i64, f64, *const c_void, *mut c_void),
+    __stream_file_run: extern "C" fn(*mut QnResult, *const u8, i64, f64, *const c_void, *mut c_void),
     __http_frame_body:
-        extern "C" fn(*mut QlResult, *const u8, i64, i8, *const u8, i64, *const u8, i64),
+        extern "C" fn(*mut QnResult, *const u8, i64, i8, *const u8, i64, *const u8, i64),
     __http_body_progress:
-        extern "C" fn(*mut QlResult, *const u8, i64, *const u8, i64, *const u8, i64, f64),
-    __force_text: extern "C" fn(*const c_void) -> QlSlice,
-    __force_result: extern "C" fn(*mut QlResult, *const c_void),
+        extern "C" fn(*mut QnResult, *const u8, i64, *const u8, i64, *const u8, i64, f64),
+    __force_text: extern "C" fn(*const c_void) -> QnSlice,
+    __force_result: extern "C" fn(*mut QnResult, *const c_void),
     __block_scope_enter: extern "C" fn(),
     __block_scope_join: extern "C" fn(),
     __run_fiber_main: extern "C" fn(
@@ -268,19 +268,19 @@ intrinsic_registry! {
     __test_case_failing: extern "C" fn() -> f64,
     __test_case_finish: extern "C" fn(*const u8, i64, *const u8, i64, f64, f64) -> f64,
     __test_summary: extern "C" fn(f64, f64) -> f64,
-    __assert_failed: extern "C" fn(*const QlSite, *const u8, i64) -> !,
-    __expect_failed: extern "C" fn(*const QlSite, *const u8, i64),
+    __assert_failed: extern "C" fn(*const QnSite, *const u8, i64) -> !,
+    __expect_failed: extern "C" fn(*const QnSite, *const u8, i64),
     __test_case_run_guarded: extern "C" fn(*const c_void, *mut c_void),
     __abort_trap_run: extern "C" fn(*const c_void, *mut c_void) -> u8,
-    __abort_trap_report: extern "C" fn() -> QlSlice,
+    __abort_trap_report: extern "C" fn() -> QnSlice,
 }
 
 // Shared unit-test support. `GC_LOCK` is taken by GC-touching tests in more than one
-// module; the `QlSlice` inspection helpers back the `text` tests. Both live here at the
+// module; the `QnSlice` inspection helpers back the `text` tests. Both live here at the
 // crate root so a single owner serves every module's test block.
 #[cfg(test)]
 pub(crate) mod test_support {
-    use crate::mem::{QlSlice, text_header_of};
+    use crate::mem::{QnSlice, text_header_of};
     use crate::text::byte_slice;
     use std::sync::Mutex;
 
@@ -289,8 +289,8 @@ pub(crate) mod test_support {
     // through the GC takes this lock first (mirrors `jit`'s JIT_LOCK).
     pub(crate) static GC_LOCK: Mutex<()> = Mutex::new(());
 
-    /// A `QlSlice` `Text` result's content, past its header, as a `&str`.
-    pub(crate) unsafe fn slice_str<'a>(s: QlSlice) -> &'a str {
+    /// A `QnSlice` `Text` result's content, past its header, as a `&str`.
+    pub(crate) unsafe fn slice_str<'a>(s: QnSlice) -> &'a str {
         std::str::from_utf8(byte_slice(s.data as *const u8, s.len)).unwrap()
     }
 
@@ -317,15 +317,15 @@ pub(crate) mod test_support {
         text_header_of(ptr)
     }
 
-    /// Collect a `[]Text` `QlSlice` result into owned `String`s. Shared by the split and
-    /// grapheme tests. The empty answer (`QlSlice::empty()`, a NULL data pointer) is
+    /// Collect a `[]Text` `QnSlice` result into owned `String`s. Shared by the split and
+    /// grapheme tests. The empty answer (`QnSlice::empty()`, a NULL data pointer) is
     /// guarded like `byte_slice` guards it — `slice::from_raw_parts` forbids null even
     /// for a length of zero.
-    pub(crate) fn split_parts(s: &QlSlice) -> Vec<String> {
+    pub(crate) fn split_parts(s: &QnSlice) -> Vec<String> {
         if s.data.is_null() || s.len <= 0 {
             return Vec::new();
         }
-        let parts = unsafe { std::slice::from_raw_parts(s.data as *const QlSlice, s.len as usize) };
+        let parts = unsafe { std::slice::from_raw_parts(s.data as *const QnSlice, s.len as usize) };
         parts
             .iter()
             .map(|p| unsafe { slice_str(*p) }.to_string())

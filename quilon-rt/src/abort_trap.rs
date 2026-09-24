@@ -10,7 +10,7 @@
 use std::cell::RefCell;
 use std::os::raw::c_void;
 
-use crate::mem::{QlSlice, alloc_text};
+use crate::mem::{QnSlice, alloc_text};
 
 thread_local! {
     /// The withheld report from the most recent `__abort_trap_run` that aborted — empty if
@@ -50,7 +50,7 @@ pub extern "C" fn __abort_trap_run(function: *const c_void, environment: *mut c_
 /// The withheld report from the `__abort_trap_run` that just aborted, as a `Text` — empty
 /// when it returned instead. Backs a failing `not(aborts())`'s mismatch message.
 #[unsafe(no_mangle)]
-pub extern "C" fn __abort_trap_report() -> QlSlice {
+pub extern "C" fn __abort_trap_report() -> QnSlice {
     LAST_REPORT.with(|last| alloc_text(last.borrow().as_bytes()))
 }
 
