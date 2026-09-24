@@ -61,6 +61,26 @@ fn failure_program(address: &str) -> String {
     )
 }
 
+/// Like [`program`], but built from a `net.Address { host, port }` record rather than a
+/// `host:port` string — proves `@tcpRequest`'s `Address` overload forwards to the `Text`
+/// member rather than miscompiling the record as raw `Text` bytes.
+fn program_via_address_overload(host: &str, port: u16, expected: &str) -> String {
+    format!(
+        r#"
+<< core.io
+<< core.test
+<< core.net
+
+^ = () -> Num => <
+  net.@tcpRequest(net.Address {{ host = "{host}", port = {port} }}, "PING\n") ?
+    | Ok(response) => assert(response, equals("{expected}"))
+    | NotOk(error) => test.failAt(error)
+  0
+>
+"#
+    )
+}
+
 /// Bind a loopback listener, take its address, then drop it — so the address is one nothing is
 /// listening on, and a connect to it is refused. The standard way to get a reliably-closed port.
 fn closed_address() -> String {
@@ -164,6 +184,30 @@ fn jit_tcp_request_round_trips_and_forces() {
     server.join().expect("server thread");
     let _ = std::fs::remove_file(&match_file);
     let _ = std::fs::remove_file(&mismatch_file);
+}
+
+#[test]
+fn jit_tcp_request_round_trips_through_the_address_overload() {
+    let (address, server) = spawn_pong_server(1);
+    let port: u16 = address
+        .rsplit(':')
+        .next()
+        .expect("address has a port")
+        .parse()
+        .expect("a numeric port");
+
+    let file = temp_ql(
+        "address_overload",
+        &program_via_address_overload("127.0.0.1", port, "PONG\\n"),
+    );
+    assert_eq!(
+        jit_run(&file),
+        Some(0),
+        "@tcpRequest's Address overload should forward to the Text member and round-trip"
+    );
+
+    server.join().expect("server thread");
+    let _ = std::fs::remove_file(&file);
 }
 
 #[test]

@@ -203,6 +203,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                     return self.generate_connection_close(arguments);
                 }
                 ("core.net.Server", "kill") => return self.generate_server_kill(arguments),
+                ("core.net.Server", "address") => return self.generate_server_address(arguments),
                 _ => {}
             }
         }
@@ -594,6 +595,29 @@ impl<'ctx> CodeGenerator<'ctx> {
         ))
     }
 
+    /// The `(ptr, len)` bytes `net.@tcpServe`/`http.@serve`/`net.@tcpRequest`'s `address`
+    /// argument crosses the FFI as. For the `Address` overload, produced by an inline
+    /// `.text()` call at the primitive's own call site — a forwarding body would instead
+    /// put the launch inside the wrapper's own block join.
+    fn address_text_fields(
+        &mut self,
+        address: &Expression,
+    ) -> Result<(PointerValue<'ctx>, inkwell::values::IntValue<'ctx>), String> {
+        if matches!(self.oracle.expression_type(address), Some(Type::Text)) {
+            return self.extract_text(address);
+        }
+        let symbol = self
+            .method_symbol_for("text", std::slice::from_ref(address), true)?
+            .ok_or_else(|| "core.net.Address has no `text` method".to_string())?;
+        let text_fn = self
+            .module
+            .get_function(&symbol)
+            .ok_or_else(|| format!("Unknown function: {symbol}"))?;
+        let address_value = self.generate_expression(address)?;
+        let text_value = self.emit_call(text_fn, &[address_value])?;
+        self.text_fields(text_value)
+    }
+
     /// Lower a leaf `@` IO primitive call to its runtime intrinsic. `site` is the span of the
     /// `@`-identifier — the call's launch site, which a fault in the launched work reports at.
     ///
@@ -643,7 +667,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                 const CALL_FAILED: &str = "Failed to call core.net.@tcpRequest";
                 const LOAD_FAILED: &str = "Failed to load core.net.@tcpRequest result";
                 Self::expect_arity(NAME, arguments, false, 2)?;
-                let (addr_ptr, addr_len) = self.extract_text(&arguments[0])?;
+                let (addr_ptr, addr_len) = self.address_text_fields(&arguments[0])?;
                 let (req_ptr, req_len) = self.extract_text(&arguments[1])?;
                 // The launch writes a DEFERRED `Result` (`Ok(responseBytes)` / `NotOk(message)`,
                 // tagged deferred) into `out`; a `Result` crosses the FFI via this out-pointer, not
@@ -715,11 +739,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                 const NAME: &str = "core.net.@tcpServe";
                 const CALL_FAILED: &str = "Failed to call core.net.@tcpServe";
                 Self::expect_arity(NAME, arguments, false, 2)?;
-                let address_value = self.generate_expression(&arguments[0])?;
-                let BasicValueEnum::StructValue(_) = address_value else {
-                    return Err(format!("{NAME} expects a Text address"));
-                };
-                let (address_ptr, address_len) = self.text_fields(address_value)?;
+                let (address_ptr, address_len) = self.address_text_fields(&arguments[0])?;
                 let BasicValueEnum::StructValue(closure) =
                     self.generate_expression(&arguments[1])?
                 else {
@@ -765,11 +785,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                         arguments.len()
                     ));
                 }
-                let address_value = self.generate_expression(&arguments[0])?;
-                let BasicValueEnum::StructValue(_) = address_value else {
-                    return Err(format!("{NAME} expects a Text address"));
-                };
-                let (address_ptr, address_len) = self.text_fields(address_value)?;
+                let (address_ptr, address_len) = self.address_text_fields(&arguments[0])?;
                 let BasicValueEnum::StructValue(closure) =
                     self.generate_expression(&arguments[1])?
                 else {
@@ -931,6 +947,31 @@ impl<'ctx> CodeGenerator<'ctx> {
         Ok(self.unit_value().into())
     }
 
+    /// `Server.address()`: the bound host and port from two runtime reads of the same
+    /// `local_addr`, assembled with [`Self::build_plain_record`].
+    fn generate_server_address(
+        &mut self,
+        arguments: &[Expression],
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        const NAME: &str = "core.net.Server.address";
+        const CALL_FAILED: &str = "Failed to call core.net.Server.address";
+        Self::expect_arity(NAME, arguments, true, 0)?;
+        let handle = self.handle_field(&arguments[0])?;
+        let host_fn = self.get_intrinsic("__server_address_host")?;
+        let host = Self::call_result_to_basic(
+            self.builder
+                .build_call(host_fn, &[handle.into()], "server_address_host")
+                .map_err(ctx(CALL_FAILED))?,
+        )?;
+        let port_fn = self.get_intrinsic("__server_address_port")?;
+        let port = Self::call_result_to_basic(
+            self.builder
+                .build_call(port_fn, &[handle.into()], "server_address_port")
+                .map_err(ctx(CALL_FAILED))?,
+        )?;
+        self.build_plain_record(&[host, port])
+    }
+
     /// The `handle :: Num` field of a `Connection`/`Server` receiver — the raw id every
     /// runtime intrinsic behind their methods keys its own table by. A plain field read
     /// (via [`Self::generate_field_access`]), since `Connection`/`Server` are ordinary
@@ -949,11 +990,12 @@ impl<'ctx> CodeGenerator<'ctx> {
     /// Build a plain record on the GC heap over `fields`, in declared order, and return a
     /// pointer to it — the compiler-lowered counterpart of an ordinary record literal, for
     /// wherever codegen needs to hand Quilon code one of these shape-only types (a
-    /// `{ handle :: Num }` for `Connection`/`Server`, or a two-`Num`-field `ServerOptions`
-    /// reconstructed inside [`Self::emit_http_serve_handler_thunk`]) without going through
-    /// its own constructor. Shape-only: every caller already knows its field values in
-    /// order, so this needs no type name to pick between them — the call site's own
-    /// inferred type is what tells Quilon code which one it is.
+    /// `{ handle :: Num }` for `Connection`/`Server`, a two-`Num`-field `ServerOptions`
+    /// reconstructed inside [`Self::emit_http_serve_handler_thunk`], or the `{ Text, Num }`
+    /// `Address` [`Self::generate_server_address`] builds) without going through its own
+    /// constructor. Shape-only: every caller already knows its field values in order, so
+    /// this needs no type name to pick between them — the call site's own inferred type is
+    /// what tells Quilon code which one it is.
     fn build_plain_record(
         &mut self,
         fields: &[BasicValueEnum<'ctx>],

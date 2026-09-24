@@ -558,11 +558,15 @@ fn importing_core_http_contributes_exactly_this_surface() {
         "core.test.runCase",
         "core.test.it",
         "core.test.reportSummary",
-        // core.net, and the client itself.
+        // core.net, and the client itself. `@tcpRequest`/`@tcpServe` each have a Text
+        // overload and an Address overload: one item each.
         "core.net.@tcpRequest",
+        "core.net.@tcpRequest",
+        "core.net.@tcpServe",
         "core.net.@tcpServe",
         "core.net.Connection",
         "core.net.Server",
+        "core.net.Address",
         "core.http.Body",
         "core.http.Method",
         "core.http.Status",
@@ -571,7 +575,10 @@ fn importing_core_http_contributes_exactly_this_surface() {
         "core.http.Headers",
         "core.http.Params",
         "core.http.RequestOptions",
-        // `@serve`'s two-argument and three-argument overloads: one item each.
+        // `@serve`'s two-argument and three-argument overloads, each with a Text and an
+        // Address form: one item apiece.
+        "core.http.@serve",
+        "core.http.@serve",
         "core.http.@serve",
         "core.http.@serve",
         // The server's own per-server settings, `@serve`'s three-argument overload takes.
@@ -1596,6 +1603,31 @@ fn the_corelib_text_suite_passes_when_the_module_is_the_file_named() {
     }
     assert!(
         out.stdout.contains("17 passed, 0 failed"),
+        "unexpected summary:\n{}",
+        out.stdout
+    );
+}
+
+/// The same gate for `corelib/net.qn` — `Address.text()`'s own suite, the one compilation
+/// of that block.
+#[test]
+fn the_corelib_net_suite_passes_when_the_module_is_the_file_named() {
+    let module = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("corelib")
+        .join("net.qn");
+    let out = quilon(&["test", module.to_str().unwrap()]);
+    assert_eq!(
+        out.code, 0,
+        "corelib/net.qn must pass:\n{}\n{}",
+        out.stdout, out.stderr
+    );
+    assert!(
+        out.stdout.contains("Address.text"),
+        "the `Address.text` group is missing from the report:\n{}",
+        out.stdout
+    );
+    assert!(
+        out.stdout.contains("2 passed, 0 failed"),
         "unexpected summary:\n{}",
         out.stdout
     );

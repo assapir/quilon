@@ -212,6 +212,10 @@ else in the language, and takes the server with it. `kill` is `net.Server`'s own
 (see [`core.net`'s server layer](net.md#the-raw-tcp-server-layer)): `server.kill(seconds)`
 or `server.kill()` for its 5-second default.
 
+| Function | Effect |
+|----------|--------|
+| `http.@serve(address :: net.Address, handler :: (Request) -> Response) -> net.Server` | As above, given the `net.Address` a `server.address()` reported. |
+
 ### Keep-alive
 
 A connection carries more than one request when both sides are willing: `http.@serve`'s
@@ -320,6 +324,7 @@ hummus = (request :: http.Request) -> http.Response => <
 |--------|--------|
 | `ServerOptions.default() -> ServerOptions` | `{ maxBodySize = 16 * 1024 * 1024, idleTimeout = 5 }` (static) — 16 MiB and 5 seconds, the same idle default Node uses for its own server sockets. |
 | `http.@serve(address, handler, options :: ServerOptions) -> net.Server` | As the two-argument form, with `options.maxBodySize`/`options.idleTimeout` in place of the defaults. |
+| `http.@serve(address :: net.Address, handler, options :: ServerOptions) -> net.Server` | As above, given the `net.Address` a `server.address()` reported. |
 
 `Response` gains one constructor, `reply`, over six overloads, plus `wire()`:
 

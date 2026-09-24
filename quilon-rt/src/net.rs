@@ -37,7 +37,8 @@ pub mod server;
 pub use client::__tcp_request_launch;
 pub use server::{
     __connection_close, __connection_read_launch, __connection_read_with_timeout_launch,
-    __connection_write, __server_kill, __tcp_serve_launch,
+    __connection_write, __server_address_host, __server_address_port, __server_kill,
+    __tcp_serve_launch,
 };
 
 fn would_block(e: &io::Error) -> bool {

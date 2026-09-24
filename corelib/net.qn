@@ -46,6 +46,27 @@
   close = () -> $ => < $ >
 }
 
+~ The address a `net.Server` actually bound, from `server.address()` — most useful after
+~ binding port `0`, to learn which port the OS actually chose.
+>> Address = {
+  ~ The bound host as the OS reports it (`127.0.0.1`, `::1`).
+  host :: Text,
+
+  ~ The port the OS bound.
+  port :: Num,
+
+  ~ `host:port`, exactly the form `@tcpRequest`/`@tcpServe` accept — an IPv6 `host` (one
+  ~ containing `:`) wrapped in brackets.
+  text = () -> Text => <
+    it.host.contains(":") ? "[`it.host`]:`it.port`" : "`it.host`:`it.port`"
+  >
+}
+
+~ `@tcpRequest`, given the `Address` a `Server.address()` reported instead of `host:port` text.
+>> @tcpRequest = (address :: Address, requestBytes :: Text) -> Result => <
+  @tcpRequest(address.text(), requestBytes)
+>
+
 ~ A server `net.@tcpServe` started, returned the moment it begins listening.
 >> Server = {
   handle :: Num,
@@ -55,7 +76,11 @@
   kill = (seconds :: Num) -> $ => < $ >,
 
   ~ `kill` with the default 5-second grace period.
-  kill = () -> $ => < $ >
+  kill = () -> $ => < $ >,
+
+  ~ The address this server actually bound — most useful after binding port `0` (any free
+  ~ port), to learn which one the OS actually chose.
+  address = () -> Address => < Address { host = "", port = 0 } >
 }
 
 ~ Bind `address` (`host:port`, exactly what `@tcpRequest` accepts — a numeric IPv4/IPv6
@@ -68,3 +93,22 @@
 >> @tcpServe = (address :: Text, handler :: (Connection) -> $) -> Server => <
   Server { handle = 0 }
 >
+
+~ `@tcpServe`, given the `Address` a `Server.address()` reported instead of `host:port` text.
+>> @tcpServe = (address :: Address, handler :: (Connection) -> $) -> Server => <
+  @tcpServe(address.text(), handler)
+>
+
+~ The suite for `Address.text()`: offline over canned host/port pairs, so it runs anywhere.
+~ Only `quilon test corelib/net.qn` compiles this block — every other command erases it.
+<< core.test
+
+test.describe("Address.text", () => <
+  test.it("renders an IPv4 host:port with no brackets", () => <
+    expect(Address { host = "127.0.0.1", port = 9047 }.text(), equals("127.0.0.1:9047"))
+  >)
+
+  test.it("wraps an IPv6 host in brackets", () => <
+    expect(Address { host = "::1", port = 9048 }.text(), equals("[::1]:9048"))
+  >)
+>)

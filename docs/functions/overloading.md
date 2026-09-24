@@ -38,6 +38,10 @@ error[QN311]: no overload of `score` takes (Bool)
   function with an inferred return type. Its parameters are annotated — a **method**
   parameter is held to the same rule (see
   [named record types](../types/records.md#named-record-types-with-methods)).
+- **A member declared `-> Result` carries the payload types its own body returns**
+  ([sum types](../types/sum-types.md#result-is-a-normal-sum-type)), exactly like a
+  single declaration — each member refines from its own body alone, independently of
+  every other member sharing its name.
 - **The built-in operators are members.** `+` on `Num` and `+` on
   `Text` are two members of the `+` set, and a type's own operator member joins it on the
   same terms.

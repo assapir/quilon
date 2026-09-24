@@ -6,6 +6,16 @@ All notable changes to Quilon are documented here.
 
 ### Added
 
+- **`net.Server` gains `address() -> Address`**, the `host:port` a server bound — most
+  useful after binding port `0`, which takes any free port the OS assigns, so a program
+  can learn which one. `Address` carries `host :: Text` and `port :: Num`, plus `text()`
+  rendering `host:port` with an IPv6 host in brackets, the form `@tcpRequest`/`@tcpServe`
+  accept. `net.@tcpServe`, `net.@tcpRequest`, and `http.@serve` each gain an overload
+  taking that `Address` directly, in place of `.text()`'d `host:port` text. An overloaded
+  member declared `-> Result` now carries the payload types its own body returns, just
+  like a single declaration, which is what makes `@tcpRequest`'s two `Result`-returning
+  overloads both usable. See `docs/corelib/net.md` and `docs/corelib/http.md`. Part of
+  #435.
 - **The HTTP server keeps a connection alive across requests, with a configurable idle
   timeout.** The connection handler loops instead of closing after one response: it reads
   the next request off the same connection — carrying over a pipelined request's own bytes

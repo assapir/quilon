@@ -1077,6 +1077,19 @@ serveConnection = (
   net.Server { handle = 0 }
 >
 
+~ `http.@serve`, given the `net.Address` a `Server.address()` reported instead of
+~ `host:port` text.
+>> @serve = (address :: net.Address, handler :: (Request) -> Response) -> net.Server => <
+  @serve(address.text(), handler)
+>
+
+~ As above, with `options` too.
+>> @serve = (
+  address :: net.Address, handler :: (Request) -> Response, options :: ServerOptions
+) -> net.Server => <
+  @serve(address.text(), handler, options)
+>
+
 ~ The suite for everything above: every parser and serialiser edge case, offline over canned
 ~ `Text`, so it runs anywhere. Only `quilon test corelib/http.qn` compiles these blocks — every
 ~ other command erases them, and the fixtures below carry no `>>`, so a program importing

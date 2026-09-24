@@ -18,14 +18,14 @@ use quilon::lexer::Lexer;
 use quilon::parser;
 use quilon::source_map::SourceMap;
 use quilon::typechecker::{TypeChecker, TypeTable};
-use std::io::Write;
-use std::net::{TcpListener, TcpStream};
+use std::io::{BufRead, BufReader, Write};
+use std::net::TcpStream;
 use std::path::Path;
-use std::process::Command;
+use std::process::{Child, Command};
 use std::rc::Rc;
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{Duration, Instant};
+use std::sync::{Mutex, mpsc};
+use std::time::Duration;
 
 /// The `file:line:column:` position line a report prints for `path` — with the path
 /// elided exactly as the report elides it.
@@ -276,16 +276,33 @@ pub fn run_with_stdin(mut command: Command, input: &[u8]) -> (Option<i32>, Vec<u
     (output.status.code(), output.stdout)
 }
 
-/// A port nothing is bound to right now — bind an ephemeral one and drop it immediately.
-/// Vanishingly unlikely to race another process for the same port on a test box, and the
-/// program under test reports a clear bind failure if it ever loses that race. Shared by
-/// every test that hands a chosen port to a subprocess server (`tcp_serve_test.rs`,
-/// `http_serve_test.rs`).
-pub fn free_port() -> u16 {
-    let listener = TcpListener::bind("127.0.0.1:0").expect("bind to find a free port");
-    let port = listener.local_addr().expect("local addr").port();
-    drop(listener);
-    port
+/// The port a server test program announces on the first line of its stdout
+/// (`io.print(server.address().port)`), read from `child`'s piped stdout. Choosing a free
+/// port ahead of time raced other processes on a shared box. Panics if the first line is
+/// not a valid port.
+pub fn read_announced_port(child: &mut Child) -> u16 {
+    let mut stdout = child
+        .stdout
+        .take()
+        .expect("the child's stdout must be piped");
+    // `read_line` blocks with no timeout of its own, so it runs on a helper thread and
+    // this side waits on it bounded — a hung or crashed-before-printing child then fails
+    // the test in 10s with a clear message instead of hanging the whole run.
+    let (sender, receiver) = mpsc::channel();
+    std::thread::spawn(move || {
+        let mut line = String::new();
+        let outcome = BufReader::new(&mut stdout)
+            .read_line(&mut line)
+            .map(|_| line);
+        let _ = sender.send(outcome);
+    });
+    let line = receiver
+        .recv_timeout(Duration::from_secs(10))
+        .expect("the child never announced its port within 10s")
+        .expect("read the announced port from the child's stdout");
+    line.trim()
+        .parse()
+        .unwrap_or_else(|error| panic!("not a port ({error}): {line:?}"))
 }
 
 /// Connect to `host:port` with a bounded read/write timeout on every op — every client
@@ -298,19 +315,6 @@ pub fn connect_with_timeout(host: &str, port: u16) -> std::io::Result<TcpStream>
     stream.set_read_timeout(Some(Duration::from_secs(5)))?;
     stream.set_write_timeout(Some(Duration::from_secs(5)))?;
     Ok(stream)
-}
-
-/// Connect to `host:port`, retrying (bounded) until the server is up — the process under
-/// test needs a moment after starting before it has actually bound and is accepting.
-pub fn connect_once_listening(host: &str, port: u16) -> TcpStream {
-    let deadline = Instant::now() + Duration::from_secs(10);
-    loop {
-        match connect_with_timeout(host, port) {
-            Ok(stream) => return stream,
-            Err(_) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(20)),
-            Err(error) => panic!("never managed to connect to the test server: {error}"),
-        }
-    }
 }
 
 /// Whether `tool` is on PATH, for gates that need a linker and skip gracefully without one.

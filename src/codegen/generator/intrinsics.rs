@@ -291,6 +291,10 @@ impl<'ctx> CodeGenerator<'ctx> {
             "__connection_write" => void.fn_type(&[f64t.into(), ptr.into(), i64t.into()], false),
             // void __connection_close(double connectionId) — `Connection.close()`.
             "__connection_close" => void.fn_type(&[f64t.into()], false),
+            // { ptr, i64 } __server_address_host(double serverId) — Server.address()'s bare host.
+            "__server_address_host" => self.ptr_len_struct_type().fn_type(&[f64t.into()], false),
+            // double __server_address_port(double serverId) — Server.address()'s bound port.
+            "__server_address_port" => f64t.fn_type(&[f64t.into()], false),
             // void __server_kill(double serverId, double seconds) — `Server.kill`: stop
             // accepting, wait up to `seconds` for in-flight handlers, force-close whatever
             // is still open past that grace period, then settle the accept loop's own

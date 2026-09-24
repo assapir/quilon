@@ -814,6 +814,52 @@ fn test_overload_set_resolves_by_type() {
 }
 
 #[test]
+fn test_overloaded_members_returning_result_refine_independently() {
+    // Two `pick` overloads, each declared the one generic annotation the language can
+    // write (`-> Result`), with a DIFFERENT concrete `Ok` payload — one call sits
+    // textually BETWEEN the two declarations, one AFTER both. If refinement were shared
+    // or order-dependent across the set, one of these would see the other member's
+    // payload (or a still-generic one) instead of its own.
+    let src = "\
+pick = (flag :: Bool) -> Result => < Ok(\"hello\") >
+
+between = () -> Text => <
+  pick(true) ? | Ok(t) => t | NotOk(_) => \"\"
+>
+
+pick = (flag :: Num) -> Result => < Ok(true) >
+
+after = () -> Bool => <
+  pick(5) ? | Ok(b) => b | NotOk(_) => false
+>
+
+^ = () -> Num => < 0 >
+";
+    let tokens = Lexer::tokenize(src).unwrap();
+    let program = parse(&tokens).unwrap();
+    let types = TypeChecker::new()
+        .check_program(&program)
+        .expect("both overload members should refine their own Result payload independently");
+
+    let has_ok_payload = |payload: &Type| {
+        types.values().any(|recorded| {
+            matches!(recorded, Type::Sum { name, variants } if name == "Result"
+                && variants
+                    .iter()
+                    .any(|variant| variant.name == "Ok" && variant.fields == vec![payload.clone()]))
+        })
+    };
+    assert!(
+        has_ok_payload(&Type::Text),
+        "the Bool-argument member's call (between the declarations) must see its own Ok(Text)"
+    );
+    assert!(
+        has_ok_payload(&Type::Bool),
+        "the Num-argument member's call (after both declarations) must see its own Ok(Bool)"
+    );
+}
+
+#[test]
 fn test_overload_no_match_is_error() {
     // No `f` overload accepts a Bool (no implicit coercion).
     let err = check_ok(
