@@ -482,6 +482,13 @@ impl TypeChecker {
                     slot + 1,
                     parameter.span.clone(),
                 )?;
+                // `slot` here (not the receiver-offset argument slot above) is this
+                // parameter's own index among the method's explicit ones — the same index
+                // `pin_result_parameters_of` iterates `parameters` by.
+                self.env.set_result_parameter(
+                    &parameter.name,
+                    Some((method.body.span().clone(), slot)),
+                );
             }
 
             // Type-check the body, then resolve the method's result type: the annotation
@@ -887,6 +894,19 @@ impl TypeChecker {
 
         let bound_value_is_callable = matches!(final_type, Type::Function { .. });
 
+        // A bare `name = alias`/`name := alias` copy carries a still-generic `Result`
+        // parameter's identity forward unchanged, chased through the environment so a
+        // rename of any length still resolves to the original (`Symbol::result_parameter`)
+        // — anything else (a rebind to a freshly built value, a shadow reusing the same
+        // name) breaks the chain, matching how `check_match` resolves a scrutinee.
+        let result_parameter_alias = match &declaration.value {
+            Expression::Identifier { name, .. } => self
+                .env
+                .lookup(name)
+                .and_then(|symbol| symbol.result_parameter.clone()),
+            _ => None,
+        };
+
         if declaration.mutable {
             // `:=` — reassign if the name is already bound, otherwise a new mutable binding.
             if let Some(existing_type) = self.env.get_type(&declaration.name) {
@@ -906,6 +926,10 @@ impl TypeChecker {
                     self.top_level_reassignments
                         .insert(declaration.span.clone());
                 }
+                // A reassignment's new value may or may not still be the same alias —
+                // update it exactly like every other fact this branch already refreshes.
+                self.env
+                    .set_result_parameter(&declaration.name, result_parameter_alias);
             } else {
                 self.env.define_binding(
                     declaration.name.clone(),
@@ -915,6 +939,8 @@ impl TypeChecker {
                     value_aliasing,
                     declaration.span.clone(),
                 )?;
+                self.env
+                    .set_result_parameter(&declaration.name, result_parameter_alias);
                 if declaration.atomic {
                     self.env.mark_atomic(&declaration.name);
                 }
@@ -929,6 +955,8 @@ impl TypeChecker {
                 value_aliasing,
                 declaration.span.clone(),
             )?;
+            self.env
+                .set_result_parameter(&declaration.name, result_parameter_alias);
         }
 
         // A binding whose value is itself callable (a closure) carries what CALLING it
@@ -1152,6 +1180,10 @@ impl TypeChecker {
                 slot,
                 parameter.span.clone(),
             )?;
+            self.env.set_result_parameter(
+                &parameter.name,
+                Some((declaration.body.span().clone(), slot)),
+            );
         }
 
         // The same contextual-typing helper a call argument uses (`infer_argument`) infers
@@ -1344,6 +1376,8 @@ impl TypeChecker {
                 slot,
                 parameter.span.clone(),
             )?;
+            self.env
+                .set_result_parameter(&parameter.name, Some((body.span().clone(), slot)));
         }
         // A FUNCTION-typed `-> Type` annotation types a lambda body contextually, the
         // same way a named function's return annotation does (see

@@ -29,7 +29,7 @@ mod tests;
 
 use aliasing::{ResultAliasing, ValueAliasing};
 use std::collections::HashMap;
-use sums::result_of;
+use sums::{ResultScrutinee, is_unspecialized_result, result_of};
 
 /// Re-exported so the language server's completion (`src/lsp/analysis.rs`) reads the same
 /// built-in method signatures the checker itself dispatches on — see `calls.rs`.
@@ -555,6 +555,16 @@ pub struct Symbol {
     /// resolves a `:=` to the specific binding it targets — no other pass reasons about
     /// names for this.
     atomic: bool,
+    /// The still-generic `Result` parameter this binding's value still IS: its owning
+    /// declaration's body span (the same span `sums::pin_result_parameters_of` already
+    /// has) and its own index among that declaration's explicit parameters. Set on a
+    /// parameter itself and chased through a bare `name = alias`/`name := alias` copy
+    /// (`check_variable_declaration`), so a rename of any length still resolves to the
+    /// original; anything else (a rebind to a freshly built value, an unrelated shadow)
+    /// leaves it `None`. Read only by `check_match`, to attribute a scrutinee back to its
+    /// declaration — kept apart from `value_aliasing`, whose reference-type rule a generic
+    /// `Result` value is exempt from.
+    result_parameter: Option<(Span, usize)>,
 }
 
 #[derive(Debug, Clone)]
@@ -729,6 +739,11 @@ pub struct TypeChecker {
     // Each overloaded call's argument spans, recorded as `resolve_overload` resolves it
     // to one member.
     overload_call_args: OverloadCallArgs,
+    // `?`/`|` matches on a bare `:: Result` parameter, recorded by `check_match` as it
+    // resolves the scrutinee through the normal environment, keyed by the owning
+    // declaration's body span — `pin_result_parameters_of` reads these back instead of
+    // re-deriving them by walking the body a second time.
+    result_scrutinees: std::collections::HashMap<Span, Vec<ResultScrutinee>>,
 }
 
 impl Default for TypeChecker {
@@ -764,6 +779,7 @@ impl TypeChecker {
             checking_corelib_declaration: false,
             method_call_args: std::collections::HashMap::new(),
             overload_call_args: std::collections::HashMap::new(),
+            result_scrutinees: std::collections::HashMap::new(),
         };
 
         checker.add_builtins();

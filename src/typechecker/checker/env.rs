@@ -46,6 +46,7 @@ impl Environment {
                 setter_receiver: false,
                 constant: false,
                 atomic: false,
+                result_parameter: None,
             },
             span,
         )
@@ -70,6 +71,7 @@ impl Environment {
                 setter_receiver: false,
                 constant: true,
                 atomic: false,
+                result_parameter: None,
             },
             span,
         )
@@ -114,6 +116,10 @@ impl Environment {
             setter_receiver: false,
             constant: false,
             atomic: false,
+            // Set right after by `set_result_parameter`, once the caller — which knows
+            // this parameter's own index among the declaration's EXPLICIT parameters,
+            // distinct from `slot` above (receiver-offset for a method) — has it in hand.
+            result_parameter: None,
         }
     }
 
@@ -129,6 +135,7 @@ impl Environment {
             setter_receiver: false,
             constant: false,
             atomic: false,
+            result_parameter: None,
         };
         let root = self.scopes.first_mut().expect("the root scope exists");
         root.insert(name.to_string(), symbol);
@@ -156,13 +163,17 @@ impl Environment {
                 setter_receiver: true,
                 constant: false,
                 atomic: false,
+                result_parameter: None,
             },
             span,
         )
     }
 
     /// Define a binding whose value may alias other bindings (its initializer's or the
-    /// matched scrutinee's aliasing), owned by `owner`.
+    /// matched scrutinee's aliasing), owned by `owner`. Starts with no
+    /// [`Symbol::result_parameter`] of its own — a caller whose initializer copies one
+    /// sets it right after, via `set_result_parameter` (already needed there for the
+    /// `:=` reassignment case, which never calls this constructor at all).
     pub(super) fn define_binding(
         &mut self,
         name: String,
@@ -183,6 +194,7 @@ impl Environment {
                 setter_receiver: false,
                 constant: false,
                 atomic: false,
+                result_parameter: None,
             },
             span,
         )
@@ -274,6 +286,21 @@ impl Environment {
     pub(super) fn mark_atomic(&mut self, name: &str) {
         if let Some(symbol) = self.lookup_mut(name) {
             symbol.atomic = true;
+        }
+    }
+
+    /// Set (or clear) `name`'s [`Symbol::result_parameter`] after it's already defined —
+    /// used both to mark a just-`define_parameter`-ed name as itself a still-generic
+    /// `Result` parameter, and to update a `:=` reassignment's alias status to its new
+    /// value's, the same "annotate after the fact" shape `mark_atomic` and
+    /// `set_result_aliasing` already use.
+    pub(super) fn set_result_parameter(
+        &mut self,
+        name: &str,
+        result_parameter: Option<(Span, usize)>,
+    ) {
+        if let Some(symbol) = self.lookup_mut(name) {
+            symbol.result_parameter = result_parameter;
         }
     }
 }
