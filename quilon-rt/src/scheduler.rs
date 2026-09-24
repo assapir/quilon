@@ -126,14 +126,9 @@ struct Scheduler {
     /// fiber may wait on the same address, so this is 1:many — every waiter is
     /// re-readied when the address is woken.
     address_waiters: HashMap<usize, Vec<usize>>,
-    /// Tokens a BACKGROUND source parked on — excluded from `run`'s own "is anything
-    /// still going on" test (see [`mark_background_readiness`]). The signal trap's
-    /// dispatcher fiber (`crate::trap`) parks on its self-pipe for the rest of the
-    /// process's life, whether or not a signal ever arrives; without this, a program
-    /// that declares a trap could never exit on its own once `^` returns — only an
-    /// external kill would end it. A background park still wakes and resumes exactly
-    /// like any other; this affects only whether its OWN pending park keeps `run`
-    /// looping.
+    /// Readiness parks excluded from `run`'s own "is anything still going on?" test — the
+    /// trap dispatcher parks here for the process's life, and without this a program that
+    /// declares a trap could never exit on its own once `^` returns.
     background_tokens: std::collections::HashSet<Token>,
 }
 
@@ -548,9 +543,7 @@ pub(crate) fn wake_address(address: usize) {
     });
 }
 
-/// Mark `token` as a BACKGROUND readiness park: parking on it does not, by itself, keep
-/// [`run`]'s loop going once every non-background fiber has finished or is itself parked
-/// on nothing but background tokens. See the [`Scheduler::background_tokens`] doc.
+/// Parking on `token` alone never keeps `run`'s loop going.
 pub(crate) fn mark_background_readiness(token: Token) {
     with_scheduler(|scheduler| {
         scheduler.background_tokens.insert(token);

@@ -1,25 +1,16 @@
-//! The top-level signal trap (`!>`): only the file that defines `^` may declare one, a
-//! program declares at most one, and its arms match `process.Signal` — bare variant names
-//! (`Interrupt`, `Terminate`, …) resolve against that sum the way `Ok`/`NotOk` resolve for
-//! a `Result`, since `core.process` merges `Signal`'s variants in under their qualified
-//! spelling (`core.process.Interrupt`) while a trap arm is written bare.
+//! The top-level signal trap (`!>`): its arms match `process.Signal` by bare variant name
+//! (`Interrupt`, `Terminate`, …), the way `Ok`/`NotOk` resolve for a `Result`.
 //!
 //! Part of the type checker; see `super` for the `TypeChecker` state these methods run
-//! against. Runs after the main item-by-item pass (see `check_program`), once every
-//! top-level item — including a merged `<< core.process` — has been checked and
-//! registered, exactly like `check_fiber_sharing`/`check_dead_functions`.
+//! against.
 
 use super::*;
 use crate::ast::{TrapDeclaration, display_name};
 use crate::lexer::ROOT_FILE;
 
-/// `core.process`'s own sum type, once merged in by `<< core.process` — see
-/// `corelib/process.qn`.
 const PROCESS_SIGNAL: &str = "core.process.Signal";
 
 impl TypeChecker {
-    /// Enforce the trap's placement rules (only the root file, at most one per program),
-    /// then check the one trap's arms, if any.
     pub(super) fn check_traps(&mut self, program: &Program) -> Result<(), TypeError> {
         let traps: Vec<&TrapDeclaration> = program
             .items
@@ -50,28 +41,40 @@ impl TypeChecker {
         self.check_trap_arms(first)
     }
 
-    /// Check one trap's arms against `process.Signal`: each pattern names one of its
-    /// variants (bare — see the module doc), no two arms name the same variant, and each
-    /// arm's body is checked with its payload (`Sender`) bound at its real type. No
-    /// exhaustiveness requirement: a signal with no arm keeps the OS default.
+    /// Resolves each arm's bare name to its variant, then reuses `check_pattern`/
+    /// `bind_pattern_vars` (arity, refutability, binding) against a pattern rewritten to
+    /// the variant's real, qualified name, since those compare names exactly.
     fn check_trap_arms(&mut self, trap: &TrapDeclaration) -> Result<(), TypeError> {
-        let Some(Type::Sum { variants, .. }) = self.sum_types.get(PROCESS_SIGNAL).cloned() else {
+        let Some(signal_type) = self.sum_types.get(PROCESS_SIGNAL).cloned() else {
             return Err(TypeError::TrapWithoutProcessImport {
                 span: trap.span.clone(),
             });
+        };
+        let Type::Sum { variants, .. } = &signal_type else {
+            unreachable!("core.process.Signal is always registered as a sum")
         };
 
         let mut seen: std::collections::HashMap<String, Span> = std::collections::HashMap::new();
 
         for arm in &trap.arms {
             let Pattern::Constructor {
-                name, arguments, ..
+                name,
+                arguments,
+                span,
             } = &arm.pattern
             else {
                 return Err(TypeError::TrapArmNotASignalPattern {
                     span: arm.pattern.span().clone(),
                 });
             };
+
+            if let Some(first) = seen.insert(name.clone(), span.clone()) {
+                return Err(TypeError::DuplicateTrapArm {
+                    variant: name.clone(),
+                    first,
+                    span: span.clone(),
+                });
+            }
 
             let Some(variant) = variants
                 .iter()
@@ -84,53 +87,26 @@ impl TypeChecker {
                         .iter()
                         .map(|variant| display_name(&variant.name).to_string())
                         .collect(),
-                    span: arm.pattern.span().clone(),
+                    span: span.clone(),
                 });
             };
+            let resolved = Pattern::Constructor {
+                name: variant.name.clone(),
+                arguments: arguments.clone(),
+                span: span.clone(),
+            };
 
-            if let Some(first) = seen.insert(name.clone(), arm.pattern.span().clone()) {
-                return Err(TypeError::DuplicateTrapArm {
-                    variant: name.clone(),
-                    first,
-                    span: arm.pattern.span().clone(),
-                });
-            }
-
-            if arguments.len() != variant.fields.len() {
-                return Err(TypeError::WrongNumberOfArguments {
-                    expected: variant.fields.len(),
-                    got: arguments.len(),
-                    span: arm.pattern.span().clone(),
-                });
-            }
-            for argument in arguments {
-                if !argument.is_irrefutable() {
-                    return Err(TypeError::RefutableConstructorArg {
-                        constructor: name.clone(),
-                        span: argument.span().clone(),
-                    });
-                }
-            }
+            self.check_pattern(&resolved, &signal_type)?;
 
             self.env.push_scope();
             let enclosing_declaration = self.enter_declaration();
-            for (slot, (argument, field_type)) in
-                arguments.iter().zip(variant.fields.iter()).enumerate()
+            self.bind_pattern_vars(&resolved, &signal_type, &ValueAliasing::default())?;
+            // Codegen has no checker `env` to read the payload's type back from; recorded
+            // here by the pattern's own span, the way a context-inferred parameter's is.
+            if let (Some(Pattern::Identifier { span, .. }), Some(field_type)) =
+                (arguments.first(), variant.fields.first())
             {
-                if let Pattern::Identifier { name, span } = argument {
-                    // Recorded in the type oracle by the payload's own span — codegen has
-                    // no checker `env` to read back from, and this is exactly how a
-                    // context-inferred parameter's type is recovered (see
-                    // `record_parameter_types`).
-                    self.type_table.insert(span.clone(), field_type.clone());
-                    self.env.define_parameter(
-                        name.clone(),
-                        field_type.clone(),
-                        self.current_declaration,
-                        slot,
-                        span.clone(),
-                    )?;
-                }
+                self.type_table.insert(span.clone(), field_type.clone());
             }
             self.infer_expression(&arm.body)?;
             self.leave_declaration(enclosing_declaration);

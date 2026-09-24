@@ -225,10 +225,7 @@ impl<'a> Taint<'a> {
                     self.analyze_method(method);
                 }
             }
-            // Each arm body is its own launch scope, joined when it returns — exactly
-            // like a `net.@tcpServe`/`http.@serve` handler's body: a fresh scope per arm,
-            // and its result is a strict slot (the arm's body has no caller to hand a
-            // still-deferred value back to; the runtime just calls it).
+            // The runtime calls an arm directly, so its own launch is joined here too.
             Item::TrapDeclaration(trap) => {
                 for arm in &trap.arms {
                     let scope = self.fresh_scope();
@@ -806,10 +803,6 @@ mod tests {
 
     #[test]
     fn a_trap_arms_own_deferred_body_is_forced() {
-        // A signal trap arm is checked in a fresh, STRICT scope exactly like a top-level
-        // function's body (`analyze_item`'s `TrapDeclaration` case) — the runtime calls it
-        // directly, with no caller to hand a still-deferred value back to, so its launch is
-        // joined (forced) before the arm returns, the same as a server handler's body.
         let src = "!> | Interrupt(s) => @readStdin()\n^ = () -> Num => < 0 >";
         assert_eq!(info(src).force_sites.len(), 1);
     }

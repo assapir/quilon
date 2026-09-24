@@ -327,11 +327,7 @@ pub struct CodeGenerator<'ctx> {
     // helper) can append a block AFTER the one execution actually continues from, so the
     // true resume point has to be recorded explicitly rather than derived.
     init_block: Option<inkwell::basic_block::BasicBlock<'ctx>>,
-    // The signal trap's own arm functions, as `(signal index, generated function)` pairs —
-    // filled by `generate_trap` as each arm is emitted, and drained by
-    // `generate_main_wrapper` to emit one `__trap_install` call per arm, right after GC
-    // init and before `^` ever runs. Empty for a program with no trap, which is what
-    // keeps that program's `main` free of any trap-related IR at all.
+    // Signal trap arms as `(signal index, function)`, installed once `^`'s entry emits.
     trap_arms: Vec<(usize, FunctionValue<'ctx>)>,
 }
 
@@ -961,12 +957,8 @@ impl<'ctx> CodeGenerator<'ctx> {
             .build_call(init_function, &[], "")
             .map_err(ctx("Failed to call __ql_init"))?;
 
-        // The signal trap: one `__trap_install(signalIndex, armFn)` call per written arm,
-        // before `^` runs. Emitted here (inside the `__ql_entry` thunk that runs ON the
-        // fiber scheduler) rather than in bare `main`: installing a trap spawns the
-        // dispatcher fiber, which needs an active scheduler — `main` calls into one only
-        // through `__run_fiber_main`, which is what starts it. Empty (no IR at all) for a
-        // program with no trap.
+        // Here, not in bare `main`: installing a trap spawns a fiber, which needs the
+        // scheduler `__run_fiber_main` is what starts.
         if !self.trap_arms.is_empty() {
             let install = self.get_intrinsic("__trap_install")?;
             let f64_type = self.context.f64_type();

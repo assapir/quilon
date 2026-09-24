@@ -8,11 +8,10 @@
 << core.process
 << core.test
 
-~ Promoted to a top-level atomic binding (see `examples/shared_counter.qn`), so both `^`
-~ and the trap's arms below reach the same stand.
+~ Both `^` and the trap's arms reach the stand through this atomic binding.
 @stand := net.Server { handle = 0 }
 
-!> | Interrupt(s) => stand.kill(2)
+!> | Interrupt(_) => stand.kill(2)
    | Terminate(_) => stand.kill(0)
 
 hummus = (request :: http.Request) -> http.Response => <

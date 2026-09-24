@@ -112,11 +112,7 @@ impl<'a> Parser<'a> {
         })
     }
 
-    /// Parse the top-level signal trap: `!>` followed by one or more match arms (`|
-    /// Pattern => expression`), reusing the arm-list parser `?`'s match expression uses.
-    /// Whether this is the file that defines `^`, and whether a program declares more than
-    /// one, are checked by the type checker after linking — see
-    /// `docs/concurrency/README.md#signal-trap`.
+    /// Placement/uniqueness are the checker's job, not this function's.
     pub(super) fn parse_trap_declaration(&mut self) -> Result<TrapDeclaration, ParseError> {
         let start = self.current_span();
         self.expect(&TokenKind::Trap)?;

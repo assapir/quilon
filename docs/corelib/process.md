@@ -35,11 +35,7 @@ the way `Ok`/`NotOk` resolve for a `Result`; an ordinary match on a `Signal` val
 the qualified `process.Interrupt` spelling instead. See the
 [signal trap](../concurrency/README.md#signal-trap) section for the trap itself.
 
-`SIGKILL` and `SIGSTOP` end a process without ever reaching it, on every OS that has them,
-so neither is a `Signal` variant. `SIGPIPE` — the default a write to a peer that has closed
-its end raises — is left ignored by the runtime, so a socket write past a closed peer is a
-`Result`/`NotOk` a program matches, not a signal it would otherwise need to catch. A fault
-(`SIGSEGV`, `SIGBUS`, `SIGFPE`, `SIGILL`) reports a runtime diagnostic (see
-[`docs/tooling/errors/runtime.md`](../tooling/errors/runtime.md)) directly, its own report
-the only thing there is for it: a program's own logic has no state left to meaningfully
-resume from one.
+`SIGKILL` and `SIGSTOP` end a process before it can react, so they have no variant. The
+runtime ignores `SIGPIPE`; a write to a closed peer is a `NotOk`. A fault (`SIGSEGV`,
+`SIGBUS`, `SIGFPE`, `SIGILL`) is a runtime diagnostic, see
+[runtime.md](../tooling/errors/runtime.md).

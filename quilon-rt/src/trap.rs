@@ -1,26 +1,13 @@
 // SPDX-License-Identifier: GPL-2.0-only WITH Classpath-exception-2.0
 
 //! The top-level signal trap (`!>`): `sigaction` is installed only for the signals a
-//! program actually writes an arm for, only once a trap exists at all — a program with no
-//! trap never calls [`__trap_install`], so nothing here ever runs for it.
+//! program actually traps, only once any exist.
 //!
-//! **Mechanism.** The signal handler itself runs only async-signal-safe code: it records
-//! the sender (`si_pid`/`si_uid`) into a lock-free per-signal slot and writes one byte to
-//! a self-pipe registered with the reactor — the same `mio`/reactor plumbing `net.rs`
-//! registers a socket with (see `crate::scheduler::register_readiness`). A single
-//! dispatcher fiber, spawned once (on the first arm installed), parks on the pipe's
-//! readiness; woken, it drains the pipe and spawns a fresh fiber for every signal that
-//! arrived and is not already running its arm. Per signal: a `running` flag and one
-//! `pending` slot (a later arrival overwrites an earlier still-pending one, so at most one
-//! is ever queued) — an arrival while the arm's own fiber is still running is delivered,
-//! once, when that fiber returns; the returning fiber's own code notices the pending
-//! arrival and spawns the next run itself, with no need to wake the dispatcher again (see
-//! `spawn_run`, below).
-//!
-//! The dispatcher's own park is marked background (`crate::scheduler::mark_background_readiness`): a
-//! trap stays installed for the life of the process, but that alone must never keep a
-//! program with no other reason to keep running (a server, an open read, …) from exiting
-//! once `^` returns — only an external signal or the program's own exit ends it otherwise.
+//! The handler is async-signal-safe only: it stores the sender in a per-signal slot and
+//! wakes a self-pipe registered with the reactor. A dispatcher fiber drains the pipe and
+//! spawns a fresh fiber per signal not already running its arm; an arrival mid-run is
+//! delivered once, when that run returns. The dispatcher's own park is marked
+//! background, so a trap alone never keeps an otherwise-idle program running.
 
 use crate::scheduler::{
     mark_background_readiness, park_on_readiness, register_readiness, reregister_readiness, spawn,
@@ -33,10 +20,8 @@ use std::os::unix::io::AsRawFd;
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicUsize, Ordering};
 
-/// One entry per `process.Signal` variant, in EXACTLY the declaration order
-/// `corelib/process.qn`'s `Signal` sum uses and codegen's own `SIGNAL_VARIANT_ORDER`
-/// indexes by — the index `__trap_install` takes is never a raw OS signal number, which
-/// differs across targets (Linux's `SIGUSR1`/`SIGUSR2` are 10/12; macOS's are 30/31).
+/// `process.Signal`'s variants, in declaration order — an index into this, never a raw OS
+/// signal number, since `SIGUSR1`/`SIGUSR2` differ by target (10/12 on Linux, 30/31 on macOS).
 const TRAP_SIGNALS: [c_int; 7] = [
     libc::SIGHUP,
     libc::SIGINT,
@@ -47,21 +32,16 @@ const TRAP_SIGNALS: [c_int; 7] = [
     libc::SIGUSR2,
 ];
 
-/// One signal's own state — touched by the (async-signal-unsafe-averse) handler and by
-/// ordinary fiber-scheduler code, so every field is a plain atomic rather than behind a
-/// lock the handler could deadlock on if it interrupted a holder.
+/// Plain atomics, not a lock: the signal handler could interrupt a lock holder.
 struct Slot {
-    /// Whether this signal's arm is currently running on its own fiber. Only ever
-    /// written by ordinary scheduler-thread code (`dispatch_if_idle`/`spawn_run`), never
-    /// by the signal handler.
+    /// Set only by ordinary fiber code, never the signal handler.
     running: AtomicBool,
-    /// A further arrival, to run once the current one (if any) finishes — at most one:
-    /// a later arrival's sender overwrites an earlier still-pending one's.
+    /// A further arrival, to run once the current one finishes — a later one overwrites
+    /// an earlier still-pending one, so at most one is ever queued.
     pending: AtomicBool,
     pending_pid: AtomicI64,
     pending_uid: AtomicI64,
-    /// The arm's own generated function, `void (double pid, double uid)`, as a raw
-    /// address — zero until installed (no arm written for this signal).
+    /// Zero until an arm is installed for this signal.
     handler: AtomicUsize,
 }
 
@@ -75,25 +55,14 @@ const fn empty_slot() -> Slot {
     }
 }
 
-static SLOTS: [Slot; TRAP_SIGNALS.len()] = [
-    empty_slot(),
-    empty_slot(),
-    empty_slot(),
-    empty_slot(),
-    empty_slot(),
-    empty_slot(),
-    empty_slot(),
-];
+static SLOTS: [Slot; TRAP_SIGNALS.len()] = [const { empty_slot() }; TRAP_SIGNALS.len()];
 
-/// The self-pipe's write end, as a raw descriptor the async-signal-safe handler writes to
-/// directly (never through `mio`'s own `Write`, whose error path is not documented
-/// async-signal-safe) — `-1` until [`ensure_dispatcher`] creates it.
+/// A raw descriptor, not a `mio` handle: the handler writes to it directly, and `mio`'s
+/// own `Write` has no documented async-signal-safety. `-1` until a trap installs.
 static PIPE_WRITE_FD: AtomicI64 = AtomicI64::new(-1);
 
-/// `__trap_install(signalIndex, armFn)`: install `armFn` for `TRAP_SIGNALS[signalIndex]`,
-/// setting up the shared self-pipe and dispatcher fiber on the very first call. Codegen
-/// calls this once per written arm, from `main`, before `^` runs (see
-/// `CodeGenerator::generate_main_wrapper`) — a program with no trap never calls this.
+/// Installs `arm_fn` for `TRAP_SIGNALS[signal_index]`, setting up the shared self-pipe and
+/// dispatcher fiber on the first call.
 ///
 /// # Safety contract (upheld by the compiler)
 /// `arm_fn` is a live `extern "C" fn(f64, f64)` for the rest of the process's life.
@@ -112,10 +81,8 @@ pub extern "C" fn __trap_install(signal_index: f64, arm_fn: *const c_void) {
     install_sigaction(TRAP_SIGNALS[index]);
 }
 
-/// Install `sigaction` for `signal` with [`handle_signal`], `SA_SIGINFO` only (no
-/// `SA_ONSTACK` — unlike `stack_overflow`'s guard-page handler, this one only ever writes
-/// a handful of atomics and a single byte, never touching the stack deeply enough to need
-/// one).
+/// No `SA_ONSTACK`: the handler only touches a few atomics and a one-byte write, never
+/// deep enough to need an alternate stack.
 fn install_sigaction(signal: c_int) {
     let mut action: libc::sigaction = unsafe { std::mem::zeroed() };
     action.sa_sigaction = handle_signal as *const () as usize;
@@ -127,20 +94,18 @@ fn install_sigaction(signal: c_int) {
     unsafe { libc::sigaction(signal, &action, std::ptr::null_mut()) };
 }
 
-/// The handler shared by every trapped signal — async-signal-safe only: record the
-/// sender into `signal`'s slot and wake the self-pipe. Never runs Quilon code directly;
-/// the dispatcher fiber (ordinary, non-signal-handler code) does that once woken.
+/// Shared by every trapped signal. Never runs Quilon code directly — only records the
+/// sender and wakes the dispatcher.
 ///
 /// # Safety contract
-/// Runs as a signal handler: every call inside must be async-signal-safe. Reading
-/// `si_pid`/`si_uid` off the kernel-supplied `siginfo_t` and storing into plain atomics
-/// neither allocates nor blocks; the raw `write(2)` below is the same one-byte,
-/// best-effort write [`crate::stack_overflow`]'s handler already relies on being safe.
+/// Every call inside must be async-signal-safe: reading `siginfo_t` and storing into
+/// plain atomics neither allocates nor blocks, and the raw one-byte `write(2)` is
+/// best-effort.
 extern "C" fn handle_signal(signal: c_int, info: *mut libc::siginfo_t, _context: *mut c_void) {
     let Some(index) = TRAP_SIGNALS.iter().position(|&known| known == signal) else {
         return;
     };
-    // SAFETY: `info` is the siginfo the kernel handed the handler for this delivery.
+    // SAFETY: `info` is the siginfo the kernel handed this delivery.
     let (pid, uid) = unsafe { ((*info).si_pid(), (*info).si_uid()) };
     let slot = &SLOTS[index];
     slot.pending_pid.store(i64::from(pid), Ordering::SeqCst);
@@ -149,37 +114,29 @@ extern "C" fn handle_signal(signal: c_int, info: *mut libc::siginfo_t, _context:
 
     let fd = PIPE_WRITE_FD.load(Ordering::SeqCst);
     if fd >= 0 {
-        // SAFETY: `fd` is the self-pipe's write end, open for the rest of the process's
-        // life once `ensure_dispatcher` creates it; writing one byte to a pipe the
-        // dispatcher fiber keeps drained neither allocates, blocks, nor overflows it.
+        // SAFETY: a one-byte write to a pipe the dispatcher keeps drained never blocks.
         unsafe {
             libc::write(fd as c_int, [1u8].as_ptr().cast(), 1);
         }
     }
 }
 
-/// Create the self-pipe and spawn the dispatcher fiber, once for the life of the process
-/// — every further `__trap_install` call (a program's further arms) just adds another
-/// signal onto the same pipe and dispatcher.
+/// Creates the self-pipe and spawns the dispatcher fiber, once.
 fn ensure_dispatcher() {
     static ONCE: OnceLock<()> = OnceLock::new();
     ONCE.get_or_init(|| {
         let (sender, receiver) = pipe::new().expect("trap: failed to create the self-pipe");
         PIPE_WRITE_FD.store(i64::from(sender.as_raw_fd()), Ordering::SeqCst);
-        // The write end is never read from `sender` itself again (the handler writes the
-        // raw descriptor directly, async-signal-safety being the reason) and is never
-        // closed — it lives for the rest of the process, exactly like the handler that
-        // writes to it.
+        // Leaked: the signal handler writes the raw fd directly, for the rest of the
+        // process's life.
         std::mem::forget(sender);
 
         spawn(move || run_dispatcher(receiver));
     });
 }
 
-/// The trap dispatcher: parks on the self-pipe's readiness, drains it, then spawns a
-/// fresh fiber for every signal that arrived and is not already running its arm — one
-/// that arrived WHILE its own arm was already running is left for that fiber's own
-/// finishing code to notice and re-spawn (see [`spawn_run`]), never here.
+/// Parks on the self-pipe's readiness, drains it, then dispatches every signal that
+/// arrived and isn't already running.
 fn run_dispatcher(mut receiver: pipe::Receiver) -> ! {
     let token =
         register_readiness(&mut receiver, Interest::READABLE).expect("trap: register self-pipe");
@@ -190,9 +147,7 @@ fn run_dispatcher(mut receiver: pipe::Receiver) -> ! {
         reregister_readiness(&mut receiver, token, Interest::READABLE)
             .expect("trap: reregister self-pipe");
         park_on_readiness(token);
-        // Drain every byte so the pipe never fills (a full pipe would block the signal
-        // handler's write, which async-signal-safe code must never risk) — a wake needs
-        // no more than "something arrived", not how many bytes said so.
+        // Drain fully so the pipe never fills, which would block the handler's write.
         while matches!(receiver.read(&mut buffer), Ok(n) if n > 0) {}
 
         for index in 0..TRAP_SIGNALS.len() {
@@ -201,8 +156,7 @@ fn run_dispatcher(mut receiver: pipe::Receiver) -> ! {
     }
 }
 
-/// If signal `index` has a pending arrival and its arm is not already running, claim it
-/// and spawn a fresh fiber to run it.
+/// Claims a pending, not-already-running arrival and spawns its arm.
 fn dispatch_if_idle(index: usize) {
     let slot = &SLOTS[index];
     if slot.running.load(Ordering::SeqCst) {
@@ -217,16 +171,13 @@ fn dispatch_if_idle(index: usize) {
     spawn_run(index, pid, uid);
 }
 
-/// Run signal `index`'s arm with sender `(pid, uid)` on a fresh fiber; once it returns,
-/// check for a further arrival that came in while it ran and, if there is one, run it too
-/// the same way — the "delivered once the body returns" rule, with no need to wake the
-/// dispatcher again.
+/// Runs the arm on a fresh fiber; on return, re-dispatches a pending arrival directly,
+/// with no need to wake the dispatcher again.
 fn spawn_run(index: usize, pid: f64, uid: f64) {
     let handler = SLOTS[index].handler.load(Ordering::SeqCst);
     spawn(move || {
         if handler != 0 {
-            // SAFETY: `__trap_install` only ever stores a live `extern "C" fn(f64,
-            // f64)` here — codegen's own generated arm function.
+            // SAFETY: only `__trap_install` ever stores here, a live arm function.
             let arm_fn: extern "C" fn(f64, f64) = unsafe { std::mem::transmute(handler) };
             arm_fn(pid, uid);
         }
@@ -245,9 +196,6 @@ mod tests {
     use super::*;
     use std::sync::atomic::Ordering;
 
-    /// The pending-slot logic in isolation, with no real signal or fiber involved: an
-    /// arrival sets `pending`+the sender, a second arrival before it is claimed overwrites
-    /// the sender (never more than one pending), and claiming clears it.
     #[test]
     fn pending_slot_overwrites_and_claims() {
         let slot = empty_slot();
@@ -257,8 +205,7 @@ mod tests {
         slot.pending_uid.store(22, Ordering::SeqCst);
         slot.pending.store(true, Ordering::SeqCst);
 
-        // A second arrival before the first is claimed overwrites the sender — at most
-        // one pending, ever.
+        // Overwrites the still-pending arrival above — at most one pending, ever.
         slot.pending_pid.store(33, Ordering::SeqCst);
         slot.pending_uid.store(44, Ordering::SeqCst);
         slot.pending.store(true, Ordering::SeqCst);
@@ -266,13 +213,10 @@ mod tests {
         assert!(slot.pending.swap(false, Ordering::SeqCst));
         assert_eq!(slot.pending_pid.load(Ordering::SeqCst), 33);
         assert_eq!(slot.pending_uid.load(Ordering::SeqCst), 44);
-
-        // Claimed: a further check finds nothing pending until another arrival sets it.
         assert!(!slot.pending.swap(false, Ordering::SeqCst));
     }
 
-    /// `TRAP_SIGNALS` must have as many entries as `process.Signal` has variants (see the
-    /// module doc): a mismatch here would silently misindex `__trap_install`'s calls.
+    /// Must match `process.Signal`'s variant count, or `__trap_install` misindexes.
     #[test]
     fn seven_trap_signals() {
         assert_eq!(TRAP_SIGNALS.len(), 7);

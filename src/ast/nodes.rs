@@ -102,16 +102,11 @@ pub enum Item {
     TrapDeclaration(TrapDeclaration),
 }
 
-/// [`Item::name`]'s answer for a [`TrapDeclaration`] — a trap declares no name of its own
-/// (nothing ever refers to it by name), but every pass that indexes items by name
-/// (duplicate-declaration checks, diagnostics) needs a stable, distinct label for it. The
-/// same spelling as the token that introduces it, so a diagnostic naming "`!>`" and one
-/// naming this item agree.
+/// A trap declares no name of its own; this stands in wherever a pass needs one.
 pub const TRAP_NAME: &str = "!>";
 
 impl Item {
-    /// The name this item declares, whichever kind of declaration it is. A trap has none
-    /// of its own; see [`TRAP_NAME`].
+    /// The name this item declares, whichever kind of declaration it is.
     pub fn name(&self) -> &str {
         match self {
             Item::VariableDeclaration(declaration) => &declaration.name,
@@ -132,11 +127,8 @@ impl Item {
     }
 }
 
-/// A top-level signal trap: `!>` followed by one or more match arms (`| Pattern =>
-/// expression`) over `process.Signal`. Only the file that defines `^` may declare one, and
-/// a program declares at most one — both enforced by the checker after linking (see
-/// `docs/concurrency/README.md#signal-trap`). Each arm's body runs on its own fiber when
-/// its signal arrives; a signal with no arm keeps the OS default.
+/// `!>` followed by one or more match arms over `process.Signal`. Placement/uniqueness are
+/// the checker's job, not the parser's.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TrapDeclaration {
     pub arms: Vec<MatchArm>,

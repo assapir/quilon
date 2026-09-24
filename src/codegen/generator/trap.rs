@@ -1,12 +1,6 @@
-//! The top-level signal trap (`!>`): each arm lowers to its own top-level function taking
-//! the sender's `pid`/`uid` as two `Num`s and returning nothing, registered with the
-//! runtime at program start (`emit_entry_dispatch`, right after `__ql_init` and before `^`
-//! runs) through one `__trap_install(signalIndex, armFn)` call per arm.
-//!
-//! Unlike a `net.@tcpServe` handler (a closure value, called back indirectly through a
-//! bundled environment — see `calls::emit_tcp_serve_handler_thunk`), a trap arm captures
-//! nothing: only the file that defines `^` may declare a trap, so its body is ordinary
-//! top-level code, generated directly into the arm's own function — no closure bundle, no
+//! Each signal trap arm lowers to its own top-level function, `void (double pid, double
+//! uid)`. Unlike a `net.@tcpServe` handler, a trap arm captures nothing (only the root
+//! file may declare one), so its body is generated directly — no closure bundle, no
 //! indirect call.
 //!
 //! Part of the LLVM code generator; see `super` for the `CodeGenerator` state these
@@ -16,11 +10,8 @@ use super::*;
 use crate::ast::TrapDeclaration;
 
 impl<'ctx> CodeGenerator<'ctx> {
-    /// Bare `process.Signal` variant names, in the fixed order both `corelib/process.qn`'s
-    /// `Signal` declaration and the runtime's own `TRAP_SIGNALS`
-    /// (`quilon-rt/src/trap.rs`) use. The index into this array — never a raw OS signal
-    /// number, which differs across targets (Linux's `SIGUSR1`/`SIGUSR2` are 10/12;
-    /// macOS's are 30/31) — is what `__trap_install` takes.
+    /// `process.Signal`'s variant names, in the order the runtime's own signal table uses —
+    /// an index into this, never a raw OS signal number, which differs across targets.
     const SIGNAL_VARIANT_ORDER: [&'static str; 7] = [
         "Hangup",
         "Interrupt",
@@ -31,10 +22,8 @@ impl<'ctx> CodeGenerator<'ctx> {
         "UserDefined2",
     ];
 
-    /// Generate every arm of `trap` as its own function, recording each as `(signal
-    /// index, function)` in `self.trap_arms` for `emit_entry_dispatch` to install. The
-    /// checker has already rejected anything but a `process.Signal` constructor pattern
-    /// here (see `TypeChecker::check_trap_arms`), so both lookups below are infallible.
+    /// The checker already rejected anything but a `process.Signal` constructor pattern
+    /// here, so both lookups below are infallible.
     pub(super) fn generate_trap(&mut self, trap: &TrapDeclaration) -> Result<(), String> {
         for (arm_index, arm) in trap.arms.iter().enumerate() {
             let Pattern::Constructor { name, .. } = &arm.pattern else {
@@ -53,11 +42,8 @@ impl<'ctx> CodeGenerator<'ctx> {
         Ok(())
     }
 
-    /// Build one arm's function: `void (double pid, double uid)`, internal linkage. Builds
-    /// the `Sender { pid, uid }` record from the two `Num` parameters the runtime passes
-    /// (built the way `build_plain_record` builds any other shape-only record — see
-    /// `Connection`/`Server`), binds it to the arm's payload pattern (skipped for `_`),
-    /// generates the body, and discards its result — a trap arm returns nothing.
+    /// Builds the `Sender` record from the two `Num` parameters, binds it to the arm's
+    /// payload pattern (skipped for `_`), then generates and discards the body's result.
     fn generate_trap_arm_function(
         &mut self,
         arm: &MatchArm,
@@ -94,11 +80,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                 .map_err(ctx("Failed to store a trap arm's sender"))?;
             self.variables
                 .insert(name.clone(), (alloca, sender.get_type()));
-            // The payload's type — always `process.Sender` — was recorded in the type
-            // oracle by the CHECKER, keyed by this same pattern span (see
-            // `TypeChecker::check_trap_arms`): codegen has no checker `env` of its own to
-            // read back from, and this is exactly how a context-inferred parameter's type
-            // is recovered elsewhere (`record_parameter_types`).
+            // The checker recorded the payload's type in the oracle by this pattern's span.
             if let Some(qty) = self.oracle.type_at(span).cloned() {
                 self.var_types.insert(name.clone(), qty.clone());
                 self.track_named_record_binding(name, &qty);

@@ -213,9 +213,8 @@ at most one pending per signal, so a burst delivers the arm again exactly once, 
 many further arrivals piled up while it ran. Returning from an arm's body ignores the
 signal; ending the process from inside one is the arm's own doing (`kill`, then let `^`
 return, or fall through to the OS default for an untrapped signal). The trap stays
-installed for the rest of the process's life, and, on its own, never keeps a program
-running past what would otherwise end it — `^` returning still ends a program whose trap
-never fired.
+installed for the rest of the process's life; `^` returning ends the program whether or
+not the trap fired.
 
 ## Where it is headed
 

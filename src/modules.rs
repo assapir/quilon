@@ -449,9 +449,7 @@ pub(crate) const CORELIB_MODULES: &[(&str, &str)] = &[
     // compiler's version. Like `now`, the members are compiler-provided and the module
     // body is inert; unlike `now`, each lowers to a constant rather than a runtime call.
     ("core.info", CORE_INFO),
-    // core.process — the signal trap's own vocabulary: the `Sender` record and `Signal`
-    // sum a trap's arms match. Declares no `@` leaf IO primitive of its own; the trap
-    // itself (`!>`) is a top-level item, not a call this module's body could lower.
+    // core.process — the signal trap's own vocabulary: `Sender` and `Signal`.
     ("core.process", CORE_PROCESS),
 ];
 
@@ -481,8 +479,7 @@ pub(crate) fn item_is_exported(item: &Item) -> bool {
         Item::VariableDeclaration(d) => d.exported,
         Item::FunctionDeclaration(d) => d.exported,
         Item::TypeDeclaration(d) => d.exported,
-        // A trap has no `>>` form (the parser recognizes `!>` on its own, never behind an
-        // export marker) and nothing ever reaches it by name — it is never exported.
+        // A trap has no `>>` form.
         Item::TrapDeclaration(_) => false,
     }
 }

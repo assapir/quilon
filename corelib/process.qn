@@ -1,9 +1,5 @@
-~ core.process — the signal trap's own vocabulary. Import with `<< core.process`; reach a
-~ member through the `process` binding (`process.Sender`), the way any other module's
-~ exports are reached. A trap's arms (`!>`) match `Signal` by its variants' bare names —
-~ `Interrupt`, `Terminate`, and so on — the same way `Ok`/`NotOk` resolve for a `Result`,
-~ rather than through the qualified `process.Interrupt` spelling an ordinary match would
-~ need. See docs/concurrency/README.md's "Signal trap" section.
+~ core.process holds the signal trap's vocabulary: `Sender` and `Signal`.
+~ A trap's arms (`!>`) name `Signal`'s variants bare — `Interrupt`, `Terminate`, and so on.
 
 ~ What the OS reports about a signal's sender: the sending process's id, and the real user
 ~ id it ran as. A signal sent from outside any process — a terminal hangup, an alarm — has

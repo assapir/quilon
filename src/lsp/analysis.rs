@@ -1497,8 +1497,7 @@ fn module_completion_item(item: &Item, short: &str) -> CompletionItem {
             kind: CompletionKind::Variable,
             detail: declaration.type_annotation.as_ref().map(type_label),
         },
-        // A trap is never exported (`modules::item_is_exported` says so), so a module's
-        // completion list never reaches this arm in practice.
+        // Never exported; unreached in practice.
         Item::TrapDeclaration(_) => CompletionItem {
             label: short.to_string(),
             kind: CompletionKind::Variable,

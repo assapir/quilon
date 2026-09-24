@@ -627,9 +627,7 @@ fn declaration_candidates(program: &Program) -> Vec<NestedDeclaration<'_>> {
                 }
                 other => candidates.extend(nested_declaration_candidates(other)),
             },
-            // A trap arm binds a pattern (always `Sender`, never a bare `:: Result`
-            // parameter), not a declared parameter list — not a candidate itself, but a
-            // lambda nested in its body still is.
+            // A trap arm has no declared parameter list of its own to pin.
             Item::TrapDeclaration(trap) => {
                 for arm in &trap.arms {
                     candidates.extend(nested_declaration_candidates(&arm.body));

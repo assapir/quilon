@@ -192,9 +192,7 @@ pub fn qualify_module(
 
     for item in &mut program.items {
         check_claim(item, scope)?;
-        // A trap declares no name of its own to rename — and, since only the root file
-        // may declare one, an imported module's trap (rejected later, by the checker,
-        // after linking) is never renamed here either.
+        // A trap declares no name of its own to rename.
         if let Item::TrapDeclaration(_) = item {
             continue;
         }
@@ -377,11 +375,8 @@ impl Walker<'_> {
                 }
                 Ok(())
             }
-            // Each arm is resolved exactly like a `?` match arm's (see `expression`'s
-            // `Expression::Match` case): a fresh locals frame, the pattern, then the body.
-            // A bare Capitalized pattern name (`Interrupt`) is left untouched here — the
-            // type checker resolves it against `process.Signal`'s variants by their own
-            // bare spelling, the same way `Ok`/`NotOk` resolve for a `Result`.
+            // A bare pattern name (`Interrupt`) is left untouched — the checker resolves it
+            // against `process.Signal`'s variants itself.
             Item::TrapDeclaration(trap) => {
                 for arm in &mut trap.arms {
                     self.locals.push(HashSet::new());
@@ -471,8 +466,7 @@ impl Walker<'_> {
                 self.function_declaration_body(declaration)
             }
             Statement::Item(item @ Item::TypeDeclaration(_)) => self.item(item),
-            // A trap is a top-level-only item; the parser never emits one as a block
-            // statement.
+            // Top-level-only; never a block statement.
             Statement::Item(Item::TrapDeclaration(_)) => {
                 unreachable!("a trap is a top-level-only item")
             }

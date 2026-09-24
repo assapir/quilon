@@ -210,9 +210,7 @@ pub enum TokenKind {
     #[token("<<")]
     Import,
 
-    // Marks the top-level signal trap: `!>` followed by one or more match arms
-    // (`| Pattern => expression`) over `process.Signal`. See
-    // `docs/concurrency/README.md#signal-trap`.
+    // The top-level signal trap: `!>` followed by match arms over `process.Signal`.
     #[token("!>")]
     Trap,
 

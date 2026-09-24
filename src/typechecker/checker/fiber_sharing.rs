@@ -66,11 +66,8 @@ impl TypeChecker {
                         self.check_fiber_launches_in(&method.body, &method.body, &defined)?;
                     }
                 }
-                // A trap arm's body runs on its own fiber per signal, exactly like a
-                // `net.@tcpServe` handler's — everything it reaches, directly or through a
-                // call, is unsafe unless atomic. A trap is top-level, so there is no
-                // enclosing block to capture a `:=` local from (the handler-capture half of
-                // the rule); only the global half applies.
+                // A trap is top-level, so no enclosing block to capture a local from —
+                // only the global half of the rule applies.
                 Item::TrapDeclaration(trap) => {
                     for arm in &trap.arms {
                         self.check_fiber_launches_in(&arm.body, &arm.body, &defined)?;

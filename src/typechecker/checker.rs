@@ -433,31 +433,24 @@ pub enum TypeError {
         name: String,
         span: Span,
     },
-    /// A signal trap (`!>`) declared in a file other than the one that defines `^` — only
-    /// the entry point's own (root) file may declare one. See
-    /// `docs/concurrency/README.md#signal-trap`.
+    /// A signal trap declared outside the file that defines `^`.
     TrapOutsideRootFile {
         span: Span,
     },
-    /// A second signal trap in one program — a program declares at most one. `first` is
-    /// where the first one sits.
+    /// A second signal trap; `first` is where the first one sits.
     SecondTrap {
         first: Span,
         span: Span,
     },
-    /// A signal trap's arms match `process.Signal`, so the trap needs `<< core.process` —
-    /// missing here.
+    /// A signal trap with no `<< core.process` to resolve `process.Signal` against.
     TrapWithoutProcessImport {
         span: Span,
     },
-    /// A signal trap arm's pattern is not a `process.Signal` variant constructor (a bare
-    /// binding, `_`, or a literal binds nothing the runtime could dispatch a concrete
-    /// signal to).
+    /// A trap arm's pattern isn't a `process.Signal` variant constructor.
     TrapArmNotASignalPattern {
         span: Span,
     },
-    /// Two signal trap arms name the same `process.Signal` variant. `first` is the
-    /// earlier arm's pattern span.
+    /// Two trap arms naming the same variant; `first` is the earlier one.
     DuplicateTrapArm {
         variant: String,
         first: Span,
