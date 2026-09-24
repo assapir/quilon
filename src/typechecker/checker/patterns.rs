@@ -15,12 +15,7 @@ impl TypeChecker {
     ) -> Result<Type, TypeError> {
         let expression_type = self.infer_expression(expression)?;
 
-        // A scrutinee that's still a bare read of an unspecialized `Result` parameter (or
-        // an untransformed copy of one — see `Symbol::result_parameter`) is
-        // `sums::pin_result_parameters`'s only evidence of how that parameter's payload is
-        // actually used: recorded here, at the point the environment resolves it (so
-        // shadowing, rebinding, and nested declarations are already accounted for), rather
-        // than re-derived later by walking the body a second time.
+        // Recorded here, where the environment has already resolved shadowing and aliases.
         if let Expression::Identifier {
             name,
             span: scrutinee_span,
@@ -259,9 +254,6 @@ impl TypeChecker {
     ) -> Result<(), TypeError> {
         match pattern {
             Pattern::Identifier { name, span } => {
-                // A pattern binding is always a NEW value unpacked out of the scrutinee —
-                // never the scrutinee's own value — so it is never itself a `Result`
-                // parameter's alias, however its scrutinee resolved.
                 self.env.define_binding(
                     name.clone(),
                     type_.clone(),

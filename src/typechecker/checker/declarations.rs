@@ -482,9 +482,8 @@ impl TypeChecker {
                     slot + 1,
                     parameter.span.clone(),
                 )?;
-                // `slot` here (not the receiver-offset argument slot above) is this
-                // parameter's own index among the method's explicit ones — the same index
-                // `pin_result_parameters_of` iterates `parameters` by.
+                // `slot` (not the receiver-offset argument slot above) is this parameter's
+                // own index among the method's explicit ones.
                 self.env.set_result_parameter(
                     &parameter.name,
                     Some((method.body.span().clone(), slot)),
@@ -894,11 +893,8 @@ impl TypeChecker {
 
         let bound_value_is_callable = matches!(final_type, Type::Function { .. });
 
-        // A bare `name = alias`/`name := alias` copy carries a still-generic `Result`
-        // parameter's identity forward unchanged, chased through the environment so a
-        // rename of any length still resolves to the original (`Symbol::result_parameter`)
-        // — anything else (a rebind to a freshly built value, a shadow reusing the same
-        // name) breaks the chain, matching how `check_match` resolves a scrutinee.
+        // A bare `name = alias`/`name := alias` copy carries the alias forward; anything
+        // else (a fresh value, a shadow) clears it.
         let result_parameter_alias = match &declaration.value {
             Expression::Identifier { name, .. } => self
                 .env
@@ -926,10 +922,6 @@ impl TypeChecker {
                     self.top_level_reassignments
                         .insert(declaration.span.clone());
                 }
-                // A reassignment's new value may or may not still be the same alias —
-                // update it exactly like every other fact this branch already refreshes.
-                self.env
-                    .set_result_parameter(&declaration.name, result_parameter_alias);
             } else {
                 self.env.define_binding(
                     declaration.name.clone(),
@@ -939,8 +931,6 @@ impl TypeChecker {
                     value_aliasing,
                     declaration.span.clone(),
                 )?;
-                self.env
-                    .set_result_parameter(&declaration.name, result_parameter_alias);
                 if declaration.atomic {
                     self.env.mark_atomic(&declaration.name);
                 }
@@ -955,9 +945,10 @@ impl TypeChecker {
                 value_aliasing,
                 declaration.span.clone(),
             )?;
-            self.env
-                .set_result_parameter(&declaration.name, result_parameter_alias);
         }
+        // Every path above just (re)bound `declaration.name`, so this always lands on it.
+        self.env
+            .set_result_parameter(&declaration.name, result_parameter_alias);
 
         // A binding whose value is itself callable (a closure) carries what CALLING it
         // later returns, classified from the bound expression the same way a named

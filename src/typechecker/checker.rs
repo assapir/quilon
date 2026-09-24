@@ -555,15 +555,8 @@ pub struct Symbol {
     /// resolves a `:=` to the specific binding it targets — no other pass reasons about
     /// names for this.
     atomic: bool,
-    /// The still-generic `Result` parameter this binding's value still IS: its owning
-    /// declaration's body span (the same span `sums::pin_result_parameters_of` already
-    /// has) and its own index among that declaration's explicit parameters. Set on a
-    /// parameter itself and chased through a bare `name = alias`/`name := alias` copy
-    /// (`check_variable_declaration`), so a rename of any length still resolves to the
-    /// original; anything else (a rebind to a freshly built value, an unrelated shadow)
-    /// leaves it `None`. Read only by `check_match`, to attribute a scrutinee back to its
-    /// declaration — kept apart from `value_aliasing`, whose reference-type rule a generic
-    /// `Result` value is exempt from.
+    /// The still-generic `Result` parameter this value is, as (owning body span, index);
+    /// carried through a bare `name = alias` copy, cleared by anything else.
     result_parameter: Option<(Span, usize)>,
 }
 
@@ -739,10 +732,8 @@ pub struct TypeChecker {
     // Each overloaded call's argument spans, recorded as `resolve_overload` resolves it
     // to one member.
     overload_call_args: OverloadCallArgs,
-    // `?`/`|` matches on a bare `:: Result` parameter, recorded by `check_match` as it
-    // resolves the scrutinee through the normal environment, keyed by the owning
-    // declaration's body span — `pin_result_parameters_of` reads these back instead of
-    // re-deriving them by walking the body a second time.
+    // `?`/`|` matches on a bare `:: Result` parameter, recorded by `check_match`, keyed
+    // by the owning declaration's body span.
     result_scrutinees: std::collections::HashMap<Span, Vec<ResultScrutinee>>,
 }
 

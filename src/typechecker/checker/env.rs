@@ -116,9 +116,7 @@ impl Environment {
             setter_receiver: false,
             constant: false,
             atomic: false,
-            // Set right after by `set_result_parameter`, once the caller — which knows
-            // this parameter's own index among the declaration's EXPLICIT parameters,
-            // distinct from `slot` above (receiver-offset for a method) — has it in hand.
+            // Set right after by `set_result_parameter`, with the caller's own index.
             result_parameter: None,
         }
     }
@@ -170,10 +168,8 @@ impl Environment {
     }
 
     /// Define a binding whose value may alias other bindings (its initializer's or the
-    /// matched scrutinee's aliasing), owned by `owner`. Starts with no
-    /// [`Symbol::result_parameter`] of its own — a caller whose initializer copies one
-    /// sets it right after, via `set_result_parameter` (already needed there for the
-    /// `:=` reassignment case, which never calls this constructor at all).
+    /// matched scrutinee's aliasing), owned by `owner`. Its `result_parameter` starts
+    /// `None`; a caller whose initializer copies one sets it right after.
     pub(super) fn define_binding(
         &mut self,
         name: String,
@@ -289,11 +285,7 @@ impl Environment {
         }
     }
 
-    /// Set (or clear) `name`'s [`Symbol::result_parameter`] after it's already defined —
-    /// used both to mark a just-`define_parameter`-ed name as itself a still-generic
-    /// `Result` parameter, and to update a `:=` reassignment's alias status to its new
-    /// value's, the same "annotate after the fact" shape `mark_atomic` and
-    /// `set_result_aliasing` already use.
+    /// Set (or clear) `name`'s [`Symbol::result_parameter`] after it's already defined.
     pub(super) fn set_result_parameter(
         &mut self,
         name: &str,

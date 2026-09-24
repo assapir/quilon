@@ -368,9 +368,7 @@ impl TypeChecker {
             if !is_unspecialized_result(&self.resolve_type(annotation)) {
                 continue;
             }
-            // `check_match` already recorded every scrutinee that resolved to THIS
-            // parameter while it checked `body` — nothing here re-walks it. Cloned out
-            // (each entry is small) so the borrow doesn't outlive the mutable call below.
+            // Cloned out so the borrow doesn't outlive the mutable call below.
             let sites: Vec<ResultScrutinee> = self
                 .result_scrutinees
                 .get(body.span())
@@ -712,13 +710,8 @@ fn nested_declaration_candidates(body: &Expression) -> Vec<NestedDeclaration<'_>
     candidates
 }
 
-/// One `?`/`|` match `check_match` found whose scrutinee resolved — through the normal
-/// environment, so shadowing, rebinding, and nested declarations already apply — to a
-/// still-generic `Result` parameter: `parameter_index` is that parameter's own index among
-/// its declaration's explicit parameters, keyed in [`TypeChecker::result_scrutinees`] by
-/// that declaration's own body span. The rest is exactly what
-/// [`TypeChecker::pin_one_result_parameter`] needs: the scrutinee's own span to pin, and
-/// each variant's payload binding (name, span, arm body) when the arm binds one.
+/// One `?`/`|` match on a still-generic `Result` parameter, found by `check_match`.
+/// `parameter_index` is the parameter's own index in its declaration's explicit list.
 #[derive(Clone)]
 pub(super) struct ResultScrutinee {
     pub(super) parameter_index: usize,
