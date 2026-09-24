@@ -28,11 +28,11 @@ a compile error naming the missing member.
 `io.write`'s `fd` is a whole number of 0 or more — `io.stdout` and `io.stderr` always are.
 A computed `fd` that at run time is anything else (NaN, an infinity, negative, a fraction,
 or past what a 32-bit descriptor holds) fails loud at the call site with
-[`QN508`](../tooling/errors.md#qn508--invalid-write-file-descriptor).
+[`QN508`](../tooling/errors/runtime.md#qn508--invalid-write-file-descriptor).
 
 A write that reaches the operating system and fails there — a closed reader, a descriptor
 naming no open file, or another I/O error — fails loud at the call site with
-[`QN509`](../tooling/errors.md#qn509--write-failed); this holds for `io.print` and
+[`QN509`](../tooling/errors/runtime.md#qn509--write-failed); this holds for `io.print` and
 `io.eprint` as well as `io.write`.
 
 `io.@streamFile` delivers every chunk as whole, valid `Text`: an incomplete UTF-8 sequence or

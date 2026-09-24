@@ -102,13 +102,13 @@ is rejected.
 
 `replace`/`replaceAll`/`repeat` **fail loudly**. Three inputs are rejected: an empty
 `from`, reported as
-[QN506](../tooling/errors.md#qn506--empty-from-in-replacereplaceall); a `replace`
+[QN506](../tooling/errors/runtime.md#qn506--empty-from-in-replacereplaceall); a `replace`
 `count` that is `<= 0` or exceeds the occurrences present, reported as
-[QN510](../tooling/errors.md#qn510--invalid-replace-count); and a negative or
+[QN510](../tooling/errors/runtime.md#qn510--invalid-replace-count); and a negative or
 fractional `repeat` count, reported through `repeat`'s own frame (`repeat` is the one
 composable method left with a fail-loud contract, so its report carries no `QNxxx` code).
 A literal violation is a compile error (`"a".replace("a", "b", 0)`,
-`"aa".replace("a", "b", 5)`). A computed one is a [located diagnostic](../tooling/errors.md)
+`"aa".replace("a", "b", 5)`). A computed one is a [located diagnostic](../tooling/errors/README.md)
 at run time, with exit `5`. `replaceAll` replaces every occurrence; `replace(count)`
 replaces exactly `count`.
 

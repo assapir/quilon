@@ -6,7 +6,7 @@ title: "Quilon Language Reference"
 
 **Version:** 0.11.0 — "Rackham"
 
-Quilon is a statically-typed, **symbol-based** language (no control-flow keywords) that compiles to native code via LLVM. Every example in this reference has a passing end-to-end test. Each `examples/*.qn` program is **self-asserting**: it verifies its own results in-language with `assert(value, matcher)` and exits 0 (a failing assertion aborts with exit 5, [see the exit-code table](tooling/errors.md#exit-codes)), under both the JIT (`quilon run`) and native AOT.
+Quilon is a statically-typed, **symbol-based** language (no control-flow keywords) that compiles to native code via LLVM. Every example in this reference has a passing end-to-end test. Each `examples/*.qn` program is **self-asserting**: it verifies its own results in-language with `assert(value, matcher)` and exits 0 (a failing assertion aborts with exit 5, [see the exit-code table](tooling/errors/README.md#exit-codes)), under both the JIT (`quilon run`) and native AOT.
 
 ## Design principles
 
@@ -16,7 +16,7 @@ Quilon's identity, and the rules that guide its design:
 - **Symbols mirror notation that already exists.** A symbol reuses a notation the world already has: `/` separates sum-type alternatives the way "red / green / blue" is written.
 - **The playful choice wins.** On a toss-up, the more delightful option is picked — `^` for the entry point, `$` for Unit.
 - **Deliberate simplicity.** The smallest system that works: ad-hoc overloading is the polymorphism, iteration is array methods and recursion, and `Num` is the one number type.
-- **Fail loud.** An invalid input or a meaningless operation *fails*. A statically-determinable problem is a **compile error**; anything else is a runtime error on stderr with a non-zero exit, saying [where it happened](tooling/errors.md). `Text.indexOf` yields `Ok(Num)`/`NotOk`, and `Text.replace`'s count and empty-argument checks fail.
+- **Fail loud.** An invalid input or a meaningless operation *fails*. A statically-determinable problem is a **compile error**; anything else is a runtime error on stderr with a non-zero exit, saying [where it happened](tooling/errors/README.md). `Text.indexOf` yields `Ok(Num)`/`NotOk`, and `Text.replace`'s count and empty-argument checks fail.
 - **No magic.** Overloads are exact-typed and operators mean what they say; a value converts through an explicit operation.
 - **Immutable by default.** `=` binds immutably, `:=` binds mutably — for variables, for record bindings, and for methods: a method declared `name := …` may mutate its receiver, and one declared `name = …` is verified non-mutating.
 - **Errors are values.** A fallible operation returns `Ok` / `NotOk`, a normal sum type.
@@ -59,7 +59,7 @@ built-in types `Num`, `Bool`, `Text`, `Result`, `Site`, `Map`, `Set`; the constr
 and `NotOk`; the receiver `it`; `assert`, `expect`, and the matchers `equals`, `contains`,
 `not`, `isOk`, `isNotOk` — and every other word is free to bind: `if = 5` and a function
 named `while` are legal. A record field or method may carry a reserved name
-([QN344](tooling/errors.md#qn344--reserved-name)).
+([QN344](tooling/errors/semantics.md#qn344--reserved-name)).
 
 ## Contents
 
@@ -72,7 +72,7 @@ named `while` are legal. A record field or method may carry a reserved name
 - [Corelib](corelib/README.md): the standard library, module by module
 - [Concurrency](concurrency/README.md) · [its runtime](concurrency/runtime.md)
 - [Memory](memory.md)
-- Tooling: [compiling & running](tooling/compiling.md) · [error messages](tooling/errors.md) · [language server](tooling/language-server.md)
+- Tooling: [compiling & running](tooling/compiling.md) · [error messages](tooling/errors/README.md) · [language server](tooling/language-server.md)
 - Status: [feature matrix](status/feature-matrix.md) · [known limitations](status/limitations.md) · [compiler architecture](status/architecture.md) · [ABI and calling convention](status/abi.md)
 
 ## Writing style

@@ -137,7 +137,7 @@ A non-exported top-level function that nothing reachable from `^` calls is a com
 error. In a module with no `^` of its own, the same rule runs against the module's own
 `>>`-exported functions instead — an exported function is always reachable, whatever
 calls it inside the module. See
-[QN352](../tooling/errors.md#qn352--top-level-function-never-called). A function
+[QN352](../tooling/errors/semantics.md#qn352--top-level-function-never-called). A function
 reachable only from an erased `test.describe` block is
-[QN353](../tooling/errors.md#qn353--top-level-function-reachable-only-from-test-blocks)
+[QN353](../tooling/errors/semantics.md#qn353--top-level-function-reachable-only-from-test-blocks)
 instead.

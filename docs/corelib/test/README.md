@@ -34,7 +34,7 @@ Two entry points, one vocabulary. They differ in what a FAILURE does:
 | `expect(actual, matcher) -> $` | Report at the call site, mark the running case **failed**, and end the case — the suite carries on with the next one. Test cases only — see [`expect` is for cases](#expect-is-for-cases). |
 
 A holding assertion has no effect. A failure reports in the standard
-[error frame](../../tooling/errors.md) at the assertion's own call site — the line the
+[error frame](../../tooling/errors/README.md) at the assertion's own call site — the line the
 assertion is written on, inside a helper as much as inside `^`:
 
 ```text
@@ -152,7 +152,7 @@ The **exit code** is 0 when every case in every suite passed. A suite that fails
 — or to parse — counts as a failed suite.
 
 The case tree and the summary go to **stdout**; a failing assertion's
-[error frame](../../tooling/errors.md) goes to **stderr**, like every other compiler
+[error frame](../../tooling/errors/README.md) goes to **stderr**, like every other compiler
 diagnostic.
 
 Suites run one process each; a failing suite leaves the others running. A suite without
@@ -206,7 +206,7 @@ gdb ./suite_debug
 
 Under `--reporter json`, stdout carries the run's events and nothing else, one JSON object
 per line, in the order they happen. A failing `expect`'s
-[error frame](../../tooling/errors.md) goes to stderr under both reporters. The schema is
+[error frame](../../tooling/errors/README.md) goes to stderr under both reporters. The schema is
 stable.
 
 | Event | Fields | Written when |

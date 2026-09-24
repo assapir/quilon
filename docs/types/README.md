@@ -7,7 +7,7 @@ sidebar:
 # Types
 
 The built-in type names — `Num`, `Bool`, `Text`, `Result`, `Site`, `Map`, `Set` — are
-[reserved](../tooling/errors.md#qn344--reserved-name): a program names them in annotations
+[reserved](../tooling/errors/semantics.md#qn344--reserved-name): a program names them in annotations
 and declares its own types under other names.
 
 ## `Num`
@@ -20,7 +20,7 @@ z = x + y          ~ mixed arithmetic
 
 A `Num` literal is digits with an optional fraction (`42`, `3.14`) — plain decimal, written
 out in full. A literal glued to an exponent (`1e9`) is a
-[QN005](../tooling/errors.md#qn005--scientific-notation-literal); write its plain-decimal
+[QN005](../tooling/errors/syntax.md#qn005--scientific-notation-literal); write its plain-decimal
 value instead (`1000000000`).
 
 ### The exact-integer limit

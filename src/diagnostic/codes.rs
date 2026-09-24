@@ -9,8 +9,10 @@
 //! The runtime's codes are mirrored as plain constants in `quilon-rt` (`report::codes`),
 //! since a compiled program reports without the compiler; a test here pins the two.
 //!
-//! The explanations live in `docs/tooling/errors.md`, one section per code, embedded at
-//! compile time — [`explain`] slices the section, so the prose has one home.
+//! The explanations live in `docs/tooling/errors/`, one family per file (`README.md`'s
+//! intro and code table, then `syntax.md`/`modules.md`/`semantics.md`/`build.md`/
+//! `runtime.md`), embedded at compile time and concatenated in that order — [`explain`]
+//! slices a code's section out of the joined text, so the prose still has one home.
 
 macro_rules! codes {
     ($($name:ident = $number:literal => $title:literal,)*) => {
@@ -183,8 +185,17 @@ impl std::fmt::Display for Code {
     }
 }
 
-/// The reference every explanation is read from, embedded at compile time.
-const REFERENCE: &str = include_str!("../../docs/tooling/errors.md");
+/// The reference every explanation is read from, embedded at compile time — the six files
+/// under `docs/tooling/errors/`, joined in the same order the codes are numbered in, so a
+/// code's section still sits between its own heading and the next one once concatenated.
+const REFERENCE: &str = concat!(
+    include_str!("../../docs/tooling/errors/README.md"),
+    include_str!("../../docs/tooling/errors/syntax.md"),
+    include_str!("../../docs/tooling/errors/modules.md"),
+    include_str!("../../docs/tooling/errors/semantics.md"),
+    include_str!("../../docs/tooling/errors/build.md"),
+    include_str!("../../docs/tooling/errors/runtime.md"),
+);
 
 /// The heading that opens `code`'s section in the reference.
 fn heading(code: Code) -> String {
@@ -192,7 +203,10 @@ fn heading(code: Code) -> String {
 }
 
 /// `code`'s section of the reference — its heading through the line before the next
-/// heading — or `None` when the reference has no section for it.
+/// heading — or `None` when the reference has no section for it. A family file's own `#`
+/// title (the join point between two of the concatenated files) ends a section exactly
+/// like a `##`/`###` heading would, so the last code of one family never picks up the next
+/// family's title and lead sentence.
 pub fn explain(code: Code) -> Option<&'static str> {
     let heading = heading(code);
     let start = REFERENCE
@@ -206,7 +220,8 @@ pub fn explain(code: Code) -> Option<&'static str> {
         .map(|(at, _)| at)?;
     let body = &REFERENCE[start..];
     let end = body
-        .match_indices("\n## ")
+        .match_indices("\n# ")
+        .chain(body.match_indices("\n## "))
         .chain(body.match_indices("\n### "))
         .map(|(at, _)| at + 1)
         .min()
@@ -287,9 +302,12 @@ mod tests {
             .skip(heading_line + 1)
             .take_while(|line| !line.trim_start().starts_with("## "))
             .filter_map(|line| {
+                // A row links its code to its family file: `| [QN000](syntax.md#qn000--…) |
+                // unreadable source file |`.
                 let line = line.trim();
-                let cells = line.strip_prefix("| QN")?;
-                let (number, rest) = cells.split_once(" | ")?;
+                let cells = line.strip_prefix("| [QN")?;
+                let (number, rest) = cells.split_once("](")?;
+                let (_target, rest) = rest.split_once(") | ")?;
                 let title = rest.strip_suffix(" |")?;
                 Some((number.parse().ok()?, title))
             })

@@ -291,13 +291,10 @@ fn link_source_reporting(
         }
     }
 
-    // The `@` marker names a leaf IO primitive, which only the corelib/runtime may
-    // define; user code merely *calls* one. Reject an `@`-prefixed declaration in the
-    // program's own source with a source-located diagnostic (a bare parse error would be
-    // cryptic). Checked before `link` so only the user's items are scanned, never a
-    // built-in module's — and skipped entirely when the file IS a corelib source (checking
-    // `corelib/io.qn`/`corelib/time.qn` directly is legitimate; the corelib is the one place
-    // `@` primitives are declared).
+    // On a function, `@` names a leaf IO primitive, which only the corelib/runtime may
+    // define; user code merely *calls* one. Checked before `link` so only the user's items
+    // are scanned, and skipped when the file IS a corelib source (the one place `@`
+    // primitives are declared).
     if !modules::is_corelib_source(&source)
         && let Some((span, name)) = first_at_declaration(&program)
     {
@@ -308,11 +305,12 @@ fn link_source_reporting(
                 Code::AtDeclarationOutsideCorelib,
                 span,
                 format!(
-                    "`{name}` cannot be declared here: `@` marks a built-in IO primitive \
-                     (like `@sleep` from core.time), which only the corelib defines"
+                    "`{name}` cannot be declared here: on a function, `@` marks a built-in \
+                     IO primitive (like `@sleep` from core.time), which only the corelib \
+                     defines"
                 ),
             )
-            .help("user code calls a primitive; it does not declare one"),
+            .help("user code calls a primitive; `@` on a `:=` binding declares an atomic binding instead"),
         ));
     }
 
@@ -352,14 +350,10 @@ fn link_source_reporting(
     })
 }
 
-/// The span and name of the first top-level declaration whose name starts with `@`, if
-/// any. Used to reject a user-written `@` primitive declaration (they are corelib-only).
+/// The span and name of the first `@`-prefixed function or method declaration in `program`.
 fn first_at_declaration(program: &ast::Program) -> Option<(&Span, &str)> {
     program.items.iter().find_map(|item| match item {
         ast::Item::FunctionDeclaration(d) if d.name.starts_with('@') => {
-            Some((&d.span, d.name.as_str()))
-        }
-        ast::Item::VariableDeclaration(d) if d.name.starts_with('@') => {
             Some((&d.span, d.name.as_str()))
         }
         // A record/sum's own method may be fused the same way (`@read`), reaching a
@@ -547,5 +541,19 @@ mod tests {
                 "unexpected diagnostic: {error}"
             ),
         }
+    }
+
+    #[test]
+    fn user_source_may_declare_an_atomic_binding() {
+        // `@name := value` is an atomic binding, not an `@` primitive declaration — the
+        // parser strips the `@` from the stored name, so this must check clean.
+        let path = temp_source("@naps := 0\n^ = () -> Num => < naps >\n");
+        let result = front_end(&path);
+        let _ = std::fs::remove_file(&path);
+        assert!(
+            result.is_ok(),
+            "a top-level atomic binding should check clean: {:?}",
+            result.err()
+        );
     }
 }

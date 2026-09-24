@@ -1,4 +1,4 @@
-//! `docs/tooling/errors.md` as executable truth: for every registered code, the first
+//! `docs/tooling/errors/` as executable truth: for every registered code, the first
 //! `quilon`/`quilon ignore` example fence in its section is run through the real compiler
 //! (front end, JIT, or CLI, by family) and must raise that code and no other.
 //!
@@ -126,7 +126,7 @@ struct Example {
     siblings: Vec<(String, String)>,
 }
 
-/// `code`'s [`Example`], read from its section of `docs/tooling/errors.md` — `None` when the
+/// `code`'s [`Example`], read from its section of `docs/tooling/errors/` — `None` when the
 /// section carries no `quilon`/`quilon ignore` fence (a CLI-command or output-only section).
 fn example_for(code: Code) -> Option<Example> {
     let fences = fences_in(codes::explain(code)?);

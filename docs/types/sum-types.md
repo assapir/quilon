@@ -104,7 +104,7 @@ A bare `:: Result` **parameter**'s payload types are the types its own call site
 a method call and a call to one member of an overload set count the same as a plain
 function's direct call. A variant no call site passes has no payload type, and a match
 arm that reads that binding is
-[QN351](../tooling/errors.md#qn351--unresolved-result-payload); binding it unread, or as
+[QN351](../tooling/errors/semantics.md#qn351--unresolved-result-payload); binding it unread, or as
 `_`, is allowed. The check covers the functions reachable from `^`, the same set codegen
 emits; under `quilon test` the synthesized `^` reaches every test's helpers. See
 `examples/result_payload.qn`.

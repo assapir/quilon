@@ -20,7 +20,7 @@ quilon lsp                  # serve the Language Server Protocol over stdin/stdo
 
 `quilon --version` (or `-V`) prints the compiler version and its release codename.
 `quilon explain QN311` prints the reference section for an error code (see
-[Error messages](errors.md)).
+[Error messages](errors/README.md)).
 
 ## Status output
 
@@ -39,7 +39,7 @@ The live line draws over itself and clears before the closing line prints; the c
 line is what scrollback keeps. Off a terminal — a pipe, a redirected log, or a CI run (a
 terminal check, or `CI` set in the environment) — stderr carries the closing line alone.
 `quilon run` writes the program's output; a failure is reported the same way everywhere,
-and exits with its code's family digit (see [Exit codes](errors.md#exit-codes)).
+and exits with its code's family digit (see [Exit codes](errors/README.md#exit-codes)).
 
 - `--quiet` (`-q`, before or after the subcommand) silences status lines. Diagnostics
   print.
