@@ -7,7 +7,7 @@
 //! **Mechanism.** The signal handler itself runs only async-signal-safe code: it records
 //! the sender (`si_pid`/`si_uid`) into a lock-free per-signal slot and writes one byte to
 //! a self-pipe registered with the reactor — the same `mio`/reactor plumbing `net.rs`
-//! registers a socket with (see [`crate::scheduler::register_readiness`]). A single
+//! registers a socket with (see `crate::scheduler::register_readiness`). A single
 //! dispatcher fiber, spawned once (on the first arm installed), parks on the pipe's
 //! readiness; woken, it drains the pipe and spawns a fresh fiber for every signal that
 //! arrived and is not already running its arm. Per signal: a `running` flag and one
@@ -15,9 +15,9 @@
 //! is ever queued) — an arrival while the arm's own fiber is still running is delivered,
 //! once, when that fiber returns; the returning fiber's own code notices the pending
 //! arrival and spawns the next run itself, with no need to wake the dispatcher again (see
-//! [`spawn_run`]).
+//! `spawn_run`, below).
 //!
-//! The dispatcher's own park is marked [`crate::scheduler::mark_background_readiness`]: a
+//! The dispatcher's own park is marked background (`crate::scheduler::mark_background_readiness`): a
 //! trap stays installed for the life of the process, but that alone must never keep a
 //! program with no other reason to keep running (a server, an open read, …) from exiting
 //! once `^` returns — only an external signal or the program's own exit ends it otherwise.
