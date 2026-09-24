@@ -50,6 +50,7 @@ Quilon's identity, and the rules that guide its design:
 | `? :` | Ternary | `x < 0 ? -x : x` |
 | `@` (name prefix) | A [leaf IO primitive](concurrency/README.md), declared in corelib and reached through its module's binding or, for one declared as a record method, through a value of that record's type | `time.@sleep(1)` · `connection.@read()` |
 | `@name :=` | [Atomic binding](concurrency/README.md#sharing-state-across-fibers) declaration — `@` marks the declaration only; every read and reassignment after it is bare | `@hits := 0` · `hits := hits + 1` |
+| `!>` | [Signal trap](concurrency/README.md#signal-trap) — a top-level item, one per program, its arms matching `process.Signal` | `!> \| Interrupt(s) => handler(s)` |
 | `~` | Comment (to end of line) | `~ a note` |
 
 There are **no keywords**: `if`/`return` etc. are expressed with symbols, and iteration is

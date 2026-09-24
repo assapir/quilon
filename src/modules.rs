@@ -411,6 +411,7 @@ const CORE_TIME: &str = include_str!("../corelib/time.qn");
 const CORE_NET: &str = include_str!("../corelib/net.qn");
 const CORE_HTTP: &str = include_str!("../corelib/http.qn");
 const CORE_INFO: &str = include_str!("../corelib/info.qn");
+const CORE_PROCESS: &str = include_str!("../corelib/process.qn");
 
 /// Every bundled corelib module, dotted name paired with its source — the ONE place that
 /// pairing is written down. `builtin_source` and `is_corelib_source` (below) both derive
@@ -448,6 +449,10 @@ pub(crate) const CORELIB_MODULES: &[(&str, &str)] = &[
     // compiler's version. Like `now`, the members are compiler-provided and the module
     // body is inert; unlike `now`, each lowers to a constant rather than a runtime call.
     ("core.info", CORE_INFO),
+    // core.process — the signal trap's own vocabulary: the `Sender` record and `Signal`
+    // sum a trap's arms match. Declares no `@` leaf IO primitive of its own; the trap
+    // itself (`!>`) is a top-level item, not a call this module's body could lower.
+    ("core.process", CORE_PROCESS),
 ];
 
 /// Map a built-in dotted module name to its bundled source.
@@ -476,6 +481,9 @@ pub(crate) fn item_is_exported(item: &Item) -> bool {
         Item::VariableDeclaration(d) => d.exported,
         Item::FunctionDeclaration(d) => d.exported,
         Item::TypeDeclaration(d) => d.exported,
+        // A trap has no `>>` form (the parser recognizes `!>` on its own, never behind an
+        // export marker) and nothing ever reaches it by name — it is never exported.
+        Item::TrapDeclaration(_) => false,
     }
 }
 
@@ -492,6 +500,10 @@ fn uses_text_composable_items(items: &[Item]) -> bool {
             .methods()
             .iter()
             .any(|method| mentions_text_composable(&method.body)),
+        Item::TrapDeclaration(trap) => trap
+            .arms
+            .iter()
+            .any(|arm| mentions_text_composable(&arm.body)),
     })
 }
 

@@ -1,9 +1,19 @@
 ~ A chickpea stand over `http.@serve`: `hummus` answers a GET with what's on the counter, a
 ~ POST with what got stocked, and anything else with 405. `^` opens the stand, places one
 ~ order of each kind with `core.http`'s own client, asserts both replies, then closes the
-~ stand before returning.
+~ stand before returning. A signal trap closes the stand from outside `^` too: `Interrupt`
+~ (Ctrl-C) gives in-flight orders 2 seconds to finish, `Terminate` closes at once.
 << core.http
+<< core.net
+<< core.process
 << core.test
+
+~ Promoted to a top-level atomic binding (see `examples/shared_counter.qn`), so both `^`
+~ and the trap's arms below reach the same stand.
+@stand := net.Server { handle = 0 }
+
+!> | Interrupt(s) => stand.kill(2)
+   | Terminate(_) => stand.kill(0)
 
 hummus = (request :: http.Request) -> http.Response => <
   request.method ?
@@ -20,7 +30,7 @@ checkReply = (reply :: http.Response, expectedStatus :: Num, expectedBody :: Tex
 
 ^ = () -> Num => <
   ~ A 1 MiB request body cap and a 2-second idle timeout, down from the 16 MiB/5-second defaults.
-  stand = http.@serve(
+  stand := http.@serve(
     "127.0.0.1:9048", request => hummus(request),
     http.ServerOptions { maxBodySize = 1024 * 1024, idleTimeout = 2 })
 

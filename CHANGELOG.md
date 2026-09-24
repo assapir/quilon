@@ -6,6 +6,25 @@ All notable changes to Quilon are documented here.
 
 ### Added
 
+- **The signal trap (`!>`) — a top-level item, one per program, in the file that defines
+  `^`, matching signals via a new `core.process` module.** `!>` followed by one or more
+  `| Pattern => expression` arms over `process.Signal` — `Hangup` / `Interrupt` / `Quit` /
+  `Terminate` / `Alarm` / `UserDefined1` / `UserDefined2`, each carrying a `Sender { pid,
+  uid }` — installs a handler for exactly the signals written, leaving every other signal
+  at its OS default. A trap declared outside the root file is `QN354`; a second trap in one
+  program is `QN355`; one with no `<< core.process` is `QN356`; a non-`process.Signal`
+  pattern is `QN357`; a duplicate arm for the same variant is `QN358`. Each arm's body runs
+  on its own fiber — the fiber-sharing check applies exactly like a `net.@tcpServe`
+  handler's, so a plain `:=` global it reaches is `QN350` and an `@` global is fine — and is
+  its own launch scope, joined before that fiber's run ends. A signal arriving while its own
+  arm is still running is delivered once more, after it returns; at most one stays pending,
+  however many further arrivals pile up. The runtime installs `sigaction` (`SA_SIGINFO`)
+  only for the signals a program actually traps, only once any exist, dispatching through a
+  self-pipe registered with the reactor and a background fiber that never by itself keeps a
+  program with no other reason to keep running (a server, an open read, …) from exiting once
+  `^` returns. See `docs/concurrency/README.md#signal-trap`, `docs/corelib/process.md`, and
+  `examples/http_server.qn`'s trap over its own `@stand`. Closes #453. Part of #435.
+
 - **A dead top-level function is a compile error, not silently dropped.** A non-exported
   top-level function that nothing reachable from `^` calls — or, in a module with no `^`
   of its own, that none of the module's `>>`-exported functions call — is `QN352`:

@@ -1,0 +1,21 @@
+~ core.process — the signal trap's own vocabulary. Import with `<< core.process`; reach a
+~ member through the `process` binding (`process.Sender`), the way any other module's
+~ exports are reached. A trap's arms (`!>`) match `Signal` by its variants' bare names —
+~ `Interrupt`, `Terminate`, and so on — the same way `Ok`/`NotOk` resolve for a `Result`,
+~ rather than through the qualified `process.Interrupt` spelling an ordinary match would
+~ need. See docs/concurrency/README.md's "Signal trap" section.
+
+~ What the OS reports about a signal's sender: the sending process's id, and the real user
+~ id it ran as. A signal sent from outside any process — a terminal hangup, an alarm — has
+~ pid 0.
+>> Sender = { pid :: Num, uid :: Num }
+
+~ Every signal a program can trap, one variant per signal, each carrying its `Sender`. A
+~ trap's arm not written for a variant here keeps the OS default for that signal.
+>> Signal = Hangup(Sender)       ~ SIGHUP
+  / Interrupt(Sender)            ~ SIGINT
+  / Quit(Sender)                 ~ SIGQUIT
+  / Terminate(Sender)            ~ SIGTERM
+  / Alarm(Sender)                ~ SIGALRM
+  / UserDefined1(Sender)         ~ SIGUSR1
+  / UserDefined2(Sender)         ~ SIGUSR2

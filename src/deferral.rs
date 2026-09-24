@@ -225,6 +225,16 @@ impl<'a> Taint<'a> {
                     self.analyze_method(method);
                 }
             }
+            // Each arm body is its own launch scope, joined when it returns — exactly
+            // like a `net.@tcpServe`/`http.@serve` handler's body: a fresh scope per arm,
+            // and its result is a strict slot (the arm's body has no caller to hand a
+            // still-deferred value back to; the runtime just calls it).
+            Item::TrapDeclaration(trap) => {
+                for arm in &trap.arms {
+                    let scope = self.fresh_scope();
+                    self.strict(&arm.body, &scope);
+                }
+            }
         }
     }
 
@@ -434,6 +444,10 @@ impl<'a> Taint<'a> {
                     for method in t.type_definition.methods() {
                         self.analyze_method(method);
                     }
+                }
+                // A trap is a top-level-only item; never a block statement.
+                Statement::Item(Item::TrapDeclaration(_)) => {
+                    unreachable!("a trap is a top-level-only item")
                 }
                 Statement::Expression(e) => {
                     if index == last {
@@ -788,6 +802,22 @@ mod tests {
     fn a_pure_block_is_not_a_launch_scope() {
         let i = info("^ = () -> Num => < 1 + 2 * 3 >");
         assert!(i.launch_scopes.is_empty());
+    }
+
+    #[test]
+    fn a_trap_arms_own_deferred_body_is_forced() {
+        // A signal trap arm is checked in a fresh, STRICT scope exactly like a top-level
+        // function's body (`analyze_item`'s `TrapDeclaration` case) — the runtime calls it
+        // directly, with no caller to hand a still-deferred value back to, so its launch is
+        // joined (forced) before the arm returns, the same as a server handler's body.
+        let src = "!> | Interrupt(s) => @readStdin()\n^ = () -> Num => < 0 >";
+        assert_eq!(info(src).force_sites.len(), 1);
+    }
+
+    #[test]
+    fn a_trap_arm_that_never_forces_has_no_force_site() {
+        let src = "!> | Interrupt(s) => 1\n^ = () -> Num => < 0 >";
+        assert_eq!(info(src).force_sites.len(), 0);
     }
 
     #[test]

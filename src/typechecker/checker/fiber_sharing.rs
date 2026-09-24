@@ -66,6 +66,21 @@ impl TypeChecker {
                         self.check_fiber_launches_in(&method.body, &method.body, &defined)?;
                     }
                 }
+                // A trap arm's body runs on its own fiber per signal, exactly like a
+                // `net.@tcpServe` handler's — everything it reaches, directly or through a
+                // call, is unsafe unless atomic. A trap is top-level, so there is no
+                // enclosing block to capture a `:=` local from (the handler-capture half of
+                // the rule); only the global half applies.
+                Item::TrapDeclaration(trap) => {
+                    for arm in &trap.arms {
+                        self.check_fiber_launches_in(&arm.body, &arm.body, &defined)?;
+                        if let Some((name, touch)) =
+                            self.first_shared_global(&[&arm.body], &defined)
+                        {
+                            return Err(shared_across_fibers(name, touch, arm.body.span(), "!>"));
+                        }
+                    }
+                }
             }
         }
         Ok(())
@@ -206,6 +221,10 @@ impl TypeChecker {
                             for method in declaration.type_definition.methods() {
                                 self.check_fiber_launches_in(&method.body, &method.body, defined)?;
                             }
+                        }
+                        // A trap is a top-level-only item; never a block statement.
+                        Statement::Item(Item::TrapDeclaration(_)) => {
+                            unreachable!("a trap is a top-level-only item")
                         }
                     }
                 }

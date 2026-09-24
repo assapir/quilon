@@ -1781,3 +1781,65 @@ fn test_an_uncalled_top_level_binding_is_never_reported() {
     // check only ever looks at `FunctionDeclaration` items.
     assert!(check_ok("unused = 5\n^ = () -> Num => < 0 >").is_ok());
 }
+
+#[test]
+fn test_a_function_reached_only_from_a_trap_arm_is_not_reported_as_dead() {
+    // The runtime calls a trap arm's function directly, with no Quilon call site of its
+    // own — `ast::reachability::reachable_functions` treats every arm's body as a root,
+    // exactly like a top-level binding's value, so a function only an arm calls is alive.
+    let src = "<< core.process\n\
+               onInterrupt = (s :: process.Sender) -> $ => < $ >\n\
+               !> | Interrupt(s) => onInterrupt(s)\n\
+               ^ = () -> Num => < 0 >";
+    let result = check_linked(src);
+    assert!(result.is_ok(), "expected ok, got: {:?}", result);
+}
+
+#[test]
+fn test_signal_trap_without_process_import_is_rejected() {
+    // A trap's arms match `process.Signal`, so it needs `<< core.process` — missing here
+    // (this test never links modules at all, so `core.process` is never merged in).
+    let err = check_ok("!> | Interrupt(s) => 1\n^ = () -> Num => < 0 >").unwrap_err();
+    assert!(matches!(err, TypeError::TrapWithoutProcessImport { .. }));
+}
+
+#[test]
+fn test_second_signal_trap_is_rejected() {
+    // A program declares at most one signal trap — checked before either needs
+    // `core.process` to resolve, so this needs no linked import either.
+    let src = "!> | Interrupt(s) => 1\n!> | Terminate(s) => 2\n^ = () -> Num => < 0 >";
+    let err = check_ok(src).unwrap_err();
+    assert!(matches!(err, TypeError::SecondTrap { .. }));
+}
+
+#[test]
+fn test_signal_trap_duplicate_arm_is_rejected() {
+    let src = "<< core.process\n\
+               !> | Interrupt(s) => 1\n   \
+                  | Interrupt(s) => 2\n\
+               ^ = () -> Num => < 0 >";
+    let err = check_linked(src).unwrap_err();
+    assert!(matches!(err, TypeError::DuplicateTrapArm { variant, .. } if variant == "Interrupt"));
+}
+
+#[test]
+fn test_signal_trap_arm_reaching_a_plain_global_is_rejected() {
+    // A trap arm's body runs on its own fiber, exactly like a `net.@tcpServe` handler's —
+    // a non-atomic `:=` global it reaches is QN350.
+    let src = "<< core.process\n\
+               hits := 0\n\
+               !> | Interrupt(s) => hits := hits + 1\n\
+               ^ = () -> Num => < 0 >";
+    let err = check_linked(src).unwrap_err();
+    assert!(matches!(err, TypeError::SharedAcrossFibers { ref name, .. } if name == "hits"));
+}
+
+#[test]
+fn test_signal_trap_arm_reaching_an_atomic_global_is_accepted() {
+    let src = "<< core.process\n\
+               @hits := 0\n\
+               !> | Interrupt(s) => hits := hits + 1\n\
+               ^ = () -> Num => < 0 >";
+    let result = check_linked(src);
+    assert!(result.is_ok(), "expected ok, got: {result:?}");
+}

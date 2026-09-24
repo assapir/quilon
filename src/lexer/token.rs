@@ -210,6 +210,12 @@ pub enum TokenKind {
     #[token("<<")]
     Import,
 
+    // Marks the top-level signal trap: `!>` followed by one or more match arms
+    // (`| Pattern => expression`) over `process.Signal`. See
+    // `docs/concurrency/README.md#signal-trap`.
+    #[token("!>")]
+    Trap,
+
     #[token("?")]
     Question,
 
@@ -344,6 +350,7 @@ impl TokenKind {
             TokenKind::Unit => "$",
             TokenKind::Export => ">>",
             TokenKind::Import => "<<",
+            TokenKind::Trap => "!>",
             TokenKind::Question => "?",
             TokenKind::Pipe => "|",
             TokenKind::BlockOpen => return "a block open `<`".to_string(),

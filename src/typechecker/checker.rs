@@ -26,6 +26,7 @@ mod patterns;
 mod sums;
 #[cfg(test)]
 mod tests;
+mod trap;
 
 use aliasing::{ResultAliasing, ValueAliasing};
 use std::collections::HashMap;
@@ -430,6 +431,36 @@ pub enum TypeError {
     /// `checker::dead_functions`.
     ReachableOnlyFromTests {
         name: String,
+        span: Span,
+    },
+    /// A signal trap (`!>`) declared in a file other than the one that defines `^` — only
+    /// the entry point's own (root) file may declare one. See
+    /// `docs/concurrency/README.md#signal-trap`.
+    TrapOutsideRootFile {
+        span: Span,
+    },
+    /// A second signal trap in one program — a program declares at most one. `first` is
+    /// where the first one sits.
+    SecondTrap {
+        first: Span,
+        span: Span,
+    },
+    /// A signal trap's arms match `process.Signal`, so the trap needs `<< core.process` —
+    /// missing here.
+    TrapWithoutProcessImport {
+        span: Span,
+    },
+    /// A signal trap arm's pattern is not a `process.Signal` variant constructor (a bare
+    /// binding, `_`, or a literal binds nothing the runtime could dispatch a concrete
+    /// signal to).
+    TrapArmNotASignalPattern {
+        span: Span,
+    },
+    /// Two signal trap arms name the same `process.Signal` variant. `first` is the
+    /// earlier arm's pattern span.
+    DuplicateTrapArm {
+        variant: String,
+        first: Span,
         span: Span,
     },
 }

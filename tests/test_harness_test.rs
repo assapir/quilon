@@ -640,6 +640,33 @@ fn importing_core_http_contributes_exactly_this_surface() {
     );
 }
 
+/// The names `<< core.process` puts in a program, pinned EXACTLY: `Sender` and `Signal` —
+/// the trap's whole vocabulary, and nothing else (no `@` primitive; the trap itself is a
+/// top-level item, not a call this module declares). `Signal`'s own variants travel with
+/// its one `TypeDeclaration` item rather than appearing here as names of their own.
+#[test]
+fn importing_core_process_contributes_exactly_this_surface() {
+    let tokens = Lexer::tokenize("<< core.process\n^ = () -> Num => < 0 >\n").expect("lexing");
+    let program = parser::parse(&tokens).expect("parsing");
+    let (linked, _sources) =
+        quilon::modules::link(program, Path::new("."), None).expect("import linking failed");
+    let mut contributed: Vec<&str> = linked
+        .items
+        .iter()
+        .map(Item::name)
+        .filter(|name| *name != "^")
+        .collect();
+    contributed.sort_unstable();
+
+    let mut expected = vec!["core.process.Sender", "core.process.Signal"];
+    expected.sort_unstable();
+
+    assert_eq!(
+        contributed, expected,
+        "`<< core.process` contributes a different set of names than this pins"
+    );
+}
+
 // ── Running: `quilon test` ─────────────────────────────────────────────────────────────
 
 /// The file's own `^` is not the test run's entry point — the synthesized one is — so the

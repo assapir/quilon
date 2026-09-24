@@ -8,9 +8,33 @@ use super::*;
 impl<'a> Parser<'a> {
     pub(super) fn parse_match(&mut self, expression: Expression) -> Result<Expression, ParseError> {
         let start = expression.span().start;
+        let arms = self.parse_arm_list()?;
+
+        if arms.is_empty() {
+            return Err(ParseError::new(
+                Code::EmptyMatch,
+                self.span(start, start),
+                "a match needs at least one `|` arm",
+            ));
+        }
+
+        let end = arms.last().unwrap().span.end;
+
+        Ok(Expression::Match {
+            expression: Box::new(expression),
+            arms,
+            span: self.span(start, end),
+        })
+    }
+
+    /// Parse a bare sequence of match arms (`| pattern => body`, one after another) with no
+    /// leading scrutinee — the shape both `?`'s match expression and the top-level signal
+    /// trap (`!>`) share. Empty when the cursor has no leading `|`; the caller decides
+    /// whether that is an error (a match needs at least one arm; a trap needing at least
+    /// one is enforced the same way at its own call site).
+    pub(super) fn parse_arm_list(&mut self) -> Result<Vec<crate::ast::MatchArm>, ParseError> {
         let mut arms = Vec::new();
 
-        // Parse match arms: | pattern => body
         while self.check(&TokenKind::Pipe) {
             self.advance();
 
@@ -31,21 +55,7 @@ impl<'a> Parser<'a> {
             });
         }
 
-        if arms.is_empty() {
-            return Err(ParseError::new(
-                Code::EmptyMatch,
-                self.span(start, start),
-                "a match needs at least one `|` arm",
-            ));
-        }
-
-        let end = arms.last().unwrap().span.end;
-
-        Ok(Expression::Match {
-            expression: Box::new(expression),
-            arms,
-            span: self.span(start, end),
-        })
+        Ok(arms)
     }
 
     /// Depth-guarded entry point for pattern parsing. A constructor pattern's

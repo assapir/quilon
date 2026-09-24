@@ -126,6 +126,15 @@ struct Scheduler {
     /// fiber may wait on the same address, so this is 1:many — every waiter is
     /// re-readied when the address is woken.
     address_waiters: HashMap<usize, Vec<usize>>,
+    /// Tokens a BACKGROUND source parked on — excluded from `run`'s own "is anything
+    /// still going on" test (see [`mark_background_readiness`]). The signal trap's
+    /// dispatcher fiber (`crate::trap`) parks on its self-pipe for the rest of the
+    /// process's life, whether or not a signal ever arrives; without this, a program
+    /// that declares a trap could never exit on its own once `^` returns — only an
+    /// external kill would end it. A background park still wakes and resumes exactly
+    /// like any other; this affects only whether its OWN pending park keeps `run`
+    /// looping.
+    background_tokens: std::collections::HashSet<Token>,
 }
 
 impl Scheduler {
@@ -138,6 +147,7 @@ impl Scheduler {
             readiness_waiters: HashMap::new(),
             readiness_deadlines: Vec::new(),
             address_waiters: HashMap::new(),
+            background_tokens: std::collections::HashSet::new(),
         }
     }
 
@@ -538,6 +548,15 @@ pub(crate) fn wake_address(address: usize) {
     });
 }
 
+/// Mark `token` as a BACKGROUND readiness park: parking on it does not, by itself, keep
+/// [`run`]'s loop going once every non-background fiber has finished or is itself parked
+/// on nothing but background tokens. See the [`Scheduler::background_tokens`] doc.
+pub(crate) fn mark_background_readiness(token: Token) {
+    with_scheduler(|scheduler| {
+        scheduler.background_tokens.insert(token);
+    });
+}
+
 /// Allocate a token and register `source` with the active reactor for `interest`.
 pub(crate) fn register_readiness(
     source: &mut impl Source,
@@ -688,7 +707,11 @@ pub fn run<F: FnOnce() + 'static>(main: F) {
                 .map(|(d, _)| *d)
                 .chain(scheduler.readiness_deadlines.iter().map(|(d, _, _)| *d))
                 .min();
-            (next, !scheduler.readiness_waiters.is_empty())
+            let non_background_waiter = scheduler
+                .readiness_waiters
+                .keys()
+                .any(|token| !scheduler.background_tokens.contains(token));
+            (next, non_background_waiter)
         });
         match (next_deadline, readiness_parked) {
             (None, false) => break, // nothing ready, nothing parked => all done

@@ -136,6 +136,9 @@ fn collect(
                         block_local.insert(declaration.name.clone());
                     }
                     Statement::Item(Item::TypeDeclaration(_)) => {}
+                    // A trap is a top-level-only item (the parser never emits one as a
+                    // block statement) — nothing to capture.
+                    Statement::Item(Item::TrapDeclaration(_)) => {}
                 }
             }
         }

@@ -408,5 +408,23 @@ fn item_span(item: &Item) -> &Span {
         Item::VariableDeclaration(d) => &d.span,
         Item::FunctionDeclaration(d) => &d.span,
         Item::TypeDeclaration(d) => &d.span,
+        Item::TrapDeclaration(d) => &d.span,
     }
+}
+
+#[test]
+fn test_trap_declared_in_an_imported_module_is_rejected() {
+    // Only the file that defines `^` may declare a signal trap — one sitting in an
+    // imported module (`tests/fixtures/trap_in_module.qn`) is an error.
+    let source = r#"
+        << "trap_in_module.qn"
+        ^ = () -> Num => < 0 >
+    "#;
+    let err = check_with_base(source, &fixtures_dir())
+        .expect_err("a trap declared outside the root file must be rejected");
+    assert!(
+        err.contains("the file that defines `^`"),
+        "unexpected error: {}",
+        err
+    );
 }

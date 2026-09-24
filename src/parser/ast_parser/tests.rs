@@ -1260,3 +1260,60 @@ fn test_early_close_blames_the_gt_even_when_the_derailment_is_at_a_later_token()
         "the early `>` sits on line 3 of the source"
     );
 }
+
+#[test]
+fn test_parse_trap_declaration() {
+    let src =
+        "<< core.process\n!> | Interrupt(s) => 1\n   | Terminate(_) => 2\n^ = () -> Num => < 0 >";
+    let tokens = Lexer::tokenize(src).unwrap();
+    let program = parse(&tokens).expect("a trap declaration parses");
+    let trap = program
+        .items
+        .iter()
+        .find_map(|item| match item {
+            Item::TrapDeclaration(trap) => Some(trap),
+            _ => None,
+        })
+        .expect("the program has a TrapDeclaration item");
+    assert_eq!(trap.arms.len(), 2);
+    assert!(matches!(
+        &trap.arms[0].pattern,
+        Pattern::Constructor { name, .. } if name == "Interrupt"
+    ));
+    assert!(matches!(
+        &trap.arms[1].pattern,
+        Pattern::Constructor { name, .. } if name == "Terminate"
+    ));
+}
+
+#[test]
+fn test_parse_trap_declaration_reuses_the_arm_syntax() {
+    // A trap arm's payload sub-pattern binds a name or `_`, exactly like a `?` match arm's.
+    let src = "!> | Interrupt(sender) => 1\n   | Terminate(_) => 2\n^ = () -> Num => < 0 >";
+    let tokens = Lexer::tokenize(src).unwrap();
+    let program = parse(&tokens).expect("a trap declaration parses");
+    let Item::TrapDeclaration(trap) = &program.items[0] else {
+        panic!("expected a TrapDeclaration as the first item");
+    };
+    let Pattern::Constructor { arguments, .. } = &trap.arms[0].pattern else {
+        panic!("expected a constructor pattern");
+    };
+    assert!(matches!(
+        &arguments[0],
+        Pattern::Identifier { name, .. } if name == "sender"
+    ));
+    let Pattern::Constructor { arguments, .. } = &trap.arms[1].pattern else {
+        panic!("expected a constructor pattern");
+    };
+    assert!(matches!(&arguments[0], Pattern::Wildcard { .. }));
+}
+
+#[test]
+fn test_parse_empty_trap_is_an_error() {
+    let src = "!>\n^ = () -> Num => < 0 >";
+    let tokens = Lexer::tokenize(src).unwrap();
+    let Err(err) = parse(&tokens) else {
+        panic!("expected `{src}` to be a parse error");
+    };
+    assert_eq!(err.code, Code::EmptyTrap);
+}

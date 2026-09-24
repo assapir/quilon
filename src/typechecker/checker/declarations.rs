@@ -113,6 +113,11 @@ impl TypeChecker {
             }
         }
 
+        // The trap's own placement/uniqueness rules and its arms — every item (a merged
+        // `<< core.process` included) is registered by now. Before `check_fiber_sharing`
+        // so that pass can treat the trap's arms as fiber launches too.
+        self.check_traps(program)?;
+
         // Runs last, once every top-level binding's mutability and atomicity is settled
         // (a handler defined above the global it touches still needs that global's own
         // declaration checked first) — see `fiber_sharing`.
@@ -204,6 +209,9 @@ impl TypeChecker {
                 self.check_function_declaration(declaration, nesting)
             }
             Item::TypeDeclaration(declaration) => self.check_type_declaration(declaration),
+            // Checked as its own whole-program pass, after every item (a merged `<<
+            // core.process` included) has been registered — see `check_traps`.
+            Item::TrapDeclaration(_) => Ok(()),
         }
     }
 

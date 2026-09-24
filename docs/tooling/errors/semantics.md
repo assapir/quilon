@@ -728,3 +728,81 @@ test.describe("describe", () => <
 >)
 ^ = () -> Num => < describe(Ok("home")).size >
 ```
+
+### QN354 — signal trap outside the root file
+
+A [signal trap](../../concurrency/README.md#signal-trap) (`!>`) declared in a file other
+than the one that defines `^` — here, an imported module.
+
+```quilon ignore
+<< "traps.qn"
+
+^ = () -> Num => < 0 >
+```
+
+```quilon title="traps.qn"
+<< core.process
+
+!> | Interrupt(s) => 1
+```
+
+Move the trap to the file that defines `^`.
+
+### QN355 — second signal trap
+
+A program declares at most one signal trap.
+
+```quilon ignore
+<< core.process
+
+!> | Interrupt(s) => 1
+
+!> | Terminate(s) => 2
+
+^ = () -> Num => < 0 >
+```
+
+Merge the arms into one trap.
+
+### QN356 — signal trap without `core.process`
+
+A trap's arms match [`process.Signal`](../../corelib/process.md), which needs `<<
+core.process` — missing here.
+
+```quilon ignore
+!> | Interrupt(s) => 1
+
+^ = () -> Num => < 0 >
+```
+
+Add `<< core.process`.
+
+### QN357 — signal trap arm without a signal pattern
+
+A trap arm's pattern must name a `process.Signal` variant — a bare binding, `_`, or a
+literal binds nothing the runtime could dispatch a concrete signal to.
+
+```quilon ignore
+<< core.process
+
+!> | anySignal => 1
+
+^ = () -> Num => < 0 >
+```
+
+Match one of `Signal`'s variants, e.g. `| Interrupt(sender) => …`.
+
+### QN358 — duplicate signal trap arm
+
+Two arms of the same trap name the same `process.Signal` variant.
+
+```quilon ignore
+<< core.process
+
+!> | Interrupt(s) => 1
+   | Interrupt(s) => 2
+
+^ = () -> Num => < 0 >
+```
+
+A trap has at most one arm per signal — remove or merge the duplicate.

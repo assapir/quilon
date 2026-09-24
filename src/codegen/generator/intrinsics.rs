@@ -272,6 +272,15 @@ impl<'ctx> CodeGenerator<'ctx> {
                 &[ptr.into(), i64t.into(), ptr.into(), ptr.into(), ptr.into()],
                 false,
             ),
+            // void __trap_install(double signalIndex, ptr armFn) — install the signal
+            // trap's `signalIndex`-th arm (an index into the fixed `process.Signal` variant
+            // order — see `CodeGenerator::SIGNAL_VARIANT_ORDER` — never a raw OS signal
+            // number, which differs across targets). Called once per written arm, from
+            // `main`, before `^` runs. `armFn` is a `void (double pid, double uid)` — the
+            // arm's own generated function (see `CodeGenerator::generate_trap`), built the
+            // same way any other top-level function is, with no closure bundle to unpack:
+            // a trap arm captures nothing, since only the root file may declare one.
+            "__trap_install" => void.fn_type(&[f64t.into(), ptr.into()], false),
             // { ptr, i64 } __connection_read_launch(double connectionId) — `Connection`'s
             // `@read`: launch a background read of whatever bytes have arrived and return
             // the DEFERRED Text immediately, forced (via `__force_text`) at its strict-use

@@ -627,6 +627,14 @@ fn declaration_candidates(program: &Program) -> Vec<NestedDeclaration<'_>> {
                 }
                 other => candidates.extend(nested_declaration_candidates(other)),
             },
+            // A trap arm binds a pattern (always `Sender`, never a bare `:: Result`
+            // parameter), not a declared parameter list — not a candidate itself, but a
+            // lambda nested in its body still is.
+            Item::TrapDeclaration(trap) => {
+                for arm in &trap.arms {
+                    candidates.extend(nested_declaration_candidates(&arm.body));
+                }
+            }
         }
     }
     candidates
@@ -954,6 +962,11 @@ fn index_program_calls(program: &Program) -> HashMap<&str, Vec<&Expression>> {
             Item::TypeDeclaration(declaration) => {
                 for method in declaration.type_definition.methods() {
                     index_expression(&method.body, &mut calls_by_name);
+                }
+            }
+            Item::TrapDeclaration(trap) => {
+                for arm in &trap.arms {
+                    index_expression(&arm.body, &mut calls_by_name);
                 }
             }
         }

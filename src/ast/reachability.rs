@@ -90,6 +90,14 @@ pub fn reachable_functions(program: &Program) -> Option<HashSet<&str>> {
                     mentions(&method.body, &mut pending);
                 }
             }
+            // A trap's arms are unconditional roots, exactly like a top-level binding's
+            // value or a type's method bodies above: the runtime calls an arm directly,
+            // with no Quilon call site to mention it.
+            Item::TrapDeclaration(trap) => {
+                for arm in &trap.arms {
+                    mentions(&arm.body, &mut pending);
+                }
+            }
         }
     }
 
@@ -239,6 +247,8 @@ fn mentions<'a>(expression: &'a Expression, out: &mut Vec<&'a str>) {
                             mentions(&method.body, out);
                         }
                     }
+                    // A trap is a top-level-only item; never a block statement.
+                    Statement::Item(Item::TrapDeclaration(_)) => {}
                 }
             }
         }

@@ -1,0 +1,5 @@
+~ Test fixture: a trap declared in an IMPORTED module, not the file that defines `^` — the
+~ importer's own check (`module_test.rs`) expects this to be rejected.
+<< core.process
+
+!> | Interrupt(s) => 1
