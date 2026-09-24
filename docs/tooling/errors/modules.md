@@ -12,14 +12,28 @@ QN2xx: import resolution and linking errors.
 
 ### QN200 — `@` primitive declared outside the corelib
 
-A user source declares a name starting with `@`. The `@` marks a built-in IO primitive,
-which only the corelib defines; user code calls one.
+A user source declares a function whose name starts with `@`. On a function, `@` marks a
+built-in IO primitive, and only the corelib defines those; user code calls one.
 
 ```quilon ignore
 @sleep = (seconds :: Num) -> $ => < $ >
 ```
 
-Declare an ordinary function, and call the corelib's primitive where a primitive is meant.
+`@` on a `:=` binding is different: that is an atomic binding, which any file may declare.
+Declare an ordinary function, keep `@` for atomic bindings, and call the corelib's
+primitive where a primitive is meant:
+
+```quilon
+<< core.io
+
+@naps := 0
+sleep = (seconds :: Num) -> $ => < naps := naps + 1 >
+^ = () -> Num => <
+  sleep(1)
+  io.print(naps)
+  0
+>
+```
 
 ### QN201 — missing module
 
