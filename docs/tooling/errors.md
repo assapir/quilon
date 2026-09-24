@@ -166,6 +166,8 @@ its name relative to the first block (`` ```quilon title="lib/util.qn" ``).
 | QN349 | atomic binding reassignment waits on a deferred value |
 | QN350 | `:=` value shared across fibers |
 | QN351 | unresolved `Result` payload |
+| QN352 | top-level function never called |
+| QN353 | top-level function reachable only from test blocks |
 | QN400 | code generation failed |
 | QN401 | native build failed |
 | QN500 | assertion failed |
@@ -1248,6 +1250,56 @@ The check covers the functions reachable from `^`, the same set codegen emits (a
 only called from inside a `test.describe`/`test.it` block, which `quilon run`/`check`/
 `build` erase, is outside that set under those commands); under `quilon test` the
 synthesized `^` reaches every test's helpers.
+
+### QN352 — top-level function never called
+
+A non-exported top-level function is a module's private detail — nothing outside its own
+file can name it. Nothing inside it calls this one either: not `^`, and — in a module with
+no `^` of its own — not any of the module's `>>`-exported functions. A function nothing can
+reach is dead: it has no way to run.
+
+```quilon ignore
+>> grind = (n :: Num) -> Num => < n * 2 >
+sift = (n :: Num) -> Num => < n + 1 >
+```
+
+`sift` is called, exported, or gone:
+
+```quilon
+sift = (n :: Num) -> Num => < n + 1 >
+>> grind = (n :: Num) -> Num => < n * 2 + sift(n) >
+```
+
+### QN353 — top-level function reachable only from test blocks
+
+`run`, `build` and `check` erase a file's `test.describe` blocks before compiling it — only
+`quilon test`'s synthesized `^` runs them. A function only those blocks mention is dead in
+the program; testing a function nothing uses has no meaning, so this is its own error.
+
+```quilon ignore
+<< core.test
+describe = (result :: Result) -> Text => <
+  result ? | Ok(text) => text | NotOk(_) => "none"
+>
+test.describe("describe", () => <
+  test.it("ok", () => < expect(describe(Ok("home")), equals("home")) >)
+>)
+^ = () -> Num => < 0 >
+```
+
+`quilon test` runs the block and passes; `quilon run`/`build`/`check` raise QN353 until
+`describe` is called from `^`, exported, or its test moves with it:
+
+```quilon
+<< core.test
+describe = (result :: Result) -> Text => <
+  result ? | Ok(text) => text | NotOk(_) => "none"
+>
+test.describe("describe", () => <
+  test.it("ok", () => < expect(describe(Ok("home")), equals("home")) >)
+>)
+^ = () -> Num => < describe(Ok("home")).size >
+```
 
 ## Code generation and build
 

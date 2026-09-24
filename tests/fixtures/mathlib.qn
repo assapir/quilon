@@ -1,6 +1,7 @@
 ~ Test fixture module for the `<<` file-path import path.
-~ `add` is exported (>>); `secret` is module-private (no prefix).
-
->> add = (a :: Num, b :: Num) -> Num => < a + b >
+~ `add` is exported (>>); `secret` is module-private (no prefix), though the
+~ exported `add` below calls it (names resolve top to bottom, so `secret` comes first).
 
 secret = (x :: Num) -> Num => < x >
+
+>> add = (a :: Num, b :: Num) -> Num => < secret(a) + b >

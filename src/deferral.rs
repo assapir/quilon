@@ -832,14 +832,13 @@ mod tests {
     fn atomic_reassignment_forcing_a_deferred_value_is_rejected() {
         // The maintainer's own example: a top-level atomic global, forced on the right side
         // of its reassignment from a separate function.
-        let src =
-            "<< core.io\n@hits := 0\nbump = () -> $ => < hits := hits + io.@readStdin().length >";
+        let src = "<< core.io\n@hits := 0\n>> bump = () -> $ => < hits := hits + io.@readStdin().length >";
         assert_eq!(atomic_violation(src).name, "hits");
     }
 
     #[test]
     fn atomic_reassignment_directly_forcing_a_primitive_call_is_rejected() {
-        let src = "<< core.io\n@hits := 0\nbump = () -> $ => < hits := io.@readStdin().length >";
+        let src = "<< core.io\n@hits := 0\n>> bump = () -> $ => < hits := io.@readStdin().length >";
         assert_eq!(atomic_violation(src).name, "hits");
     }
 
@@ -854,7 +853,7 @@ mod tests {
     fn atomic_reassignment_reading_an_already_forced_binding_is_accepted() {
         // The accepted rewrite: force into a plain binding first, then reassign — the
         // reassignment's own right side reads an already-ready value.
-        let src = "<< core.io\n@hits := 0\nbump = () -> $ => <\n  extra = io.@readStdin().length\n  hits := hits + extra\n>";
+        let src = "<< core.io\n@hits := 0\n>> bump = () -> $ => <\n  extra = io.@readStdin().length\n  hits := hits + extra\n>";
         assert_eq!(checked_force_count(src), 1);
     }
 
@@ -862,7 +861,7 @@ mod tests {
     fn a_plain_mutable_reassignment_may_force_a_deferred_value() {
         // The rule is atomic-binding-specific: an ordinary `:=` global forcing a deferred
         // value on its reassignment's right side is untouched.
-        let src = "<< core.io\ncounter := 0\nbump = () -> $ => < counter := counter + io.@readStdin().length >";
+        let src = "<< core.io\ncounter := 0\n>> bump = () -> $ => < counter := counter + io.@readStdin().length >";
         assert_eq!(checked_force_count(src), 1);
     }
 
@@ -872,7 +871,7 @@ mod tests {
         // tells them apart (by whether the name is already bound), so a bare, non-forcing
         // reassignment earlier in the function must not make the checker (or this pass)
         // forget the binding stays atomic for the reassignment after it.
-        let src = "<< core.io\n@hits := 0\nbump = () -> $ => <\n  hits := hits + 1\n  hits := hits + io.@readStdin().length\n>";
+        let src = "<< core.io\n@hits := 0\n>> bump = () -> $ => <\n  hits := hits + 1\n  hits := hits + io.@readStdin().length\n>";
         assert_eq!(atomic_violation(src).name, "hits");
     }
 
@@ -882,7 +881,7 @@ mod tests {
         // no shadowing for a mutable name already in scope: it reassigns the top-level
         // `@counter` like any other `:=` on an existing name, so the forcing reassignment
         // after it is rejected the same as any other atomic reassignment.
-        let src = "<< core.io\n@counter := 0\ntally = () -> Num => <\n  counter := 0\n  counter := counter + io.@readStdin().length\n  counter\n>";
+        let src = "<< core.io\n@counter := 0\n>> tally = () -> Num => <\n  counter := 0\n  counter := counter + io.@readStdin().length\n  counter\n>";
         assert_eq!(atomic_violation(src).name, "counter");
     }
 
@@ -891,7 +890,7 @@ mod tests {
         // The checker resolves `hits` from inside the `.each` callback's block the same
         // way it would from any other nested scope, so the rule reaches a reassignment
         // however deeply it sits inside a lambda, not only a named function's own body.
-        let src = "<< core.io\n@hits := 0\nbump = () -> $ => <\n  (1 <- 3).each(n => < hits := hits + io.@readStdin().length >)\n  $\n>";
+        let src = "<< core.io\n@hits := 0\n>> bump = () -> $ => <\n  (1 <- 3).each(n => < hits := hits + io.@readStdin().length >)\n  $\n>";
         assert_eq!(atomic_violation(src).name, "hits");
     }
 

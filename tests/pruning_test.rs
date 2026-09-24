@@ -1,10 +1,16 @@
-//! A function nothing can reach from `^` is not emitted — and everything that *is*
-//! reachable still is, however indirectly it is reached.
+//! A function nothing can reach from `^` is not emitted; everything that *is* reachable
+//! still is, however indirectly it is reached. For ordinary (non-corelib) code this is no
+//! longer a silent drop — a non-exported top-level function nothing reaches is a compile
+//! error (`typechecker::checker::dead_functions`, QN352/QN353) — but a corelib function a
+//! program's own calls pull in wholesale (`core.text`'s composables, `core.test`'s
+//! harness) is still pruned back out exactly as before, which is what most of this file
+//! now measures.
 //!
-//! The failure mode this guards against is silent: a function dropped because the analysis
-//! did not see the thing that reaches it — an operator overload, a render override called
-//! only by interpolation, a helper called only from a method — shows up as a link error, or
-//! under the JIT as a missing symbol, in a program that compiled perfectly well before.
+//! The failure mode this guards against is silent in the other direction: a function
+//! dropped because the analysis did not see the thing that reaches it — an operator
+//! overload, a render override called only by interpolation, a helper called only from a
+//! method — shows up as a link error, or under the JIT as a missing symbol, in a program
+//! that compiled perfectly well before.
 
 use quilon::lexer::Lexer;
 use quilon::parser;
@@ -50,15 +56,19 @@ fn defines(ir: &str, name: &str) -> bool {
 }
 
 #[test]
-fn an_unreachable_function_is_not_emitted() {
-    let ir = emit(
+fn a_called_function_is_emitted_and_an_unreachable_one_is_rejected_before_codegen_runs() {
+    // A function nothing calls used to survive lexing and parsing and simply be dropped at
+    // codegen — silently, for ordinary (non-corelib) code, that is no longer possible: a
+    // non-exported top-level function nothing reaches from `^` is a `NeverReachable`
+    // (QN352) type error (see `typechecker::checker::dead_functions`), raised before
+    // codegen ever runs. What survives to be emitted is only ever what the checker already
+    // agreed is reachable.
+    assert_type_error_code(
         "used = (n :: Num) -> Num => < n + 1 >\nunused = (n :: Num) -> Num => < n + 2 >\n^ = () -> Num => < used(1) >",
+        Code::NeverReachable,
     );
+    let ir = emit("used = (n :: Num) -> Num => < n + 1 >\n^ = () -> Num => < used(1) >");
     assert!(defines(&ir, "used"), "the called function must be emitted");
-    assert!(
-        !defines(&ir, "unused"),
-        "nothing reaches `unused`, so it should not be emitted:\n{ir}"
-    );
 }
 
 #[test]
@@ -67,7 +77,6 @@ fn reachability_follows_a_chain_of_calls() {
         "third = (n :: Num) -> Num => < n + 3 >\n",
         "second = (n :: Num) -> Num => < third(n) + 2 >\n",
         "first = (n :: Num) -> Num => < second(n) + 1 >\n",
-        "orphan = (n :: Num) -> Num => < third(n) >\n",
         "^ = () -> Num => < first(0) >"
     ));
     for live in ["first", "second", "third"] {
@@ -76,7 +85,18 @@ fn reachability_follows_a_chain_of_calls() {
             "`{live}` is reachable through the chain"
         );
     }
-    assert!(!defines(&ir, "orphan"), "`orphan` is called by nothing");
+    // An orphan hanging off the same chain, called by nothing, is rejected before codegen
+    // ever runs — see `a_called_function_is_emitted_and_an_unreachable_one_is_rejected_before_codegen_runs`.
+    assert_type_error_code(
+        concat!(
+            "third = (n :: Num) -> Num => < n + 3 >\n",
+            "second = (n :: Num) -> Num => < third(n) + 2 >\n",
+            "first = (n :: Num) -> Num => < second(n) + 1 >\n",
+            "orphan = (n :: Num) -> Num => < third(n) >\n",
+            "^ = () -> Num => < first(0) >"
+        ),
+        Code::NeverReachable,
+    );
 }
 
 // There is no test for a top-level function passed as a value, because the language has no

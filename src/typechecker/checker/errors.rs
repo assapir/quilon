@@ -64,6 +64,8 @@ impl TypeError {
             TypeError::AtomicBindingUsedBare { .. } => Code::AtomicBindingUsedBare,
             TypeError::SharedAcrossFibers { .. } => Code::SharedAcrossFibers,
             TypeError::UnresolvedResultPayload { .. } => Code::UnresolvedResultPayload,
+            TypeError::NeverReachable { .. } => Code::NeverReachable,
+            TypeError::ReachableOnlyFromTests { .. } => Code::ReachableOnlyFromTests,
         }
     }
 
@@ -212,6 +214,13 @@ impl TypeError {
                  has a real type, or bind it with `_` (or simply leave it unread) since \
                  nothing here needs its value"
             )),
+            TypeError::NeverReachable { .. } => {
+                diagnostic.help("call it, export it with `>>`, or delete it")
+            }
+            TypeError::ReachableOnlyFromTests { .. } => diagnostic.help(
+                "testing a function nothing uses has no meaning; call it from `^`, export \
+                 it with `>>`, or delete it and its tests",
+            ),
             _ => diagnostic,
         }
     }
@@ -269,7 +278,9 @@ impl TypeError {
             | TypeError::AtomicBindingNotMutable { span, .. }
             | TypeError::AtomicBindingUsedBare { span, .. }
             | TypeError::SharedAcrossFibers { span, .. }
-            | TypeError::UnresolvedResultPayload { span, .. } => span,
+            | TypeError::UnresolvedResultPayload { span, .. }
+            | TypeError::NeverReachable { span, .. }
+            | TypeError::ReachableOnlyFromTests { span, .. } => span,
         }
     }
 }
@@ -786,6 +797,12 @@ impl std::fmt::Display for TypeError {
                      but no caller of `{function}` ever passes a `{parameter}` argument shaped \
                      `{variant}(...)`, so nothing says what its real type is"
                 )
+            }
+            TypeError::NeverReachable { name, .. } => {
+                write!(f, "`{name}` is never called from `^`")
+            }
+            TypeError::ReachableOnlyFromTests { name, .. } => {
+                write!(f, "`{name}` is reachable only from its test blocks")
             }
         }
     }

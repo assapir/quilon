@@ -1,7 +1,9 @@
 ~ A library module. Items prefixed with `>>` are exported; everything else is
-~ private to the module. Imported elsewhere with `<< "mathlib.qn"`.
+~ private to the module. Imported elsewhere with `<< "mathlib.qn"`. Names resolve
+~ top to bottom, so `helper` is defined before the exported function that calls it.
 
->> add = (a :: Num, b :: Num) -> Num => < a + b >
+~ Not exported -> invisible to importers, though the exported `add` below calls it: an
+~ exported function may call a private sibling (docs/modules/README.md#privacy).
+helper = (a :: Num, b :: Num) -> Num => < a + b >
 
-~ Not exported -> invisible to importers.
-helper = (x :: Num) -> Num => < x * x >
+>> add = (a :: Num, b :: Num) -> Num => < helper(a, b) >

@@ -127,6 +127,8 @@ codes! {
     AtomicReassignmentForced = 349 => "atomic binding reassignment waits on a deferred value",
     SharedAcrossFibers = 350 => "`:=` value shared across fibers",
     UnresolvedResultPayload = 351 => "unresolved `Result` payload",
+    NeverReachable = 352 => "top-level function never called",
+    ReachableOnlyFromTests = 353 => "top-level function reachable only from test blocks",
 
     // Family 4 — codegen and build
     CodegenFailed = 400 => "code generation failed",

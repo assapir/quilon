@@ -540,8 +540,8 @@ fn references_cover_a_parameters_declaration_and_every_use() {
 #[test]
 fn references_to_a_block_local_stay_inside_its_own_function() {
     // Two functions each bind a local named `y`; references from one must never pull in
-    // the other's declaration or uses.
-    let text = "f = () -> Num => < y = 1\ny >\n^ = () -> Num => < y = 2\ny + y >\n";
+    // the other's declaration or uses. `^` calls `f` so neither is dead code.
+    let text = "f = () -> Num => < y = 1\ny >\n^ = () -> Num => < y = 2\nf()\ny + y >\n";
     let checked = check_text(Path::new("buffer.qn"), text).expect("checks clean");
 
     assert_eq!(
