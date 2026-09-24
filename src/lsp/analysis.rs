@@ -1326,13 +1326,27 @@ fn member_completions(path: &Path, text: &str, dot: usize, offset: usize) -> Vec
         receiver.start as usize,
     );
     let new_dot = dot - (receiver.start as usize - statement.start as usize);
-    let Ok(checked) = check_text(path, &isolated) else {
+    // Isolating the receiver as its own statement drops the call it sat in — which, when
+    // that call was some OTHER function's only caller, leaves the isolated text with a
+    // dead function of its own (`NeverReachable`/`ReachableOnlyFromTests`), an artifact of
+    // this surgery rather than anything the real document says. The checker still records
+    // the receiver's type before raising that error (it is the last thing `check_program`
+    // checks), so — the same fallback `hover_in_document` uses for a `quilon test` view
+    // that fails partway through — a failed check still answers from what it finished
+    // checking, read back via a plain link of the same isolated text.
+    let (program, types) = match check_text(path, &isolated) {
+        Ok(checked) => (checked.program, checked.types),
+        Err(error) => {
+            let Ok(linked) = link_text(path, &isolated) else {
+                return Vec::new();
+            };
+            (linked.program, error.partial_types)
+        }
+    };
+    let Some(ty) = type_ending_at(&types, &isolated, new_dot) else {
         return Vec::new();
     };
-    let Some(ty) = type_ending_at(&checked.types, &isolated, new_dot) else {
-        return Vec::new();
-    };
-    type_member_completions(&checked.program, &checked.types, ty)
+    type_member_completions(&program, &types, ty)
 }
 
 /// The type of the smallest expression ending exactly at byte `end` in `types`. Skips

@@ -169,6 +169,8 @@ its name relative to the first block (`` ```quilon title="lib/util.qn" ``).
 | [QN349](semantics.md#qn349--atomic-binding-reassignment-waits-on-a-deferred-value) | atomic binding reassignment waits on a deferred value |
 | [QN350](semantics.md#qn350---value-shared-across-fibers) | `:=` value shared across fibers |
 | [QN351](semantics.md#qn351--unresolved-result-payload) | unresolved `Result` payload |
+| [QN352](semantics.md#qn352--top-level-function-never-called) | top-level function never called |
+| [QN353](semantics.md#qn353--top-level-function-reachable-only-from-test-blocks) | top-level function reachable only from test blocks |
 | [QN400](build.md#qn400--code-generation-failed) | code generation failed |
 | [QN401](build.md#qn401--native-build-failed) | native build failed |
 | [QN500](runtime.md#qn500--assertion-failed) | assertion failed |
