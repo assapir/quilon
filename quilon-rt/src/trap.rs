@@ -20,8 +20,9 @@ use std::os::unix::io::AsRawFd;
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicUsize, Ordering};
 
-/// `process.Signal`'s variants, in declaration order — an index into this, never a raw OS
-/// signal number, since `SIGUSR1`/`SIGUSR2` differ by target (10/12 on Linux, 30/31 on macOS).
+/// Must follow `corelib/process.qn`'s `Signal` declaration order exactly — an index into
+/// this, never a raw OS signal number, since `SIGUSR1`/`SIGUSR2` differ by target (10/12 on
+/// Linux, 30/31 on macOS).
 const TRAP_SIGNALS: [c_int; 7] = [
     libc::SIGHUP,
     libc::SIGINT,

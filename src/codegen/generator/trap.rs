@@ -10,31 +10,30 @@ use super::*;
 use crate::ast::TrapDeclaration;
 
 impl<'ctx> CodeGenerator<'ctx> {
-    /// `process.Signal`'s variant names, in the order the runtime's own signal table uses —
-    /// an index into this, never a raw OS signal number, which differs across targets.
-    const SIGNAL_VARIANT_ORDER: [&'static str; 7] = [
-        "Hangup",
-        "Interrupt",
-        "Quit",
-        "Terminate",
-        "Alarm",
-        "UserDefined1",
-        "UserDefined2",
-    ];
-
-    /// The checker already rejected anything but a `process.Signal` constructor pattern
-    /// here, so both lookups below are infallible.
+    /// The checker already rejected anything but a known `process.Signal` constructor
+    /// pattern here, so both `Err`s below are unreachable in a checked program.
     pub(super) fn generate_trap(&mut self, trap: &TrapDeclaration) -> Result<(), String> {
         for (arm_index, arm) in trap.arms.iter().enumerate() {
             let Pattern::Constructor { name, .. } = &arm.pattern else {
-                return Err(
-                    "a signal trap arm's pattern must name a process.Signal variant".to_string(),
-                );
+                return Err(format!(
+                    "internal error: a signal trap arm's pattern must name a process.Signal \
+                     variant, got {:?}",
+                    arm.pattern
+                ));
             };
-            let signal_index = Self::SIGNAL_VARIANT_ORDER
+            // The runtime's own `TRAP_SIGNALS` (quilon-rt/src/trap.rs) follows this same
+            // declaration order, pinned by a test against corelib/process.qn.
+            let Some((tag, _)) = self
+                .sum_variants
                 .iter()
-                .position(|variant| *variant == name.as_str())
-                .ok_or_else(|| format!("'{name}' is not a known process.Signal variant"))?;
+                .find(|(qualified, _)| crate::ast::display_name(qualified) == name.as_str())
+                .map(|(_, entry)| entry)
+            else {
+                return Err(format!(
+                    "internal error: '{name}' is not a known process.Signal variant"
+                ));
+            };
+            let signal_index = *tag as usize;
             let symbol = format!("__trap_arm_{arm_index}_{name}");
             let function = self.generate_trap_arm_function(arm, &symbol)?;
             self.trap_arms.push((signal_index, function));
