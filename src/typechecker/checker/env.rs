@@ -46,6 +46,7 @@ impl Environment {
                 setter_receiver: false,
                 constant: false,
                 atomic: false,
+                result_parameter: None,
             },
             span,
         )
@@ -70,6 +71,7 @@ impl Environment {
                 setter_receiver: false,
                 constant: true,
                 atomic: false,
+                result_parameter: None,
             },
             span,
         )
@@ -114,6 +116,8 @@ impl Environment {
             setter_receiver: false,
             constant: false,
             atomic: false,
+            // Set right after by `set_result_parameter`, with the caller's own index.
+            result_parameter: None,
         }
     }
 
@@ -129,6 +133,7 @@ impl Environment {
             setter_receiver: false,
             constant: false,
             atomic: false,
+            result_parameter: None,
         };
         let root = self.scopes.first_mut().expect("the root scope exists");
         root.insert(name.to_string(), symbol);
@@ -156,13 +161,15 @@ impl Environment {
                 setter_receiver: true,
                 constant: false,
                 atomic: false,
+                result_parameter: None,
             },
             span,
         )
     }
 
     /// Define a binding whose value may alias other bindings (its initializer's or the
-    /// matched scrutinee's aliasing), owned by `owner`.
+    /// matched scrutinee's aliasing), owned by `owner`. Its `result_parameter` starts
+    /// `None`; a caller whose initializer copies one sets it right after.
     pub(super) fn define_binding(
         &mut self,
         name: String,
@@ -183,6 +190,7 @@ impl Environment {
                 setter_receiver: false,
                 constant: false,
                 atomic: false,
+                result_parameter: None,
             },
             span,
         )
@@ -274,6 +282,17 @@ impl Environment {
     pub(super) fn mark_atomic(&mut self, name: &str) {
         if let Some(symbol) = self.lookup_mut(name) {
             symbol.atomic = true;
+        }
+    }
+
+    /// Set (or clear) `name`'s [`Symbol::result_parameter`] after it's already defined.
+    pub(super) fn set_result_parameter(
+        &mut self,
+        name: &str,
+        result_parameter: Option<(Span, usize)>,
+    ) {
+        if let Some(symbol) = self.lookup_mut(name) {
+            symbol.result_parameter = result_parameter;
         }
     }
 }
