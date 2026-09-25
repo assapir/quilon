@@ -5,6 +5,24 @@ use quilon::lexer::{Lexer, ROOT_FILE, TokenKind};
 use quilon::parser::parse;
 
 #[test]
+fn test_signal_trap_token() {
+    let tokens = Lexer::tokenize("!> | Interrupt(s) => 1").unwrap();
+    assert_eq!(tokens[0].kind, TokenKind::Trap);
+    // `!>` wins maximal munch over `!` (`Not`) followed by a separate block-open `<`... —
+    // here a bare `>`, so the very next token is `Pipe`, not another `!`/`Not`.
+    assert_eq!(tokens[1].kind, TokenKind::Pipe);
+}
+
+#[test]
+fn test_not_equal_still_lexes_apart_from_the_trap_token() {
+    // `!=` must keep winning over `!` + `=` now that `!>` is also a two-character token
+    // starting with `!` — maximal munch picks whichever literal actually matches the input.
+    let tokens = Lexer::tokenize("a != b").unwrap();
+    assert!(tokens.iter().any(|t| t.kind == TokenKind::Ne));
+    assert!(!tokens.iter().any(|t| t.kind == TokenKind::Trap));
+}
+
+#[test]
 fn test_hello_world() {
     let source = r#"
 main = => <

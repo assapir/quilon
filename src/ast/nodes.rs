@@ -99,7 +99,11 @@ pub enum Item {
     VariableDeclaration(VariableDeclaration),
     FunctionDeclaration(FunctionDeclaration),
     TypeDeclaration(TypeDeclaration),
+    TrapDeclaration(TrapDeclaration),
 }
+
+/// A trap declares no name of its own; this stands in wherever a pass needs one.
+pub const TRAP_NAME: &str = "!>";
 
 impl Item {
     /// The name this item declares, whichever kind of declaration it is.
@@ -108,6 +112,7 @@ impl Item {
             Item::VariableDeclaration(declaration) => &declaration.name,
             Item::FunctionDeclaration(declaration) => &declaration.name,
             Item::TypeDeclaration(declaration) => &declaration.name,
+            Item::TrapDeclaration(_) => TRAP_NAME,
         }
     }
 
@@ -117,8 +122,17 @@ impl Item {
             Item::VariableDeclaration(declaration) => &declaration.span,
             Item::FunctionDeclaration(declaration) => &declaration.span,
             Item::TypeDeclaration(declaration) => &declaration.span,
+            Item::TrapDeclaration(declaration) => &declaration.span,
         }
     }
+}
+
+/// `!>` followed by one or more match arms over `process.Signal`. Placement/uniqueness are
+/// the checker's job, not the parser's.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TrapDeclaration {
+    pub arms: Vec<MatchArm>,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone, PartialEq)]

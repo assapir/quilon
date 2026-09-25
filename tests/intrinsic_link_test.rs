@@ -42,10 +42,15 @@ const EVERY_INTRINSIC: &str = r#"
 << core.time
 << core.net
 << core.http
+<< core.process
 
 ~ __gc_add_root, via `__ql_init`: a top-level binding COMPUTED (not a Num/Bool/$ literal
 ~ or a function) is initialized once before `^`, and its global is registered as a GC root.
 linkedGreeting = "linked " + "again"
+
+~ __trap_install: declaring a trap at all is what makes codegen emit the install call, no
+~ signal ever needing to actually arrive for the link to need this symbol.
+!> | Interrupt(s) => $
 
 ^ = (args :: []Text, env :: [|Text => Text|]) -> $ => <
   assert(linkedGreeting.size > 0, equals(true))

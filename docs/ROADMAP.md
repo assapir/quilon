@@ -27,7 +27,7 @@ evergreen — the durable record that survives across contributors and AI-agent 
 | **M5** | ~~Implicit parallelism (CPU) — parallel array methods from inferred purity~~ | 💤 Deprioritized |
 | **M6** | **Concurrency runtime — colorless implicit futures ([#120]) — THE core deliverable.** Stage 1: single-threaded fibers + reactor; Stage 2: M:N work-stealing + cross-thread GC | 🔨 In progress (Stage 1 ✅) — **core** |
 | **M7** | Polish — formatter/linter, corelib, debug info | 🔨 In progress |
-| **M8** | **Web — a native HTTP server built on the M6 runtime** | 🔨 In progress (server ships; signal trap remains) |
+| **M8** | **Web — a native HTTP server built on the M6 runtime** | ✅ Complete |
 
 Legend: ✅ complete · 🔨 in progress · ⬜ planned · 💤 deprioritized.
 
@@ -135,17 +135,18 @@ and specified in full in [#120]. Built smallest-first:
 | Immutability-driven optimization — `=` methods and parameters carry LLVM `memory(read)`/`noalias` attributes; purity as a checker fact for concurrency | ⬜ |
 | Hover docs — show a function's signature/docs on hover in the editor | ⬜ |
 
-### M8 — Web: a native HTTP server on the runtime 🔨
+### M8 — Web: a native HTTP server on the runtime ✅
 
 The **"then web"** half of the north star: a native HTTP server built on the M6 runtime's
 Stage 1 — one worker, a fiber per connection, one reactor wait covering every connection —
-so many in-flight connections are cheap fibers with their IO overlapped implicitly ([#435]).
-Stage 2 turns that one worker into many without changing server code. What remains on the
-server: a signal trap for graceful shutdown ([#453]), and a router. Its on-ramps:
+so many in-flight connections are cheap fibers with their IO overlapped implicitly
+([#435]). Stage 2 turns that one worker into many without changing server code. Its
+on-ramps:
 
 | Item | Status |
 |------|--------|
 | Reactor-backed input/IO — reading stdin/files/sockets, not just printing ([#60]) | 🔨 (stdin, one-shot TCP, and the streaming file read `@streamFile` ship; hostname resolution and regular blocking calls run on the runtime's blocking-call pool ([#434]); the whole-file `io.readFile` composition remains) |
 | Statically-linked `libgc` for a self-contained server binary ([#49]) | ✅ (bdwgc built from the submodule and linked statically; a produced binary needs no libgc) |
-| Fiber-sharing check — an unmarked `:=` value reachable from more than one fiber is a compile error naming `@name := …` ([#120]) | ✅ ([#458]; enforced for `net.@tcpServe` and `http.@serve` handlers) |
+| Fiber-sharing check — an unmarked `:=` value reachable from more than one fiber is a compile error naming `@name := …` ([#120]) | ✅ ([#458]; enforced for `net.@tcpServe` and `http.@serve` handlers, and for a signal trap's arms) |
 | Native HTTP server on the runtime ([#435]) | ✅ (raw layer — `net.@tcpServe`, `Connection`, `Server.kill` ([#451]); HTTP layer — `http.@serve`, `Request.parse`, `Status` (one variant per registered code), `Response.reply` ([#457]); request bodies per Content-Length or chunked framing with a per-server cap ([#466]); keep-alive with an idle timeout ([#471])) |
+| Signal trap for graceful shutdown ([#453]) | ✅ (`!>` over `core.process`'s `Signal`, one per program in the file that defines `^`; each arm its own fiber, a self-pipe/reactor dispatch installing `sigaction` only for the signals written) |

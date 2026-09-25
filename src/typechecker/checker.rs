@@ -26,6 +26,7 @@ mod patterns;
 mod sums;
 #[cfg(test)]
 mod tests;
+mod trap;
 
 use aliasing::{ResultAliasing, ValueAliasing};
 use std::collections::HashMap;
@@ -430,6 +431,29 @@ pub enum TypeError {
     /// `checker::dead_functions`.
     ReachableOnlyFromTests {
         name: String,
+        span: Span,
+    },
+    /// A signal trap declared outside the file that defines `^`.
+    TrapOutsideRootFile {
+        span: Span,
+    },
+    /// A second signal trap; `first` is where the first one sits.
+    SecondTrap {
+        first: Span,
+        span: Span,
+    },
+    /// A signal trap with no `<< core.process` to resolve `process.Signal` against.
+    TrapWithoutProcessImport {
+        span: Span,
+    },
+    /// A trap arm's pattern isn't a `process.Signal` variant constructor.
+    TrapArmNotASignalPattern {
+        span: Span,
+    },
+    /// Two trap arms naming the same variant; `first` is the earlier one.
+    DuplicateTrapArm {
+        variant: String,
+        first: Span,
         span: Span,
     },
 }

@@ -640,6 +640,75 @@ fn importing_core_http_contributes_exactly_this_surface() {
     );
 }
 
+/// The names `<< core.process` puts in a program, pinned EXACTLY: `Sender` and `Signal` —
+/// the trap's whole vocabulary, and nothing else (no `@` primitive; the trap itself is a
+/// top-level item, not a call this module declares). `Signal`'s own variants travel with
+/// its one `TypeDeclaration` item rather than appearing here as names of their own.
+#[test]
+fn importing_core_process_contributes_exactly_this_surface() {
+    let tokens = Lexer::tokenize("<< core.process\n^ = () -> Num => < 0 >\n").expect("lexing");
+    let program = parser::parse(&tokens).expect("parsing");
+    let (linked, _sources) =
+        quilon::modules::link(program, Path::new("."), None).expect("import linking failed");
+    let mut contributed: Vec<&str> = linked
+        .items
+        .iter()
+        .map(Item::name)
+        .filter(|name| *name != "^")
+        .collect();
+    contributed.sort_unstable();
+
+    let mut expected = vec!["core.process.Sender", "core.process.Signal"];
+    expected.sort_unstable();
+
+    assert_eq!(
+        contributed, expected,
+        "`<< core.process` contributes a different set of names than this pins"
+    );
+}
+
+/// `Signal`'s variants, in declaration order — the runtime's own `TRAP_SIGNALS`
+/// (`quilon-rt/src/trap.rs`) must list the matching OS signal in this same order, since
+/// codegen sends it an index into `Signal`'s declaration order, never a raw signal number.
+#[test]
+fn core_process_signal_variants_are_declared_in_the_order_trap_signals_assumes() {
+    let tokens = Lexer::tokenize("<< core.process\n^ = () -> Num => < 0 >\n").expect("lexing");
+    let program = parser::parse(&tokens).expect("parsing");
+    let (linked, _sources) =
+        quilon::modules::link(program, Path::new("."), None).expect("import linking failed");
+    let signal = linked
+        .items
+        .iter()
+        .find_map(|item| match item {
+            Item::TypeDeclaration(declaration) if declaration.name == "core.process.Signal" => {
+                Some(declaration)
+            }
+            _ => None,
+        })
+        .expect("core.process.Signal is declared");
+    let quilon::ast::TypeDefinition::Sum { variants, .. } = &signal.type_definition else {
+        panic!("Signal is a sum type");
+    };
+    let names: Vec<&str> = variants
+        .iter()
+        .map(|variant| quilon::ast::display_name(&variant.name))
+        .collect();
+
+    assert_eq!(
+        names,
+        [
+            "Hangup",
+            "Interrupt",
+            "Quit",
+            "Terminate",
+            "Alarm",
+            "UserDefined1",
+            "UserDefined2"
+        ],
+        "corelib/process.qn's Signal declaration order changed — update quilon-rt/src/trap.rs's TRAP_SIGNALS to match"
+    );
+}
+
 // ── Running: `quilon test` ─────────────────────────────────────────────────────────────
 
 /// The file's own `^` is not the test run's entry point — the synthesized one is — so the

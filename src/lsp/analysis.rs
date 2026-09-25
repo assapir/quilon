@@ -239,6 +239,20 @@ impl Resolver {
                     self.scopes.pop();
                 }
             }
+            Item::TrapDeclaration(trap) => {
+                for arm in &trap.arms {
+                    self.scopes.push(HashMap::new());
+                    if let crate::ast::Pattern::Constructor { arguments, .. } = &arm.pattern {
+                        for argument in arguments {
+                            if let crate::ast::Pattern::Identifier { name, span } = argument {
+                                self.bind(name, span);
+                            }
+                        }
+                    }
+                    self.expression(&arm.body);
+                    self.scopes.pop();
+                }
+            }
         }
     }
 
@@ -700,6 +714,11 @@ impl DeclaredNames {
                 self.collect_expression(&declaration.body);
             }
             Item::VariableDeclaration(declaration) => self.collect_expression(&declaration.value),
+            Item::TrapDeclaration(trap) => {
+                for arm in &trap.arms {
+                    self.collect_expression(&arm.body);
+                }
+            }
         }
     }
 
@@ -738,6 +757,8 @@ impl DeclaredNames {
                 self.collect_parameters(&declaration.parameters);
             }
             Item::VariableDeclaration(_) => {}
+            // A trap is a top-level-only item; never a block statement.
+            Item::TrapDeclaration(_) => {}
         }
     }
 
@@ -1029,22 +1050,26 @@ fn bind_item(
     if let Item::TypeDeclaration(declaration) = item {
         collect_sum_constructors(declaration, sums);
     }
-    let completion = match item {
-        Item::FunctionDeclaration(declaration) => CompletionItem {
+    // A trap declares no name of its own — nothing for a completion to offer.
+    let Some(completion) = (match item {
+        Item::FunctionDeclaration(declaration) => Some(CompletionItem {
             label: declaration.name.clone(),
             kind: CompletionKind::Function,
             detail: Some(function_signature_label(declaration)),
-        },
-        Item::TypeDeclaration(declaration) => CompletionItem {
+        }),
+        Item::TypeDeclaration(declaration) => Some(CompletionItem {
             label: declaration.name.clone(),
             kind: CompletionKind::Class,
             detail: None,
-        },
-        Item::VariableDeclaration(declaration) => CompletionItem {
+        }),
+        Item::VariableDeclaration(declaration) => Some(CompletionItem {
             label: declaration.name.clone(),
             kind: CompletionKind::Variable,
             detail: declaration.type_annotation.as_ref().map(type_label),
-        },
+        }),
+        Item::TrapDeclaration(_) => None,
+    }) else {
+        return;
     };
     if let Some(scope) = scopes.last_mut() {
         scope.insert(completion.label.clone(), completion);
@@ -1112,6 +1137,29 @@ fn descend_item_body(
         }
         Item::VariableDeclaration(declaration) => {
             scope_walk(&declaration.value, offset, scopes, sums);
+        }
+        Item::TrapDeclaration(trap) => {
+            for arm in &trap.arms {
+                if covers(arm.body.span(), offset) {
+                    scopes.push(HashMap::new());
+                    if let crate::ast::Pattern::Constructor { arguments, .. } = &arm.pattern {
+                        for argument in arguments {
+                            if let crate::ast::Pattern::Identifier { name, .. } = argument {
+                                bind_parameter(
+                                    &Parameter {
+                                        name: name.clone(),
+                                        type_annotation: None,
+                                        span: argument.span().clone(),
+                                    },
+                                    scopes,
+                                );
+                            }
+                        }
+                    }
+                    scope_walk(&arm.body, offset, scopes, sums);
+                    return;
+                }
+            }
         }
     }
 }
@@ -1449,6 +1497,12 @@ fn module_completion_item(item: &Item, short: &str) -> CompletionItem {
             kind: CompletionKind::Variable,
             detail: declaration.type_annotation.as_ref().map(type_label),
         },
+        // Never exported; unreached in practice.
+        Item::TrapDeclaration(_) => CompletionItem {
+            label: short.to_string(),
+            kind: CompletionKind::Variable,
+            detail: None,
+        },
     }
 }
 
@@ -1518,6 +1572,7 @@ fn item_bodies(item: &Item) -> Vec<&Expression> {
             .iter()
             .map(|method| &method.body)
             .collect(),
+        Item::TrapDeclaration(trap) => trap.arms.iter().map(|arm| &arm.body).collect(),
     }
 }
 

@@ -66,6 +66,11 @@ impl TypeError {
             TypeError::UnresolvedResultPayload { .. } => Code::UnresolvedResultPayload,
             TypeError::NeverReachable { .. } => Code::NeverReachable,
             TypeError::ReachableOnlyFromTests { .. } => Code::ReachableOnlyFromTests,
+            TypeError::TrapOutsideRootFile { .. } => Code::TrapOutsideRootFile,
+            TypeError::SecondTrap { .. } => Code::SecondTrap,
+            TypeError::TrapWithoutProcessImport { .. } => Code::TrapWithoutProcessImport,
+            TypeError::TrapArmNotASignalPattern { .. } => Code::TrapArmNotASignalPattern,
+            TypeError::DuplicateTrapArm { .. } => Code::DuplicateTrapArm,
         }
     }
 
@@ -221,6 +226,20 @@ impl TypeError {
                 "testing a function nothing uses has no meaning; call it from `^`, export \
                  it with `>>`, or delete it and its tests",
             ),
+            TypeError::TrapOutsideRootFile { .. } => {
+                diagnostic.help("move the `!>` trap to the file that defines `^`")
+            }
+            TypeError::SecondTrap { first, .. } => diagnostic
+                .label(first, Some("the first trap".to_string()))
+                .help("a program declares at most one signal trap; merge the arms into one"),
+            TypeError::TrapWithoutProcessImport { .. } => {
+                diagnostic.help("add `<< core.process` — a trap's arms match `process.Signal`")
+            }
+            TypeError::TrapArmNotASignalPattern { .. } => diagnostic
+                .help("match one of `process.Signal`'s variants, e.g. `| Interrupt(sender) => …`"),
+            TypeError::DuplicateTrapArm { first, .. } => diagnostic
+                .label(first, Some("already matched here".to_string()))
+                .help("a trap has at most one arm per signal"),
             _ => diagnostic,
         }
     }
@@ -280,7 +299,12 @@ impl TypeError {
             | TypeError::SharedAcrossFibers { span, .. }
             | TypeError::UnresolvedResultPayload { span, .. }
             | TypeError::NeverReachable { span, .. }
-            | TypeError::ReachableOnlyFromTests { span, .. } => span,
+            | TypeError::ReachableOnlyFromTests { span, .. }
+            | TypeError::TrapOutsideRootFile { span }
+            | TypeError::SecondTrap { span, .. }
+            | TypeError::TrapWithoutProcessImport { span }
+            | TypeError::TrapArmNotASignalPattern { span }
+            | TypeError::DuplicateTrapArm { span, .. } => span,
         }
     }
 }
@@ -804,6 +828,25 @@ impl std::fmt::Display for TypeError {
             TypeError::ReachableOnlyFromTests { name, .. } => {
                 write!(f, "`{name}` is reachable only from its test blocks")
             }
+            TypeError::TrapOutsideRootFile { .. } => write!(
+                f,
+                "a signal trap may only be declared in the file that defines `^`"
+            ),
+            TypeError::SecondTrap { .. } => {
+                write!(f, "a program declares at most one signal trap")
+            }
+            TypeError::TrapWithoutProcessImport { .. } => write!(
+                f,
+                "a signal trap's arms match `process.Signal`, which needs `<< core.process`"
+            ),
+            TypeError::TrapArmNotASignalPattern { .. } => write!(
+                f,
+                "a signal trap arm's pattern must name a `process.Signal` variant"
+            ),
+            TypeError::DuplicateTrapArm { variant, .. } => write!(
+                f,
+                "'{variant}' is already matched by an earlier arm of this trap"
+            ),
         }
     }
 }

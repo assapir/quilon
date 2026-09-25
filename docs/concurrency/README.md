@@ -13,7 +13,8 @@ sidebar:
 > deferred-value `io.@readStdin` (`core.io`), the networked `net.@tcpRequest` (`core.net`),
 > the strict, callback-driven `io.@streamFile` (`core.io`), the raw TCP server layer
 > `net.@tcpServe`/`Connection`/`Server` (`core.net`), the atomic-binding syntax
-> `@name := …`, and the fiber-sharing check over `net.@tcpServe`'s handler. Planned for
+> `@name := …`, the fiber-sharing check over `net.@tcpServe`'s handler, and the signal trap
+> (`!>`, `core.process`). Planned for
 > 1.0: a value-returning network primitive such as `@get`, with which two independent
 > reads finish in max-time, and the multicore (M:N) runtime — a work-stealing scheduler
 > running one worker per CPU as reported to the process, the same under `quilon run` and a
@@ -170,6 +171,11 @@ See [`core.net`'s reference](../corelib/net.md#the-raw-tcp-server-layer) and
 is `net.@tcpServe` with `core.http`'s own connection handler filled in, so an HTTP
 server's connections share the same one-fiber-per-connection behavior. See
 [`core.http`'s reference](../corelib/http.md#the-http-server) and `examples/http_server.qn`.
+
+## Signal trap
+
+`!>` declares the signal trap over [`core.process`](../corelib/process.md)'s `Signal`. See
+[its own page](signals.md) for the syntax, the delivery rules, and a worked example.
 
 ## Where it is headed
 

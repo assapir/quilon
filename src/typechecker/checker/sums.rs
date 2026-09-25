@@ -635,6 +635,12 @@ fn declaration_candidates(program: &Program) -> Vec<NestedDeclaration<'_>> {
                 }
                 other => candidates.extend(nested_declaration_candidates(other)),
             },
+            // A trap arm has no declared parameter list of its own to pin.
+            Item::TrapDeclaration(trap) => {
+                for arm in &trap.arms {
+                    candidates.extend(nested_declaration_candidates(&arm.body));
+                }
+            }
         }
     }
     candidates
@@ -739,6 +745,11 @@ fn index_program_calls(program: &Program) -> HashMap<&str, Vec<&Expression>> {
             Item::TypeDeclaration(declaration) => {
                 for method in declaration.type_definition.methods() {
                     index_expression(&method.body, &mut calls_by_name);
+                }
+            }
+            Item::TrapDeclaration(trap) => {
+                for arm in &trap.arms {
+                    index_expression(&arm.body, &mut calls_by_name);
                 }
             }
         }

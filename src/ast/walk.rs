@@ -122,6 +122,8 @@ pub fn try_for_each_subexpression<'a, B>(
                             try_for_each_subexpression(&method.body, f)?;
                         }
                     }
+                    // A trap is a top-level-only item; never a block statement.
+                    Statement::Item(Item::TrapDeclaration(_)) => {}
                 }
             }
         }

@@ -8,9 +8,30 @@ use super::*;
 impl<'a> Parser<'a> {
     pub(super) fn parse_match(&mut self, expression: Expression) -> Result<Expression, ParseError> {
         let start = expression.span().start;
+        let arms = self.parse_arm_list()?;
+
+        if arms.is_empty() {
+            return Err(ParseError::new(
+                Code::EmptyMatch,
+                self.span(start, start),
+                "a match needs at least one `|` arm",
+            ));
+        }
+
+        let end = arms.last().unwrap().span.end;
+
+        Ok(Expression::Match {
+            expression: Box::new(expression),
+            arms,
+            span: self.span(start, end),
+        })
+    }
+
+    /// A bare `| pattern => body` sequence, shared by `?` and `!>`. Empty when there's no
+    /// leading `|`; the caller decides whether that's an error.
+    pub(super) fn parse_arm_list(&mut self) -> Result<Vec<crate::ast::MatchArm>, ParseError> {
         let mut arms = Vec::new();
 
-        // Parse match arms: | pattern => body
         while self.check(&TokenKind::Pipe) {
             self.advance();
 
@@ -31,21 +52,7 @@ impl<'a> Parser<'a> {
             });
         }
 
-        if arms.is_empty() {
-            return Err(ParseError::new(
-                Code::EmptyMatch,
-                self.span(start, start),
-                "a match needs at least one `|` arm",
-            ));
-        }
-
-        let end = arms.last().unwrap().span.end;
-
-        Ok(Expression::Match {
-            expression: Box::new(expression),
-            arms,
-            span: self.span(start, end),
-        })
+        Ok(arms)
     }
 
     /// Depth-guarded entry point for pattern parsing. A constructor pattern's

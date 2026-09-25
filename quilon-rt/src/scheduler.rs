@@ -126,6 +126,10 @@ struct Scheduler {
     /// fiber may wait on the same address, so this is 1:many — every waiter is
     /// re-readied when the address is woken.
     address_waiters: HashMap<usize, Vec<usize>>,
+    /// Readiness parks excluded from `run`'s own "is anything still going on?" test — the
+    /// trap dispatcher parks here for the process's life, and without this a program that
+    /// declares a trap could never exit on its own once `^` returns.
+    background_tokens: std::collections::HashSet<Token>,
 }
 
 impl Scheduler {
@@ -138,6 +142,7 @@ impl Scheduler {
             readiness_waiters: HashMap::new(),
             readiness_deadlines: Vec::new(),
             address_waiters: HashMap::new(),
+            background_tokens: std::collections::HashSet::new(),
         }
     }
 
@@ -538,6 +543,13 @@ pub(crate) fn wake_address(address: usize) {
     });
 }
 
+/// Parking on `token` alone never keeps `run`'s loop going.
+pub(crate) fn mark_background_readiness(token: Token) {
+    with_scheduler(|scheduler| {
+        scheduler.background_tokens.insert(token);
+    });
+}
+
 /// Allocate a token and register `source` with the active reactor for `interest`.
 pub(crate) fn register_readiness(
     source: &mut impl Source,
@@ -688,7 +700,11 @@ pub fn run<F: FnOnce() + 'static>(main: F) {
                 .map(|(d, _)| *d)
                 .chain(scheduler.readiness_deadlines.iter().map(|(d, _, _)| *d))
                 .min();
-            (next, !scheduler.readiness_waiters.is_empty())
+            let non_background_waiter = scheduler
+                .readiness_waiters
+                .keys()
+                .any(|token| !scheduler.background_tokens.contains(token));
+            (next, non_background_waiter)
         });
         match (next_deadline, readiness_parked) {
             (None, false) => break, // nothing ready, nothing parked => all done
