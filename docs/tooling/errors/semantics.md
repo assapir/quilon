@@ -731,7 +731,7 @@ test.describe("describe", () => <
 
 ### QN354 — signal trap outside the root file
 
-A [signal trap](../../concurrency/README.md#signal-trap) (`!>`) declared in a file other
+A [signal trap](../../concurrency/signals.md) (`!>`) declared in a file other
 than the one that defines `^` — here, an imported module.
 
 ```quilon ignore

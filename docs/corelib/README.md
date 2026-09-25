@@ -19,7 +19,7 @@ signatures, behavior, and a small example per function.
 | [`core.info`](info.md) | `<< core.info` | What a program can ask about itself, each closed set a sum type: `platform()`, `os()`, `pointerWidth()`, `endianness()`, `runMode()`, plus `quilonVersion()`. |
 | [`core.net`](net.md) | `<< core.net` | Networking: the deferred `net.@tcpRequest` raw TCP request exchange the HTTP client sits on. |
 | [`core.http`](http.md) | `<< core.http` | An HTTP client written in Quilon over `core.net`: the `Body` / `Method` types and the `Request` / `Response` records. HTTP only, no TLS. |
-| [`core.process`](process.md) | `<< core.process` | The [signal trap](../concurrency/README.md#signal-trap)'s own vocabulary: the `Sender` record and the `Signal` sum a trap's arms match. |
+| [`core.process`](process.md) | `<< core.process` | The [signal trap](../concurrency/signals.md)'s own vocabulary: the `Sender` record and the `Signal` sum a trap's arms match. |
 
 `Text` and the operators are built-ins and need **no** import. (Behind the scenes the
 composable `Text` methods — `trim`/`contains`/`repeat` — are Quilon themselves,

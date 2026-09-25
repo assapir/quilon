@@ -50,7 +50,7 @@ Quilon's identity, and the rules that guide its design:
 | `? :` | Ternary | `x < 0 ? -x : x` |
 | `@` (name prefix) | A [leaf IO primitive](concurrency/README.md), declared in corelib and reached through its module's binding or, for one declared as a record method, through a value of that record's type | `time.@sleep(1)` · `connection.@read()` |
 | `@name :=` | [Atomic binding](concurrency/README.md#sharing-state-across-fibers) declaration — `@` marks the declaration only; every read and reassignment after it is bare | `@hits := 0` · `hits := hits + 1` |
-| `!>` | [Signal trap](concurrency/README.md#signal-trap) — a top-level item, one per program, its arms matching `process.Signal` | `!> \| Interrupt(s) => handler(s)` |
+| `!>` | [Signal trap](concurrency/signals.md) — a top-level item, one per program, its arms matching `process.Signal` | `!> \| Interrupt(s) => handler(s)` |
 | `~` | Comment (to end of line) | `~ a note` |
 
 There are **no keywords**: `if`/`return` etc. are expressed with symbols, and iteration is
@@ -71,7 +71,7 @@ named `while` are legal. A record field or method may carry a reserved name
 - Expressions: [operators and blocks](expressions/README.md) · [iteration](expressions/iteration.md) · [ranges and spread](expressions/ranges-and-spread.md) · [pattern matching](expressions/pattern-matching.md)
 - Modules: [imports and exports](modules/README.md) · [entry point](modules/entry-point.md)
 - [Corelib](corelib/README.md): the standard library, module by module
-- [Concurrency](concurrency/README.md) · [its runtime](concurrency/runtime.md)
+- [Concurrency](concurrency/README.md) · [its runtime](concurrency/runtime.md) · [signal trap](concurrency/signals.md)
 - [Memory](memory.md)
 - Tooling: [compiling & running](tooling/compiling.md) · [error messages](tooling/errors/README.md) · [language server](tooling/language-server.md)
 - Status: [feature matrix](status/feature-matrix.md) · [known limitations](status/limitations.md) · [compiler architecture](status/architecture.md) · [ABI and calling convention](status/abi.md)

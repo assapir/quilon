@@ -8,7 +8,7 @@ sidebar:
 # `core.process` — Signals
 
 Import with `<< core.process`. See the [corelib index](README.md). This module is the
-[signal trap](../concurrency/README.md#signal-trap)'s own vocabulary: a `Sender` record and
+[signal trap](../concurrency/signals.md)'s own vocabulary: a `Sender` record and
 a `Signal` sum, nothing else.
 
 `Sender`, what the OS reports about a signal's sender:
@@ -33,7 +33,7 @@ a `Signal` sum, nothing else.
 A trap's arms match `Signal` by these bare names — `Interrupt`, `Terminate`, and so on —
 the way `Ok`/`NotOk` resolve for a `Result`; an ordinary match on a `Signal` value takes
 the qualified `process.Interrupt` spelling instead. See the
-[signal trap](../concurrency/README.md#signal-trap) section for the trap itself.
+[signal trap](../concurrency/signals.md) page for the trap itself.
 
 `SIGKILL` and `SIGSTOP` end a process before it can react, so they have no variant. The
 runtime ignores `SIGPIPE`; a write to a closed peer is a `NotOk`. A fault (`SIGSEGV`,
