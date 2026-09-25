@@ -368,7 +368,15 @@ impl TypeChecker {
             if !is_unspecialized_result(&self.resolve_type(annotation)) {
                 continue;
             }
-            let sites = result_parameter_matches(&self.type_table, body, &parameter.name);
+            // Cloned out so the borrow doesn't outlive the mutable call below.
+            let sites: Vec<ResultScrutinee> = self
+                .result_scrutinees
+                .get(body.span())
+                .into_iter()
+                .flatten()
+                .filter(|site| site.parameter_index == index)
+                .cloned()
+                .collect();
             if sites.is_empty() {
                 continue;
             }
@@ -431,7 +439,7 @@ impl TypeChecker {
         name: &str,
         index: usize,
         parameter_name: &str,
-        sites: &[MatchCandidate<'_>],
+        sites: &[ResultScrutinee],
         origin: &CallOrigin,
         calls_by_name: &HashMap<&str, Vec<&Expression>>,
     ) -> Result<(), TypeError> {
@@ -534,7 +542,7 @@ impl TypeChecker {
 /// Whether `ty` is the built-in `Result` exactly as declared — both payload positions
 /// still the raw type variable, meaning no caller or constructor has specialized it yet
 /// (a parameter's bare `:: Result` annotation always resolves to this).
-fn is_unspecialized_result(ty: &Type) -> bool {
+pub(super) fn is_unspecialized_result(ty: &Type) -> bool {
     matches!(ty, Type::Sum { name, variants }
         if name == crate::ast::RESULT_TYPE_NAME
             && variants
@@ -708,237 +716,14 @@ fn nested_declaration_candidates(body: &Expression) -> Vec<NestedDeclaration<'_>
     candidates
 }
 
-/// One name's status, valid only within `scope` (a byte-range, file-qualified region of
-/// source): either an ALIAS of `parameter_name` (`alive: true`) or a local shadow of that
-/// SAME NAME by something unrelated (`alive: false`) — a nested function's own parameter,
-/// a nested declaration's own name, or a genuine rebind (`result := Ok(5)`). Keyed by
-/// NAME (not just span) so two DIFFERENT names that happen to share a byte range never
-/// answer for each other — see [`resolve_alive`].
-struct AliasEntry {
-    name: String,
-    scope: Span,
-    alive: bool,
-}
-
-/// Whether `name` is currently an alias of the original parameter at source location
-/// `at`: among every entry FOR THAT EXACT NAME whose `scope` contains `at`, the
-/// NARROWEST one wins (an inner, more specific scope always shadows an outer one) — and
-/// its `alive` flag is the answer. No entry for the name at that location at all means
-/// "never introduced here", which is not an alias.
-///
-/// This is intentionally ORDER-INDEPENDENT: every entry's `scope` already encodes exactly
-/// where it applies (e.g., a rebind's own scope starts at ITS OWN span, not the whole
-/// enclosing block, so it can never retroactively shadow an earlier read), so resolving
-/// against the complete, unordered set of entries collected over the whole walk gives the
-/// same answer regardless of which order [`result_parameter_matches`] visited them in —
-/// unlike a flat, un-keyed shadow list, which silently answers for ANY name whose site
-/// happens to fall within a shadow's byte range, an unrelated name's shadow can never
-/// answer for a different name here.
-fn resolve_alive(entries: &[AliasEntry], name: &str, at: &Span) -> bool {
-    entries
-        .iter()
-        .filter(|entry| {
-            entry.name == name
-                && entry.scope.file == at.file
-                && entry.scope.start <= at.start
-                && at.end <= entry.scope.end
-        })
-        .min_by_key(|entry| entry.scope.end - entry.scope.start)
-        .is_some_and(|entry| entry.alive)
-}
-
-/// A `?`/`|` match found during the walk, before it's known whether its scrutinee's name
-/// still resolves to `parameter_name` at that point — resolved by [`resolve_alive`] only
-/// once the whole walk (and so every [`AliasEntry`] it could depend on) is complete.
-struct MatchCandidate<'a> {
-    scrutinee_name: String,
-    scrutinee_span: Span,
-    ok_binding: Option<(String, Span, &'a Expression)>,
-    not_ok_binding: Option<(String, Span, &'a Expression)>,
-}
-
-/// Every `?`/`|` match in `body` whose scrutinee is a bare read of `parameter_name`, or a
-/// name that is a DIRECT copy of it (`renamed = result`, chased transitively) — this
-/// pass's evidence that a payload is read as something concrete, with nothing in the
-/// parameter's own declaration able to say what.
-///
-/// This is a PURELY LOCAL walk — nothing here reads a caller, another declaration, or
-/// the type any OTHER expression carries — so unlike a whole-program call scan, nothing
-/// here can mis-attribute a match to the wrong declaration. The one thing it still must
-/// get right within this one body is a LOCAL shadow: a nested function's or lambda's own
-/// same-named parameter, or a local `=`/`:=`/nested-function declaration reusing one of
-/// these names, both make that name refer to a DIFFERENT value from that point on. Each
-/// is recorded as an [`AliasEntry`] scoped to exactly where it applies, keyed by its OWN
-/// name — so a coincidental name collision between two UNRELATED nested declarations
-/// (each with their own local of the same name) can never make one's shadow answer for
-/// the other's, the way a flat, name-blind byte-range list once could. A shadow that
-/// reassigns the name to an ALREADY-CONCRETE `Result` (`result := Ok(aNum)`) type-checks
-/// fine and would otherwise look, by name, identical to a genuine read of the still-generic
-/// parameter — `type_table`, the checker's own first-pass record of each identifier
-/// occurrence's REAL type, disambiguates: a site counts only when its scrutinee's own
-/// recorded type is exactly as unspecialized as the target parameter's.
-fn result_parameter_matches<'a>(
-    type_table: &TypeTable,
-    body: &'a Expression,
-    parameter_name: &str,
-) -> Vec<MatchCandidate<'a>> {
-    use crate::ast::{NOT_OK, OK};
-
-    // The parameter itself is always its own alias, everywhere in its own body.
-    let mut entries = vec![AliasEntry {
-        name: parameter_name.to_string(),
-        scope: body.span().clone(),
-        alive: true,
-    }];
-    let mut candidates: Vec<MatchCandidate<'a>> = Vec::new();
-
-    let _: ControlFlow<()> = try_for_each_subexpression(body, &mut |expression| {
-        match expression {
-            Expression::Match {
-                expression: scrutinee,
-                arms,
-                ..
-            } => {
-                if let Expression::Identifier { name, span } = scrutinee.as_ref() {
-                    let mut candidate = MatchCandidate {
-                        scrutinee_name: name.clone(),
-                        scrutinee_span: span.clone(),
-                        ok_binding: None,
-                        not_ok_binding: None,
-                    };
-                    for arm in arms {
-                        if let Pattern::Constructor {
-                            name: constructor,
-                            arguments,
-                            ..
-                        } = &arm.pattern
-                            && let [
-                                Pattern::Identifier {
-                                    name: binding_name,
-                                    span: binding_span,
-                                },
-                            ] = arguments.as_slice()
-                        {
-                            let binding = (binding_name.clone(), binding_span.clone(), &arm.body);
-                            match constructor.as_str() {
-                                OK => candidate.ok_binding = Some(binding),
-                                NOT_OK => candidate.not_ok_binding = Some(binding),
-                                _ => {}
-                            }
-                        }
-                    }
-                    candidates.push(candidate);
-                }
-            }
-            // An anonymous lambda's own parameter shadows any outer name it reuses, for
-            // its whole span (parameters and body alike).
-            Expression::Lambda {
-                parameters, span, ..
-            } => {
-                for parameter in parameters {
-                    entries.push(AliasEntry {
-                        name: parameter.name.clone(),
-                        scope: span.clone(),
-                        alive: false,
-                    });
-                }
-            }
-            Expression::Block { statements, span } => {
-                for statement in statements {
-                    match statement {
-                        // A nested function's own PARAMETER of this name shadows it for
-                        // that function's whole span (its body, but also the function
-                        // literal itself — nothing outside can reach in either way).
-                        // Pushed unconditionally: a name that was never an alias to begin
-                        // with just gets a harmless tombstone nothing ever resolves as
-                        // alive anyway.
-                        Statement::Item(Item::FunctionDeclaration(nested)) => {
-                            for parameter in &nested.parameters {
-                                entries.push(AliasEntry {
-                                    name: parameter.name.clone(),
-                                    scope: nested.span.clone(),
-                                    alive: false,
-                                });
-                            }
-                            // The declaration's own NAME rebinds it from here onward,
-                            // through the rest of THIS block (statements execute in the
-                            // order written, and nest no further scope of their own).
-                            entries.push(AliasEntry {
-                                name: nested.name.clone(),
-                                scope: Span {
-                                    start: nested.span.start,
-                                    end: span.end,
-                                    file: span.file,
-                                },
-                                alive: false,
-                            });
-                        }
-                        // A locally-declared type's method, same as a nested function's
-                        // own parameter above — each method is checked as its own
-                        // candidate (see `nested_function_candidates`), so a match
-                        // inside one that reuses this name must not also be attributed
-                        // to the enclosing declaration's parameter.
-                        Statement::Item(Item::TypeDeclaration(declaration)) => {
-                            for method in declaration.type_definition.methods() {
-                                for parameter in &method.parameters {
-                                    entries.push(AliasEntry {
-                                        name: parameter.name.clone(),
-                                        scope: method.span.clone(),
-                                        alive: false,
-                                    });
-                                }
-                            }
-                        }
-                        // A bare `newName = anAlias` copy introduces a second name for
-                        // the SAME value, valid from here to the end of THIS block;
-                        // anything else reusing an existing alias's name (`result :=
-                        // Ok(5)`) is a genuine rebind, and shadows it the same way.
-                        // Resolving `name`'s aliveness HERE (rather than deferring it
-                        // too) is safe: entries an earlier sibling statement in this
-                        // same block pushed are already present (this loop runs them in
-                        // written order), and nothing a LATER sibling or a different
-                        // scope could push would ever apply at this exact span anyway.
-                        Statement::Item(Item::VariableDeclaration(local)) => {
-                            let rest_of_block = Span {
-                                start: local.span.start,
-                                end: span.end,
-                                file: span.file,
-                            };
-                            let alive = matches!(
-                                &local.value,
-                                Expression::Identifier { name, .. }
-                                    if resolve_alive(&entries, name, &local.span)
-                            );
-                            entries.push(AliasEntry {
-                                name: local.name.clone(),
-                                scope: rest_of_block,
-                                alive,
-                            });
-                        }
-                        _ => {}
-                    }
-                }
-            }
-            _ => {}
-        }
-        ControlFlow::Continue(())
-    });
-
-    candidates
-        .into_iter()
-        .filter(|candidate| {
-            resolve_alive(
-                &entries,
-                &candidate.scrutinee_name,
-                &candidate.scrutinee_span,
-            )
-        })
-        .filter(|candidate| {
-            type_table
-                .get(&candidate.scrutinee_span)
-                .is_some_and(is_unspecialized_result)
-        })
-        .collect()
+/// One `?`/`|` match on a still-generic `Result` parameter, found by `check_match`.
+/// `parameter_index` is the parameter's own index in its declaration's explicit list.
+#[derive(Clone)]
+pub(super) struct ResultScrutinee {
+    pub(super) parameter_index: usize,
+    pub(super) scrutinee_span: Span,
+    pub(super) ok_binding: Option<(String, Span, Expression)>,
+    pub(super) not_ok_binding: Option<(String, Span, Expression)>,
 }
 
 /// A one-time index over the whole program, shared by every candidate parameter
@@ -1023,9 +808,8 @@ fn unify_result_pin(pinned: &mut Option<Type>, field: &Type, span: &Span) -> Res
 /// [`TypeChecker::pin_one_result_parameter`] needs to know about an unpinned variant:
 /// with no caller ever demonstrating its type, a REAL read has no representation to
 /// materialize, while a bound-but-unread payload (`Ok(x) => 0`, never touching `x`)
-/// needs no type at all — nothing observes it. A purely local scan, like
-/// [`result_parameter_matches`] itself: it reads only `arm_body`, never another
-/// declaration's.
+/// needs no type at all — nothing observes it. A purely local scan: it reads only
+/// `arm_body`, never another declaration's.
 fn is_payload_read(arm_body: &Expression, name: &str) -> bool {
     let mut occurrences: Vec<Span> = Vec::new();
     let mut shadows: Vec<Span> = Vec::new();

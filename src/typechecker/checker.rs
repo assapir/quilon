@@ -30,7 +30,7 @@ mod trap;
 
 use aliasing::{ResultAliasing, ValueAliasing};
 use std::collections::HashMap;
-use sums::result_of;
+use sums::{ResultScrutinee, is_unspecialized_result, result_of};
 
 /// Re-exported so the language server's completion (`src/lsp/analysis.rs`) reads the same
 /// built-in method signatures the checker itself dispatches on — see `calls.rs`.
@@ -579,6 +579,9 @@ pub struct Symbol {
     /// resolves a `:=` to the specific binding it targets — no other pass reasons about
     /// names for this.
     atomic: bool,
+    /// The still-generic `Result` parameter this value is, as (owning body span, index);
+    /// carried through a bare `name = alias` copy, cleared by anything else.
+    result_parameter: Option<(Span, usize)>,
 }
 
 #[derive(Debug, Clone)]
@@ -753,6 +756,9 @@ pub struct TypeChecker {
     // Each overloaded call's argument spans, recorded as `resolve_overload` resolves it
     // to one member.
     overload_call_args: OverloadCallArgs,
+    // `?`/`|` matches on a bare `:: Result` parameter, recorded by `check_match`, keyed
+    // by the owning declaration's body span.
+    result_scrutinees: std::collections::HashMap<Span, Vec<ResultScrutinee>>,
 }
 
 impl Default for TypeChecker {
@@ -788,6 +794,7 @@ impl TypeChecker {
             checking_corelib_declaration: false,
             method_call_args: std::collections::HashMap::new(),
             overload_call_args: std::collections::HashMap::new(),
+            result_scrutinees: std::collections::HashMap::new(),
         };
 
         checker.add_builtins();

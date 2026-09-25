@@ -1041,6 +1041,8 @@ impl TypeChecker {
                 slot,
                 parameter.span.clone(),
             )?;
+            self.env
+                .set_result_parameter(&parameter.name, Some((body.span().clone(), slot)));
         }
         let body_type = self.infer_expression(body);
 

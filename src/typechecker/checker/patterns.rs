@@ -15,6 +15,53 @@ impl TypeChecker {
     ) -> Result<Type, TypeError> {
         let expression_type = self.infer_expression(expression)?;
 
+        // Recorded here, where the environment has already resolved shadowing and aliases.
+        if let Expression::Identifier {
+            name,
+            span: scrutinee_span,
+        } = expression
+            && is_unspecialized_result(&expression_type)
+            && let Some((declaration_body, parameter_index)) = self
+                .env
+                .lookup(name)
+                .and_then(|symbol| symbol.result_parameter.clone())
+        {
+            use crate::ast::{NOT_OK, OK};
+
+            let mut ok_binding = None;
+            let mut not_ok_binding = None;
+            for arm in arms {
+                if let Pattern::Constructor {
+                    name: constructor,
+                    arguments,
+                    ..
+                } = &arm.pattern
+                    && let [
+                        Pattern::Identifier {
+                            name: binding_name,
+                            span: binding_span,
+                        },
+                    ] = arguments.as_slice()
+                {
+                    let binding = (binding_name.clone(), binding_span.clone(), arm.body.clone());
+                    match constructor.as_str() {
+                        OK => ok_binding = Some(binding),
+                        NOT_OK => not_ok_binding = Some(binding),
+                        _ => {}
+                    }
+                }
+            }
+            self.result_scrutinees
+                .entry(declaration_body)
+                .or_default()
+                .push(ResultScrutinee {
+                    parameter_index,
+                    scrutinee_span: scrutinee_span.clone(),
+                    ok_binding,
+                    not_ok_binding,
+                });
+        }
+
         // The parser rejects an armless match, but the checker is a library entry point and
         // an AST can be built by hand — so answer with the diagnostic rather than falling
         // through to a match that yields nothing.

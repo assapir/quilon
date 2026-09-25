@@ -487,6 +487,12 @@ impl TypeChecker {
                     slot + 1,
                     parameter.span.clone(),
                 )?;
+                // `slot` (not the receiver-offset argument slot above) is this parameter's
+                // own index among the method's explicit ones.
+                self.env.set_result_parameter(
+                    &parameter.name,
+                    Some((method.body.span().clone(), slot)),
+                );
             }
 
             // Type-check the body, then resolve the method's result type: the annotation
@@ -892,6 +898,16 @@ impl TypeChecker {
 
         let bound_value_is_callable = matches!(final_type, Type::Function { .. });
 
+        // A bare `name = alias`/`name := alias` copy carries the alias forward; anything
+        // else (a fresh value, a shadow) clears it.
+        let result_parameter_alias = match &declaration.value {
+            Expression::Identifier { name, .. } => self
+                .env
+                .lookup(name)
+                .and_then(|symbol| symbol.result_parameter.clone()),
+            _ => None,
+        };
+
         if declaration.mutable {
             // `:=` — reassign if the name is already bound, otherwise a new mutable binding.
             if let Some(existing_type) = self.env.get_type(&declaration.name) {
@@ -935,6 +951,9 @@ impl TypeChecker {
                 declaration.span.clone(),
             )?;
         }
+        // Every path above just (re)bound `declaration.name`, so this always lands on it.
+        self.env
+            .set_result_parameter(&declaration.name, result_parameter_alias);
 
         // A binding whose value is itself callable (a closure) carries what CALLING it
         // later returns, classified from the bound expression the same way a named
@@ -1157,6 +1176,10 @@ impl TypeChecker {
                 slot,
                 parameter.span.clone(),
             )?;
+            self.env.set_result_parameter(
+                &parameter.name,
+                Some((declaration.body.span().clone(), slot)),
+            );
         }
 
         // The same contextual-typing helper a call argument uses (`infer_argument`) infers
@@ -1349,6 +1372,8 @@ impl TypeChecker {
                 slot,
                 parameter.span.clone(),
             )?;
+            self.env
+                .set_result_parameter(&parameter.name, Some((body.span().clone(), slot)));
         }
         // A FUNCTION-typed `-> Type` annotation types a lambda body contextually, the
         // same way a named function's return annotation does (see
