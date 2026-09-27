@@ -19,13 +19,13 @@
 //! Design C removes that gap by never touching `GC_set_stackbottom` for a fiber at all:
 //!
 //! 1. **Every fiber's stack is a permanent GC root for its whole lifetime.**
-//!    [`register`] calls `GC_add_roots` when a fiber's stack is allocated; [`unregister`]
+//!    `register` calls `GC_add_roots` when a fiber's stack is allocated; `unregister`
 //!    calls `GC_remove_roots` right before it is freed. Once added, a fiber's stack is
 //!    scanned on every collection unconditionally — running, parked, or (harmlessly) not
 //!    yet ever resumed — the same as any other static root Boehm already knows about
 //!    (`.data`/`.bss`, or a JIT'd program's globals via `crate::mem::__gc_add_root`).
 //!    There is no more per-fiber "is it the one running" state to track at all.
-//! 2. **The native thread is declared blocked while a fiber runs.** [`do_blocking`] wraps
+//! 2. **The native thread is declared blocked while a fiber runs.** `do_blocking` wraps
 //!    the scheduler's `coroutine.resume()` call in `GC_do_blocking`: Boehm records this
 //!    thread's stack pointer at the point of that call and scans only up to there,
 //!    treating everything deeper (the whole span the fiber actually runs in, including
@@ -34,7 +34,7 @@
 //!    thread's. There is no instant where the wrong thing is scanned: the fiber's stack
 //!    is always covered by (1); the native thread's own stack is scanned up to exactly
 //!    where it stopped touching anything GC-relevant, for the whole time it is blocked.
-//! 3. **A blocked thread must not touch the GC heap without saying so.** [`with_gc_active`]
+//! 3. **A blocked thread must not touch the GC heap without saying so.** `with_gc_active`
 //!    wraps `alloc_via` (`crate::mem`'s sole `GC_malloc`/`GC_malloc_atomic` call site) in
 //!    `GC_call_with_gc_active`, which temporarily re-activates normal scanning for the
 //!    call — covering the allocating function's own frame precisely, rather than relying
