@@ -8,6 +8,7 @@
 //! so both live in this internal tier. This tier is where the future fiber scheduler and
 //! reactor will also live.
 
+use crate::gc::with_gc_active;
 use crate::io::write_to_fd;
 use crate::process::__exit;
 use crate::report::{QnSite, RUNTIME_EXIT_CODE, codes, fail_at};
@@ -207,8 +208,12 @@ fn alloc_via(size: i64, gc_malloc: unsafe extern "C" fn(usize) -> *mut c_void) -
         alloc_fail(&format!("invalid allocation: {size} bytes"));
     }
     let n = if size == 0 { 1 } else { size as usize };
-    // SAFETY: `gc_malloc` is one of the collector's allocation entry points; `n` is positive.
-    let block = unsafe { gc_malloc(n) };
+    // The collector may be scanning this thread's own stack only up to wherever a
+    // `crate::gc::do_blocking` region (a running fiber) began — `with_gc_active` covers
+    // this call's own frame regardless, and is a cheap no-op when there is no such region
+    // to begin with (native code, or a `crate::blocking` pool thread). SAFETY: `gc_malloc`
+    // is one of the collector's allocation entry points; `n` is positive.
+    let block = with_gc_active(|| unsafe { gc_malloc(n) });
     if block.is_null() {
         out_of_memory(n);
     }

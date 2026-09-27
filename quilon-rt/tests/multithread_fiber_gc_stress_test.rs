@@ -228,3 +228,41 @@ fn four_threads_survive_ten_minutes_of_sustained_collections() {
 fn four_threads_survive_thirty_minutes_of_sustained_collections() {
     run_stress(4, 200, Duration::from_secs(30 * 60));
 }
+
+/// Single-threaded microbenchmark: what design C's per-switch `gc::do_blocking` costs
+/// relative to `main`'s scheme, isolated from every other change — one fiber, one thread,
+/// no collector contention. Not an assertion: run manually (three times, by hand, on each
+/// side) and compare the printed medians; see the PR body for the numbers this produced.
+#[test]
+#[ignore = "microbenchmark; compare against the same test built on main, see the PR body"]
+fn microbench_100k_fiber_switches() {
+    let _gc_thread = quilon_rt::register_thread();
+    let start = std::time::Instant::now();
+    run(|| {
+        spawn(|| {
+            for _ in 0..100_000 {
+                sleep(Duration::from_nanos(0));
+            }
+        });
+    });
+    eprintln!("100k fiber switches: {:?}", start.elapsed());
+}
+
+/// Single-threaded microbenchmark: what design C's per-allocation `gc::with_gc_active`
+/// costs relative to `main`'s bare `GC_malloc`/`GC_malloc_atomic` call, isolated the same
+/// way as [`microbench_100k_fiber_switches`]. Not an assertion; see its own doc.
+#[test]
+#[ignore = "microbenchmark; compare against the same test built on main, see the PR body"]
+fn microbench_1m_small_allocations() {
+    let _gc_thread = quilon_rt::register_thread();
+    let start = std::time::Instant::now();
+    run(|| {
+        spawn(|| {
+            for _ in 0..1_000_000 {
+                let p = quilon_rt::__alloc(32);
+                std::hint::black_box(p);
+            }
+        });
+    });
+    eprintln!("1M small allocations: {:?}", start.elapsed());
+}
