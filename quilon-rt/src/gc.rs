@@ -32,14 +32,14 @@
 //! Two changes make (a) and (b) hold even when several OS threads each drive their own
 //! scheduler concurrently, fibers pinned to whichever thread spawned them:
 //!
-//! **Switch ordering.** [`enter_fiber`]/[`leave_fiber`] run from the FIBER's own code
+//! **Switch ordering.** `enter_fiber`/`leave_fiber` run from the FIBER's own code
 //! (`crate::scheduler::new_fiber`'s entry, and `suspend_on` around every park), not from
 //! the resumer's side wrapping an opaque `coroutine.resume()` call — the resumer cannot
 //! observe "has the jump landed yet", only the fiber's own code, running after the jump,
-//! can. [`enter_fiber`] then points the automatic scan at this fiber's stack
+//! can. `enter_fiber` then points the automatic scan at this fiber's stack
 //! (`GC_set_stackbottom`) BEFORE excluding it from the parked-fiber scan, so the fiber is
 //! never covered by neither: while stackbottom is being updated, ranges-scan still covers
-//! it; once ranges-scan drops it, stackbottom already does. [`leave_fiber`] runs the two
+//! it; once ranges-scan drops it, stackbottom already does. `leave_fiber` runs the two
 //! steps in the mirrored order — re-included in the parked scan before stackbottom is
 //! handed back to the outer context — for the same reason, called as the last fiber-side
 //! act before suspending (or returning). The remaining instant — the raw stack-pointer
@@ -62,9 +62,9 @@
 //! root instead, the way `crate::mem::PinnedPointer` already does for other roots).
 //!
 //! **Per-thread scan state.** What was one global `Mutex<GcState>` is now one immutable
-//! [`ThreadState`] snapshot per thread, held behind a plain [`AtomicPtr`] in a fixed-size
-//! [`REGISTRY`] slot the owning thread alone ever swaps (`publish`, below) — one pointer
-//! write per state change, no lock. [`push_fiber_roots`] (Boehm's world-stopped callback,
+//! `ThreadState` snapshot per thread, held behind a plain `AtomicPtr` in a fixed-size
+//! `REGISTRY` slot the owning thread alone ever swaps (`publish`, below) — one pointer
+//! write per state change, no lock. `push_fiber_roots` (Boehm's world-stopped callback,
 //! running on whichever thread is driving a collection) walks every registered slot
 //! without ever taking a lock a thread it just stopped could be holding: the collector's
 //! stop-the-world guarantees every OTHER registered thread is frozen for the whole call,
