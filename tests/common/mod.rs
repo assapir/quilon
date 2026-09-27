@@ -26,6 +26,7 @@ use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, mpsc};
 use std::time::Duration;
+use tempfile::{NamedTempFile, TempDir};
 
 /// The `file:line:column:` position line a report prints for `path` — with the path
 /// elided exactly as the report elides it.
@@ -133,17 +134,19 @@ pub fn assert_parse_error(src: &str) {
 }
 
 /// Compile and run `src` as a SUBPROCESS (`quilon run`), returning `(exit code, stderr)`
-/// and the path it was written to.
+/// and the path it was written to, alongside the [`TempDir`] that path lives in — kept
+/// bound for as long as a caller that reruns or rewrites alongside that path needs it to
+/// exist; a caller with no further use for it can bind it to `_` and it drops right away.
 ///
 /// A program that fails loudly calls `__exit`, which would terminate the test runner if it
 /// ran in-process — so any test asserting on a failure's output has to spawn. `tag` names
 /// the file, which matters because the location the program reports IS that path.
-pub fn run_program(tag: &str, src: &str) -> (i32, String, std::path::PathBuf) {
-    let run = run_program_named(
+pub fn run_program(tag: &str, src: &str) -> (i32, String, std::path::PathBuf, TempDir) {
+    let (run, dir) = run_program_named(
         &format!("{tag}{}", quilon::source_extension::EXTENSION),
         src,
     );
-    (run.code, run.stderr, run.path)
+    (run.code, run.stderr, run.path, dir)
 }
 
 /// What a spawned program did.
@@ -158,13 +161,18 @@ pub struct Run {
 /// Like [`run_program`], but the caller names the file (extension included) and gets the
 /// program's stdout as well. Writing `src` under a chosen name is what lets a test say
 /// something about the name itself — that a deprecated extension still runs, say.
-pub fn run_program_named(file_name: &str, src: &str) -> Run {
-    let seq = SUBPROCESS_SEQ.fetch_add(1, Ordering::Relaxed);
-    let dir = std::env::temp_dir().join(format!("quilon_run_{}_{seq}", std::process::id()));
-    std::fs::create_dir_all(&dir).expect("create temp dir");
-    let file = dir.join(file_name);
+///
+/// Returns the [`TempDir`] the file was written into alongside the [`Run`]: the directory
+/// removes itself on drop, so a caller that needs the file to keep existing (writing a
+/// second file next to it, running it again) must keep the `TempDir` bound, not just `_`.
+pub fn run_program_named(file_name: &str, src: &str) -> (Run, TempDir) {
+    let dir = tempfile::Builder::new()
+        .prefix("quilon_run_")
+        .tempdir()
+        .expect("create temp dir");
+    let file = dir.path().join(file_name);
     std::fs::write(&file, src).expect("write temp program");
-    run_file(&file)
+    (run_file(&file), dir)
 }
 
 /// `quilon run` an existing file, capturing what it produced.
@@ -204,17 +212,19 @@ pub fn build_and_run_native_with_stderr(tag: &str, src: &str) -> (i32, String, S
 }
 
 /// The shared build-then-run tail of [`build_and_run_native`] and
-/// [`build_and_run_native_with_stderr`].
+/// [`build_and_run_native_with_stderr`]. The built binary is waited on before this returns,
+/// so the staging `TempDir` only needs to outlive this function's body.
 fn build_and_run_native_output(tag: &str, src: &str) -> std::process::Output {
     let quilon = std::path::PathBuf::from(env!("CARGO_BIN_EXE_quilon"));
     ensure_runtime_lib(quilon.parent().expect("the compiler's directory"));
 
-    let seq = SUBPROCESS_SEQ.fetch_add(1, Ordering::Relaxed);
-    let dir = std::env::temp_dir().join(format!("quilon_build_{}_{seq}", std::process::id()));
-    std::fs::create_dir_all(&dir).expect("create temp dir");
-    let file = dir.join(format!("{tag}.qn"));
+    let dir = tempfile::Builder::new()
+        .prefix("quilon_build_")
+        .tempdir()
+        .expect("create temp dir");
+    let file = dir.path().join(format!("{tag}.qn"));
     std::fs::write(&file, src).expect("write temp program");
-    let binary = dir.join(tag);
+    let binary = dir.path().join(tag);
 
     let build = Command::new(&quilon)
         .arg("build")
@@ -234,24 +244,17 @@ fn build_and_run_native_output(tag: &str, src: &str) -> std::process::Output {
         .expect("run the built executable")
 }
 
-/// Serializes nothing — it only keeps concurrently-running tests from colliding on a
-/// temp-directory name (a single test binary runs its own tests in parallel).
-static SUBPROCESS_SEQ: AtomicU64 = AtomicU64::new(0);
-
-/// Write `source` to a unique temp `.qn` file (named from `tag`, the pid, and a timestamp)
-/// and return its path.
-pub fn temp_ql(tag: &str, source: &str) -> std::path::PathBuf {
-    let mut path = std::env::temp_dir();
-    path.push(format!(
-        "quilon_{tag}_{}_{}.qn",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
-    std::fs::write(&path, source).expect("write temp .qn");
-    path
+/// Write `source` to a unique temp `.qn` file (named from `tag`) and return the
+/// [`NamedTempFile`] owning it — it removes the file on drop, so a caller must keep it
+/// bound for as long as it needs the path (`.path()`) to resolve.
+pub fn temp_ql(tag: &str, source: &str) -> NamedTempFile {
+    let file = tempfile::Builder::new()
+        .prefix(&format!("quilon_{tag}_"))
+        .suffix(".qn")
+        .tempfile()
+        .expect("create temp .qn file");
+    std::fs::write(file.path(), source).expect("write temp .qn");
+    file
 }
 
 /// Run `command`, feeding `input` to its stdin, and return `(exit code, captured stdout)`.

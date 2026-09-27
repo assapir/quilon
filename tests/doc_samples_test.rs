@@ -113,9 +113,7 @@ fn wrapped(body: &str) -> String {
 fn check_source(dir: &Path, n: usize, source: &str) -> Result<(), String> {
     let path = dir.join(format!("doc_sample_{n}.qn"));
     std::fs::write(&path, source).expect("write temp sample");
-    let result = front_end(&path).map(|_| ()).map_err(|e| e.to_string());
-    let _ = std::fs::remove_file(&path);
-    result
+    front_end(&path).map(|_| ()).map_err(|e| e.to_string())
 }
 
 #[test]
@@ -124,8 +122,10 @@ fn every_doc_sample_compiles() {
     md_files(&docs_dir(), &mut files);
     assert!(!files.is_empty(), "no markdown found under docs/");
 
-    let tmp = std::env::temp_dir().join(format!("quilon_doc_samples_{}", std::process::id()));
-    std::fs::create_dir_all(&tmp).expect("create temp dir");
+    let tmp = tempfile::Builder::new()
+        .prefix("quilon_doc_samples_")
+        .tempdir()
+        .expect("create temp dir");
 
     let mut total = 0;
     let mut failures = Vec::new();
@@ -138,16 +138,15 @@ fn every_doc_sample_compiles() {
                 continue;
             }
             total += 1;
-            if check_source(&tmp, total, &fence.body).is_ok() {
+            if check_source(tmp.path(), total, &fence.body).is_ok() {
                 continue;
             }
             // Not a standalone program — a fragment may still check wrapped.
-            if let Err(e) = check_source(&tmp, total, &wrapped(fence.body.as_str())) {
+            if let Err(e) = check_source(tmp.path(), total, &wrapped(fence.body.as_str())) {
                 failures.push(format!("{}:{}\n{e}", rel.display(), fence.line));
             }
         }
     }
-    let _ = std::fs::remove_dir_all(&tmp);
 
     assert!(
         total > 0,

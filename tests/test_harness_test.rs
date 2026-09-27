@@ -113,11 +113,12 @@ const ERASED_BLOCK_MARKER: &str = "ERASED-TEST-BLOCK-RAN";
 /// ABSENCE under `quilon test` is what proves that `^` is not the test run's entry point.
 const PROGRAM_MARKER: &str = "PROGRAM-RAN-WITHOUT-ITS-TEST-BLOCKS";
 
-/// Where a test's `.qn` files go, unique per process so parallel runs never collide.
-fn work_dir(tag: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("quilon_harness_{}_{tag}", std::process::id()));
-    std::fs::create_dir_all(&dir).expect("create the work directory");
-    dir
+/// Where a test's `.qn` files go — a fresh [`tempfile::TempDir`], removed on drop.
+fn work_dir(tag: &str) -> tempfile::TempDir {
+    tempfile::Builder::new()
+        .prefix(&format!("quilon_harness_{tag}_"))
+        .tempdir()
+        .expect("create the work directory")
 }
 
 fn write(dir: &Path, name: &str, source: &str) -> PathBuf {
@@ -263,7 +264,7 @@ fn a_build_of_a_file_with_tests_omits_the_test_code() {
     // a pass that reads that as a mention of the harness's top-level `it` keeps the whole
     // harness alive. A fixture with no methods never asks the question.
     let source = write(
-        &dir,
+        dir.path(),
         "mixed.qn",
         concat!(
             "<< core.test\n",
@@ -294,7 +295,6 @@ fn a_build_of_a_file_with_tests_omits_the_test_code() {
         "the program's code must be emitted:\n{ir}"
     );
     assert_no_harness_emitted(&ir, "a release build");
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// The whole point, in three assertions: `out` is a run of a program whose file also holds test
@@ -321,7 +321,7 @@ fn assert_ran_without_its_tests(what: &str, out: &Output) {
 #[test]
 fn a_file_that_is_only_tests_is_silently_ignored() {
     let dir = work_dir("only");
-    let source = write(&dir, "suite.qn", PASSING_SUITE);
+    let source = write(dir.path(), "suite.qn", PASSING_SUITE);
 
     for command in ["build", "compile", "run"] {
         let out = quilon(&[command, source.to_str().unwrap()]);
@@ -342,7 +342,6 @@ fn a_file_that_is_only_tests_is_silently_ignored() {
         !source.with_extension("ll").exists(),
         "nothing should have been emitted for a tests-only file"
     );
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 // ── Tree shaking: an import the erased blocks were the only user of ──────────────────────
@@ -366,7 +365,7 @@ const TESTS_BESIDE_CODE_SUITE: &str = concat!(
 #[test]
 fn an_import_only_the_blocks_used_reaches_no_build() {
     let dir = work_dir("shaken");
-    let source = write(&dir, "suite.qn", TESTS_BESIDE_CODE_SUITE);
+    let source = write(dir.path(), "suite.qn", TESTS_BESIDE_CODE_SUITE);
 
     let tested = quilon(&["test", source.to_str().unwrap()]);
     assert_eq!(
@@ -391,7 +390,6 @@ fn an_import_only_the_blocks_used_reaches_no_build() {
     assert_eq!(compile.code, 0, "compiling failed:\n{}", compile.stderr);
     let ir = std::fs::read_to_string(source.with_extension("ll")).expect("read the emitted IR");
     assert_no_harness_emitted(&ir, "a build whose blocks were erased");
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// The same file, counted rather than named. Naming the harness from ORDINARY code is the
@@ -401,14 +399,14 @@ fn an_import_only_the_blocks_used_reaches_no_build() {
 fn the_shaken_build_emits_only_the_programs_own_functions() {
     let dir = work_dir("shaken_count");
 
-    let erased = write(&dir, "erased.qn", TESTS_BESIDE_CODE_SUITE);
+    let erased = write(dir.path(), "erased.qn", TESTS_BESIDE_CODE_SUITE);
     let compile = quilon(&["compile", erased.to_str().unwrap()]);
     assert_eq!(compile.code, 0, "compiling failed:\n{}", compile.stderr);
     let erased_ir = std::fs::read_to_string(erased.with_extension("ll")).expect("the erased IR");
     let shaken = defined_functions(&erased_ir);
 
     let referenced = write(
-        &dir,
+        dir.path(),
         "referenced.qn",
         concat!(
             "<< core.test\n",
@@ -454,7 +452,6 @@ fn the_shaken_build_emits_only_the_programs_own_functions() {
             "`{own}` is the program's own and must survive:\n{shaken:#?}"
         );
     }
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// The names `core.test` no longer exports, asserted where a user meets them: a program that
@@ -468,7 +465,7 @@ fn the_shaken_build_emits_only_the_programs_own_functions() {
 fn an_importer_may_define_what_the_harness_no_longer_exports() {
     let dir = work_dir("shrunk_surface");
     let source = write(
-        &dir,
+        dir.path(),
         "own_names.qn",
         concat!(
             "<< core.io\n",
@@ -500,7 +497,6 @@ fn an_importer_may_define_what_the_harness_no_longer_exports() {
         "the program's own definitions did not run:\n{}",
         out.stdout
     );
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// The names `<< core.http` puts in a program, pinned EXACTLY. Every one — the `@`
@@ -719,7 +715,7 @@ fn core_process_signal_variants_are_declared_in_the_order_trap_signals_assumes()
 fn quilon_test_ignores_the_entry_point_beside_the_blocks_it_runs() {
     let dir = work_dir("beside_test");
     let source = write(
-        &dir,
+        dir.path(),
         "program.qn",
         &format!(
             r#"
@@ -756,13 +752,12 @@ test.describe("helper", () => <
         "`quilon test` called the file's own `^`:\n{}",
         out.stdout
     );
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
 fn a_passing_suite_exits_zero_and_reports_every_case() {
     let dir = work_dir("pass");
-    let source = write(&dir, "suite.qn", PASSING_SUITE);
+    let source = write(dir.path(), "suite.qn", PASSING_SUITE);
     let out = quilon(&["test", source.to_str().unwrap()]);
 
     assert_eq!(
@@ -782,13 +777,12 @@ fn a_passing_suite_exits_zero_and_reports_every_case() {
         "unexpected summary:\n{}",
         out.stdout
     );
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
 fn a_failing_case_exits_non_zero_and_the_run_carries_on() {
     let dir = work_dir("fail");
-    let source = write(&dir, "suite.qn", FAILING_SUITE);
+    let source = write(dir.path(), "suite.qn", FAILING_SUITE);
     let out = quilon(&["test", source.to_str().unwrap()]);
 
     assert_ne!(out.code, 0, "a failing suite must exit non-zero");
@@ -825,7 +819,6 @@ fn a_failing_case_exits_non_zero_and_the_run_carries_on() {
         "the failure must carry the coded message and an underline:\n{}",
         out.stderr
     );
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// The isolation mechanism: the first failing `expect` in a case skips what is LEFT of that
@@ -835,7 +828,7 @@ fn a_failing_case_exits_non_zero_and_the_run_carries_on() {
 fn a_failed_expect_skips_the_rest_of_its_case() {
     let dir = work_dir("skip");
     let source = write(
-        &dir,
+        dir.path(),
         "suite.qn",
         concat!(
             "<< core.test\n",
@@ -867,7 +860,6 @@ fn a_failed_expect_skips_the_rest_of_its_case() {
         "the next case must be unaffected:\n{}",
         out.stdout
     );
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// The first failing `expect` in a case ends the case itself, not just the assertions after
@@ -876,7 +868,7 @@ fn a_failed_expect_skips_the_rest_of_its_case() {
 #[test]
 fn a_failed_expect_ends_the_case_not_just_its_own_assertions() {
     let dir = work_dir("ends_case");
-    let source = write(&dir, "suite.qn", CASE_ENDING_SUITE);
+    let source = write(dir.path(), "suite.qn", CASE_ENDING_SUITE);
     let out = quilon(&["test", source.to_str().unwrap()]);
 
     assert_ne!(out.code, 0, "a suite with failing cases must exit non-zero");
@@ -907,7 +899,6 @@ fn a_failed_expect_ends_the_case_not_just_its_own_assertions() {
         "unexpected summary:\n{}",
         out.stdout
     );
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// A case that parks on `@sleep` before its failing `expect` still ends there, and the park
@@ -916,7 +907,7 @@ fn a_failed_expect_ends_the_case_not_just_its_own_assertions() {
 #[test]
 fn a_case_ending_after_a_sleep_still_lets_the_next_case_run() {
     let dir = work_dir("ends_case_after_sleep");
-    let source = write(&dir, "suite.qn", SLEEP_THEN_FAILING_CASE_SUITE);
+    let source = write(dir.path(), "suite.qn", SLEEP_THEN_FAILING_CASE_SUITE);
     let out = quilon(&["test", source.to_str().unwrap()]);
 
     assert_ne!(
@@ -935,7 +926,6 @@ fn a_case_ending_after_a_sleep_still_lets_the_next_case_run() {
         "unexpected summary:\n{}",
         out.stdout
     );
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// A `describe` body that recurses deeply AFTER a case has run and returned. `test.it`
@@ -958,7 +948,7 @@ test.describe("overflow after a case", () => <
 #[test]
 fn a_describe_body_overflowing_after_its_case_reports_qn507() {
     let dir = work_dir("overflow_after_case");
-    let source = write(&dir, "suite.qn", OVERFLOW_AFTER_A_CASE_SUITE);
+    let source = write(dir.path(), "suite.qn", OVERFLOW_AFTER_A_CASE_SUITE);
     let out = quilon(&["test", source.to_str().unwrap()]);
 
     assert_ne!(out.code, 0, "a stack overflow must exit non-zero");
@@ -973,7 +963,6 @@ fn a_describe_body_overflowing_after_its_case_reports_qn507() {
         out.stdout,
         out.stderr
     );
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// `expect(() => …, aborts())` inside a case: the trapped abort passes the case, the run's
@@ -983,7 +972,7 @@ fn a_describe_body_overflowing_after_its_case_reports_qn507() {
 fn expect_aborts_passes_and_withholds_the_trapped_report() {
     let dir = work_dir("expect_aborts");
     let source = write(
-        &dir,
+        dir.path(),
         "suite.qn",
         concat!(
             "<< core.test\n",
@@ -1011,7 +1000,6 @@ fn expect_aborts_passes_and_withholds_the_trapped_report() {
         "the trapped abort's report must stay withheld:\n{}",
         out.stderr
     );
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// `expect` records with the run, which only a `describe` block opens — so outside one it
@@ -1021,7 +1009,7 @@ fn expect_aborts_passes_and_withholds_the_trapped_report() {
 fn expect_outside_a_describe_block_is_a_compile_error() {
     let dir = work_dir("expect_outside");
     let source = write(
-        &dir,
+        dir.path(),
         "program.qn",
         "^ = () -> $ => <\n  expect(1, equals(1))\n>\n",
     );
@@ -1038,7 +1026,6 @@ fn expect_outside_a_describe_block_is_a_compile_error() {
             out.stderr
         );
     }
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// An `expect` in a `describe` body but OUTSIDE any `it` has no case to mark: `it` is what
@@ -1049,7 +1036,7 @@ fn expect_outside_a_describe_block_is_a_compile_error() {
 fn expect_outside_an_it_case_is_a_compile_error() {
     let dir = work_dir("expect_no_case");
     let source = write(
-        &dir,
+        dir.path(),
         "suite.qn",
         concat!(
             "<< core.test\n",
@@ -1070,7 +1057,6 @@ fn expect_outside_an_it_case_is_a_compile_error() {
         "the diagnostic must name the case:\n{}",
         out.stderr
     );
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 // ── The JSON reporter, and `--only` ─────────────────────────────────────────────────────
@@ -1103,7 +1089,7 @@ fn event_paths(events: &[serde_json::Value]) -> Vec<(&str, &str)> {
 #[test]
 fn the_json_reporter_emits_one_event_per_line_for_a_nested_suite() {
     let dir = work_dir("json_pass");
-    let source = write(&dir, "suite.qn", PASSING_SUITE);
+    let source = write(dir.path(), "suite.qn", PASSING_SUITE);
     let out = quilon(&["test", source.to_str().unwrap(), "--reporter", "json"]);
     assert_eq!(out.code, 0, "a passing suite exits 0:\n{}", out.stderr);
 
@@ -1132,13 +1118,12 @@ fn the_json_reporter_emits_one_event_per_line_for_a_nested_suite() {
     }
     assert_eq!(events[7]["passed"], 4);
     assert_eq!(events[7]["failed"], 0);
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
 fn the_json_reporter_carries_a_failing_cases_message_file_and_line() {
     let dir = work_dir("json_fail");
-    let source = write(&dir, "suite.qn", FAILING_SUITE);
+    let source = write(dir.path(), "suite.qn", FAILING_SUITE);
     let out = quilon(&["test", source.to_str().unwrap(), "--reporter", "json"]);
     assert_ne!(out.code, 0, "a failing suite exits non-zero");
 
@@ -1161,13 +1146,12 @@ fn the_json_reporter_carries_a_failing_cases_message_file_and_line() {
         "the frame is missing from stderr:\n{}",
         out.stderr
     );
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
 fn only_runs_the_one_case_it_names_and_opens_nothing_else() {
     let dir = work_dir("only_case");
-    let source = write(&dir, "suite.qn", PASSING_SUITE);
+    let source = write(dir.path(), "suite.qn", PASSING_SUITE);
     let out = quilon(&[
         "test",
         source.to_str().unwrap(),
@@ -1188,13 +1172,12 @@ fn only_runs_the_one_case_it_names_and_opens_nothing_else() {
         ]
     );
     assert_eq!(events[2]["passed"], 1);
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
 fn only_with_a_suite_path_runs_every_case_under_it() {
     let dir = work_dir("only_suite");
-    let source = write(&dir, "suite.qn", PASSING_SUITE);
+    let source = write(dir.path(), "suite.qn", PASSING_SUITE);
     let out = quilon(&[
         "test",
         source.to_str().unwrap(),
@@ -1217,13 +1200,12 @@ fn only_with_a_suite_path_runs_every_case_under_it() {
             ("summary", ""),
         ]
     );
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
 fn only_repeats_to_select_several_paths() {
     let dir = work_dir("only_many");
-    let source = write(&dir, "suite.qn", PASSING_SUITE);
+    let source = write(dir.path(), "suite.qn", PASSING_SUITE);
     let out = quilon(&[
         "test",
         source.to_str().unwrap(),
@@ -1246,13 +1228,12 @@ fn only_repeats_to_select_several_paths() {
         "unexpected summary:\n{}",
         out.stdout
     );
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
 fn only_with_a_path_the_suite_does_not_have_is_an_error_listing_its_paths() {
     let dir = work_dir("only_unknown");
-    let source = write(&dir, "suite.qn", PASSING_SUITE);
+    let source = write(dir.path(), "suite.qn", PASSING_SUITE);
     let out = quilon(&[
         "test",
         source.to_str().unwrap(),
@@ -1289,7 +1270,6 @@ fn only_with_a_path_the_suite_does_not_have_is_an_error_listing_its_paths() {
         "nothing ran:\n{}",
         out.stdout
     );
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 // ── The run's state, as named functions ─────────────────────────────────────────────────
@@ -1301,7 +1281,7 @@ fn only_with_a_path_the_suite_does_not_have_is_an_error_listing_its_paths() {
 fn the_run_state_is_readable_through_named_functions() {
     let dir = work_dir("state");
     let source = write(
-        &dir,
+        dir.path(),
         "suite.qn",
         concat!(
             "<< core.io\n",
@@ -1330,7 +1310,6 @@ fn the_run_state_is_readable_through_named_functions() {
         "unexpected summary:\n{}",
         out.stdout
     );
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// The exported surface of `core.test`, asserted on the corelib itself: what a suite and the
@@ -1380,7 +1359,7 @@ fn the_corelib_exports_only_what_the_harness_needs() {
 fn an_assert_in_a_case_is_still_fatal() {
     let dir = work_dir("fatal");
     let source = write(
-        &dir,
+        dir.path(),
         "suite.qn",
         concat!(
             "<< core.test\n",
@@ -1398,18 +1377,17 @@ fn an_assert_in_a_case_is_still_fatal() {
         "a fatal assert must end the run where it failed:\n{}",
         out.stdout
     );
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
 fn a_directory_runs_every_suite_it_holds() {
     let dir = work_dir("dir");
-    write(&dir, "green.qn", PASSING_SUITE);
-    write(&dir, "red.qn", FAILING_SUITE);
+    write(dir.path(), "green.qn", PASSING_SUITE);
+    write(dir.path(), "red.qn", FAILING_SUITE);
     // A program AND a suite: discovery goes by the blocks, so an `^` beside them is no reason
     // to pass the file over — this is the shape the CI step relies on finding.
     write(
-        &dir,
+        dir.path(),
         "mixed.qn",
         concat!(
             "<< core.test\n",
@@ -1418,9 +1396,9 @@ fn a_directory_runs_every_suite_it_holds() {
         ),
     );
     // Not a suite: a program with no test blocks is passed over, not run.
-    write(&dir, "program.qn", "^ = () -> Num => < 7 >\n");
+    write(dir.path(), "program.qn", "^ = () -> Num => < 7 >\n");
 
-    let out = quilon(&["test", dir.to_str().unwrap()]);
+    let out = quilon(&["test", dir.path().to_str().unwrap()]);
     assert_ne!(out.code, 0, "one suite failed, so the run failed");
     assert!(
         out.stdout.contains("green.qn")
@@ -1457,34 +1435,31 @@ fn a_directory_runs_every_suite_it_holds() {
             out.stderr
         );
     }
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
 fn a_path_with_no_suites_succeeds_and_says_so() {
     let dir = work_dir("empty");
-    write(&dir, "program.qn", "^ = () -> Num => < 0 >\n");
-    let out = quilon(&["test", dir.to_str().unwrap()]);
+    write(dir.path(), "program.qn", "^ = () -> Num => < 0 >\n");
+    let out = quilon(&["test", dir.path().to_str().unwrap()]);
     assert_eq!(out.code, 0, "nothing failed, so nothing is wrong");
     assert!(
         out.stdout.contains("no tests found"),
         "unexpected output:\n{}",
         out.stdout
     );
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
 fn a_suite_that_does_not_compile_fails_the_run() {
     let dir = work_dir("broken");
     let source = write(
-        &dir,
+        dir.path(),
         "suite.qn",
         "<< core.test\ndescribe(\"g\", () => expect(1, equals(\"one\")))\n",
     );
     let out = quilon(&["test", source.to_str().unwrap()]);
     assert_ne!(out.code, 0, "a suite that fails to type-check must fail");
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// A suite that imports no harness at all is told so at its own `test.describe` — rather
@@ -1493,7 +1468,7 @@ fn a_suite_that_does_not_compile_fails_the_run() {
 #[test]
 fn a_suite_without_a_harness_is_reported_at_its_own_describe() {
     let dir = work_dir("noimport");
-    let source = write(&dir, "suite.qn", "\ntest.describe(\"g\", () => 0)\n");
+    let source = write(dir.path(), "suite.qn", "\ntest.describe(\"g\", () => 0)\n");
     let out = quilon(&["test", source.to_str().unwrap()]);
     assert_ne!(out.code, 0);
     assert!(
@@ -1506,7 +1481,6 @@ fn a_suite_without_a_harness_is_reported_at_its_own_describe() {
         "the diagnostic must name the import that fixes it:\n{}",
         out.stderr
     );
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// A mistyped path in a CI invocation must not report success.
@@ -1528,17 +1502,16 @@ fn a_path_that_does_not_exist_fails_the_run() {
 fn a_suite_that_does_not_parse_fails_the_run() {
     let dir = work_dir("unparseable");
     write(
-        &dir,
+        dir.path(),
         "suite.qn",
         "<< core.test\ndescribe(\"g\", () => <<<\n",
     );
-    let out = quilon(&["test", dir.to_str().unwrap()]);
+    let out = quilon(&["test", dir.path().to_str().unwrap()]);
     assert_ne!(
         out.code, 0,
         "an unparseable suite must fail, not vanish:\n{}\n{}",
         out.stdout, out.stderr
     );
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// The other shape tests come in: a module — `>>` exports, whatever fixtures its cases need,
@@ -1548,7 +1521,7 @@ fn a_suite_that_does_not_parse_fails_the_run() {
 fn a_module_with_exports_and_tests_but_no_entry_point_is_not_a_program() {
     let dir = work_dir("helpers");
     let source = write(
-        &dir,
+        dir.path(),
         "suite.qn",
         concat!(
             "<< core.test\n",
@@ -1578,7 +1551,6 @@ fn a_module_with_exports_and_tests_but_no_entry_point_is_not_a_program() {
         "the same file must run as a suite:\n{}\n{}",
         test.stdout, test.stderr
     );
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// The shipped example is the documented demonstration of the framework, so it is a gate.
@@ -1718,9 +1690,8 @@ fn the_shipped_example_builds_without_the_tests_beside_its_entry_point() {
     match available_linker() {
         Some(linker) => {
             let dir = work_dir("shipped");
-            let native = build_and_execute(&source, &dir, linker);
+            let native = build_and_execute(&source, dir.path(), linker);
             assert_ran_without_its_tests("the built example", &native);
-            let _ = std::fs::remove_dir_all(&dir);
         }
         None => eprintln!("skipping the native half: need a linker (`clang` or `gcc`) on PATH"),
     }
@@ -1797,8 +1768,8 @@ fn build_binary(dir: &Path, source: &Path, name: &str, extra: &[&str]) -> Option
 #[test]
 fn binary_builds_an_executable_that_passes_a_passing_suite() {
     let dir = work_dir("binary_pass");
-    let source = write(&dir, "suite.qn", PASSING_SUITE);
-    match build_binary(&dir, &source, "suite_binary", &[]) {
+    let source = write(dir.path(), "suite.qn", PASSING_SUITE);
+    match build_binary(dir.path(), &source, "suite_binary", &[]) {
         Some(binary) => {
             let run = execute(&binary);
             assert_eq!(
@@ -1814,14 +1785,13 @@ fn binary_builds_an_executable_that_passes_a_passing_suite() {
         }
         None => eprintln!("skipping the native half: need `clang` on PATH"),
     }
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
 fn binary_of_a_failing_suite_exits_non_zero() {
     let dir = work_dir("binary_fail");
-    let source = write(&dir, "suite.qn", FAILING_SUITE);
-    match build_binary(&dir, &source, "suite_binary", &[]) {
+    let source = write(dir.path(), "suite.qn", FAILING_SUITE);
+    match build_binary(dir.path(), &source, "suite_binary", &[]) {
         Some(binary) => {
             let run = execute(&binary);
             assert_ne!(run.code, 0, "a failing suite's binary must exit non-zero");
@@ -1833,7 +1803,6 @@ fn binary_of_a_failing_suite_exits_non_zero() {
         }
         None => eprintln!("skipping the native half: need `clang` on PATH"),
     }
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// The case-ending mechanism has to work the same way through a native build as it does
@@ -1841,8 +1810,8 @@ fn binary_of_a_failing_suite_exits_non_zero() {
 #[test]
 fn binary_of_a_failing_case_does_not_run_what_comes_after_it_failed() {
     let dir = work_dir("binary_ends_case");
-    let source = write(&dir, "suite.qn", CASE_ENDING_SUITE);
-    match build_binary(&dir, &source, "suite_binary", &[]) {
+    let source = write(dir.path(), "suite.qn", CASE_ENDING_SUITE);
+    match build_binary(dir.path(), &source, "suite_binary", &[]) {
         Some(binary) => {
             let run = execute(&binary);
             assert_ne!(run.code, 0, "a suite with failing cases must exit non-zero");
@@ -1866,7 +1835,6 @@ fn binary_of_a_failing_case_does_not_run_what_comes_after_it_failed() {
         }
         None => eprintln!("skipping the native half: need `clang` on PATH"),
     }
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// A case that parks on `@sleep` before its failing `expect` has to end there through a
@@ -1874,8 +1842,8 @@ fn binary_of_a_failing_case_does_not_run_what_comes_after_it_failed() {
 #[test]
 fn binary_of_a_case_ending_after_a_sleep_still_lets_the_next_case_run() {
     let dir = work_dir("binary_ends_case_after_sleep");
-    let source = write(&dir, "suite.qn", SLEEP_THEN_FAILING_CASE_SUITE);
-    match build_binary(&dir, &source, "suite_binary", &[]) {
+    let source = write(dir.path(), "suite.qn", SLEEP_THEN_FAILING_CASE_SUITE);
+    match build_binary(dir.path(), &source, "suite_binary", &[]) {
         Some(binary) => {
             let run = execute(&binary);
             assert_ne!(
@@ -1897,7 +1865,6 @@ fn binary_of_a_case_ending_after_a_sleep_still_lets_the_next_case_run() {
         }
         None => eprintln!("skipping the native half: need `clang` on PATH"),
     }
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// `--only`, given at the build, is baked into the binary: running it plain reproduces the
@@ -1906,8 +1873,13 @@ fn binary_of_a_case_ending_after_a_sleep_still_lets_the_next_case_run() {
 #[test]
 fn binary_honours_only_and_runs_nothing_else() {
     let dir = work_dir("binary_only");
-    let source = write(&dir, "suite.qn", PASSING_SUITE);
-    match build_binary(&dir, &source, "suite_binary", &["--only", "numbers/orders"]) {
+    let source = write(dir.path(), "suite.qn", PASSING_SUITE);
+    match build_binary(
+        dir.path(),
+        &source,
+        "suite_binary",
+        &["--only", "numbers/orders"],
+    ) {
         Some(binary) => {
             let run = execute(&binary);
             assert_eq!(
@@ -1930,18 +1902,17 @@ fn binary_honours_only_and_runs_nothing_else() {
         }
         None => eprintln!("skipping the native half: need `clang` on PATH"),
     }
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
 fn binary_with_an_unknown_only_path_fails_the_build_listing_the_suites_paths() {
     let dir = work_dir("binary_only_unknown");
-    let source = write(&dir, "suite.qn", PASSING_SUITE);
+    let source = write(dir.path(), "suite.qn", PASSING_SUITE);
     let out = quilon(&[
         "test",
         source.to_str().unwrap(),
         "--binary",
-        dir.join("unused").to_str().unwrap(),
+        dir.path().join("unused").to_str().unwrap(),
         "--only",
         "numbers/divides",
     ]);
@@ -1952,40 +1923,41 @@ fn binary_with_an_unknown_only_path_fails_the_build_listing_the_suites_paths() {
         out.stderr
     );
     assert!(
-        !dir.join("unused").exists(),
+        !dir.path().join("unused").exists(),
         "nothing should have been built"
     );
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
 fn binary_targeting_a_directory_is_a_diagnostic_error() {
     let dir = work_dir("binary_dir");
-    write(&dir, "suite.qn", PASSING_SUITE);
+    write(dir.path(), "suite.qn", PASSING_SUITE);
     let out = quilon(&[
         "test",
-        dir.to_str().unwrap(),
+        dir.path().to_str().unwrap(),
         "--binary",
-        dir.join("out").to_str().unwrap(),
+        dir.path().join("out").to_str().unwrap(),
     ]);
     assert_ne!(out.code, 0, "`--binary` on a directory must fail");
     assert!(
-        out.stderr.contains("--binary") && out.stderr.contains(&dir.display().to_string()),
+        out.stderr.contains("--binary") && out.stderr.contains(&dir.path().display().to_string()),
         "the diagnostic must name the flag and the directory given:\n{}",
         out.stderr
     );
-    assert!(!dir.join("out").exists(), "nothing should have been built");
-    let _ = std::fs::remove_dir_all(&dir);
+    assert!(
+        !dir.path().join("out").exists(),
+        "nothing should have been built"
+    );
 }
 
 /// The default path is `.`, a directory — the same diagnostic as naming one explicitly.
 #[test]
 fn binary_with_the_default_path_is_the_same_diagnostic_error() {
     let dir = work_dir("binary_default_path");
-    write(&dir, "suite.qn", PASSING_SUITE);
+    write(dir.path(), "suite.qn", PASSING_SUITE);
     let out = Command::new(env!("CARGO_BIN_EXE_quilon"))
-        .args(["test", "--binary", dir.join("out").to_str().unwrap()])
-        .current_dir(&dir)
+        .args(["test", "--binary", dir.path().join("out").to_str().unwrap()])
+        .current_dir(dir.path())
         .output()
         .expect("spawn quilon test");
     assert_ne!(
@@ -1993,6 +1965,8 @@ fn binary_with_the_default_path_is_the_same_diagnostic_error() {
         0,
         "`--binary` with the default `.` path must fail"
     );
-    assert!(!dir.join("out").exists(), "nothing should have been built");
-    let _ = std::fs::remove_dir_all(&dir);
+    assert!(
+        !dir.path().join("out").exists(),
+        "nothing should have been built"
+    );
 }

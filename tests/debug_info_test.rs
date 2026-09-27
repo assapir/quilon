@@ -42,9 +42,11 @@ fn debug_codegen_verifies_module_for_a_deferral_program() {
   0
 >
 ";
-    let dir = std::env::temp_dir().join(format!("quilon_dbgdefer_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).expect("create temp dir");
-    let ql = dir.join("defer.qn");
+    let dir = tempfile::Builder::new()
+        .prefix("quilon_dbgdefer_")
+        .tempdir()
+        .expect("create temp dir");
+    let ql = dir.path().join("defer.qn");
     std::fs::write(&ql, src).expect("write temp source");
 
     let checked = front_end(&ql).unwrap_or_else(|e| panic!("front end failed: {e}"));
@@ -60,8 +62,6 @@ fn debug_codegen_verifies_module_for_a_deferral_program() {
     generator
         .generate(&checked.program)
         .unwrap_or_else(|e| panic!("debug codegen of a deferral program failed to verify: {e}"));
-
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// A capture-free nested function ending in a `?` match, followed by one that DOES capture
@@ -82,9 +82,11 @@ outer = (name :: Text) -> Num => <
 
 ^ = () -> Num => < outer(\"x\") >
 ";
-    let dir = std::env::temp_dir().join(format!("quilon_dbgnested_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).expect("create temp dir");
-    let ql = dir.join("nested.qn");
+    let dir = tempfile::Builder::new()
+        .prefix("quilon_dbgnested_")
+        .tempdir()
+        .expect("create temp dir");
+    let ql = dir.path().join("nested.qn");
     std::fs::write(&ql, src).expect("write temp source");
 
     let checked = front_end(&ql).unwrap_or_else(|e| panic!("front end failed: {e}"));
@@ -100,8 +102,6 @@ outer = (name :: Text) -> Num => <
     generator.generate(&checked.program).unwrap_or_else(|e| {
         panic!("debug codegen of sibling nested functions failed to verify: {e}")
     });
-
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// A function VALUE — a closure passed as an argument — has no precise DWARF type, so it is
@@ -143,11 +143,13 @@ fn debug_build_emits_dwarf_line_info_for_the_ql_source() {
     // A single-file program (no imports) so every emitted function maps to THIS file.
     // `factorial` is on line 2; the entry point `^` is on line 3.
     let src = "\nfactorial = (n :: Num) -> Num => < n <= 1 ? 1 : n * factorial(n - 1) >\n^ = () -> Num => < factorial(5) >\n";
-    let dir = std::env::temp_dir().join(format!("quilon_dbg_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).expect("create temp dir");
-    let ql = dir.join("prog.qn");
+    let dir = tempfile::Builder::new()
+        .prefix("quilon_dbg_")
+        .tempdir()
+        .expect("create temp dir");
+    let ql = dir.path().join("prog.qn");
     std::fs::write(&ql, src).expect("write temp source");
-    let bin = dir.join("prog");
+    let bin = dir.path().join("prog");
 
     let build = Command::new(quilon)
         .args(["build", ql.to_str().unwrap()])
@@ -202,8 +204,6 @@ fn debug_build_emits_dwarf_line_info_for_the_ql_source() {
         info_out.contains("\"factorial\""),
         "expected a `factorial` subprogram in the DWARF info"
     );
-
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// A non-ASCII, right-to-left function name reaches DWARF as-is: `DW_AT_name` carries raw
@@ -224,11 +224,13 @@ fn debug_build_keeps_a_non_ascii_function_name_in_dwarf() {
     ensure_runtime_lib(Path::new(quilon).parent().expect("binary has a parent dir"));
 
     let src = "ףסא = (n :: Num) -> Num => < n * 2 >\n^ = () -> Num => < ףסא(21) >\n";
-    let dir = std::env::temp_dir().join(format!("quilon_dbg_non_ascii_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).expect("create temp dir");
-    let ql = dir.join("prog.qn");
+    let dir = tempfile::Builder::new()
+        .prefix("quilon_dbg_non_ascii_")
+        .tempdir()
+        .expect("create temp dir");
+    let ql = dir.path().join("prog.qn");
     std::fs::write(&ql, src).expect("write temp source");
-    let bin = dir.join("prog");
+    let bin = dir.path().join("prog");
 
     let build = Command::new(quilon)
         .args(["build", ql.to_str().unwrap()])
@@ -268,8 +270,6 @@ fn debug_build_keeps_a_non_ascii_function_name_in_dwarf() {
         info_out.contains(&format!("\"{escaped}\"")),
         "expected a `ףסא` subprogram (dumped as `{escaped}`) in the DWARF info"
     );
-
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// The own attributes of every `DW_TAG_subprogram` in `dump`, as `(name, decl_file,
@@ -416,11 +416,13 @@ describe = (p :: Point) -> Num => <
 
 ^ = () -> Num => < describe(Point { x = 4, y = 5 }) >
 ";
-    let dir = std::env::temp_dir().join(format!("quilon_dbgvars_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).expect("create temp dir");
-    let ql = dir.join("vars.qn");
+    let dir = tempfile::Builder::new()
+        .prefix("quilon_dbgvars_")
+        .tempdir()
+        .expect("create temp dir");
+    let ql = dir.path().join("vars.qn");
     std::fs::write(&ql, src).expect("write temp source");
-    let bin = dir.join("vars");
+    let bin = dir.path().join("vars");
 
     let build = Command::new(quilon)
         .args(["build", ql.to_str().unwrap()])
@@ -521,8 +523,6 @@ describe = (p :: Point) -> Num => <
         out.contains("DW_AT_name\t(\"flags\")"),
         "expected `TextStorage` to carry a `flags` member"
     );
-
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
@@ -552,11 +552,13 @@ Color = Red / Green / Blue
     | NotOk(e) => 0
 >
 ";
-    let dir = std::env::temp_dir().join(format!("quilon_dbgsum_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).expect("create temp dir");
-    let ql = dir.join("sum.qn");
+    let dir = tempfile::Builder::new()
+        .prefix("quilon_dbgsum_")
+        .tempdir()
+        .expect("create temp dir");
+    let ql = dir.path().join("sum.qn");
     std::fs::write(&ql, src).expect("write temp source");
-    let bin = dir.join("sum");
+    let bin = dir.path().join("sum");
 
     let build = Command::new(quilon)
         .args(["build", ql.to_str().unwrap()])
@@ -628,8 +630,6 @@ Color = Red / Green / Blue
         result.contains("DW_AT_data_member_location\t(0x08)"),
         "Result's payload slot must sit at byte offset 8, got:\n{result}"
     );
-
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// A sum whose variants disagree on a payload position's type (`Mixed = A(Num) / B(Text)`)
@@ -659,11 +659,13 @@ Mixed = A(Num) / B(Text)
     | B(t) => t.length
 >
 ";
-    let dir = std::env::temp_dir().join(format!("quilon_dbgunion_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).expect("create temp dir");
-    let ql = dir.join("mixed.qn");
+    let dir = tempfile::Builder::new()
+        .prefix("quilon_dbgunion_")
+        .tempdir()
+        .expect("create temp dir");
+    let ql = dir.path().join("mixed.qn");
     std::fs::write(&ql, src).expect("write temp source");
-    let bin = dir.join("mixed");
+    let bin = dir.path().join("mixed");
 
     let build = Command::new(quilon)
         .args(["build", ql.to_str().unwrap()])
@@ -716,8 +718,6 @@ Mixed = A(Num) / B(Text)
         mixed.contains("DW_AT_name\t(\"tag\")"),
         "expected Mixed's tagged-struct to carry a `tag` member, got:\n{mixed}"
     );
-
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// The symbols a binary DEFINES, as `nm` reports them (mirrors `intrinsic_link_test.rs`'s
@@ -788,11 +788,13 @@ Color = Red / Green / Blue
   0
 >
 ";
-    let dir = std::env::temp_dir().join(format!("quilon_dbgthunks_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).expect("create temp dir");
-    let ql = dir.join("thunks.qn");
+    let dir = tempfile::Builder::new()
+        .prefix("quilon_dbgthunks_")
+        .tempdir()
+        .expect("create temp dir");
+    let ql = dir.path().join("thunks.qn");
     std::fs::write(&ql, src).expect("write temp source");
-    let bin = dir.join("thunks");
+    let bin = dir.path().join("thunks");
 
     let build = Command::new(quilon)
         .args(["build", ql.to_str().unwrap()])
@@ -836,8 +838,6 @@ Color = Red / Green / Blue
             "a bare scalar should get no render thunk at all, but found `{symbol}`"
         );
     }
-
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// A Map/Set value carries a NAMED DWARF type (`Map[Text, Num]`/`Set[Num]`) rather than an
@@ -865,11 +865,13 @@ fn debug_build_names_map_and_set_dwarf_types() {
   0
 >
 ";
-    let dir = std::env::temp_dir().join(format!("quilon_dbgmapset_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).expect("create temp dir");
-    let ql = dir.join("mapset.qn");
+    let dir = tempfile::Builder::new()
+        .prefix("quilon_dbgmapset_")
+        .tempdir()
+        .expect("create temp dir");
+    let ql = dir.path().join("mapset.qn");
     std::fs::write(&ql, src).expect("write temp source");
-    let bin = dir.join("mapset");
+    let bin = dir.path().join("mapset");
 
     let build = Command::new(quilon)
         .args(["build", ql.to_str().unwrap()])
@@ -915,8 +917,6 @@ fn debug_build_names_map_and_set_dwarf_types() {
         out.contains("DW_AT_name\t(\"Set[Num]\")"),
         "expected a named `Set[Num]` DWARF type, got:\n{out}"
     );
-
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// An array/Map whose element is a user RECORD or SUM type gets the SAME readable DWARF
@@ -957,11 +957,13 @@ Color = Red / Green / Blue
   0
 >
 ";
-    let dir = std::env::temp_dir().join(format!("quilon_dbgnamedarr_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).expect("create temp dir");
-    let ql = dir.join("namedarr.qn");
+    let dir = tempfile::Builder::new()
+        .prefix("quilon_dbgnamedarr_")
+        .tempdir()
+        .expect("create temp dir");
+    let ql = dir.path().join("namedarr.qn");
     std::fs::write(&ql, src).expect("write temp source");
-    let bin = dir.join("namedarr");
+    let bin = dir.path().join("namedarr");
 
     let build = Command::new(quilon)
         .args(["build", ql.to_str().unwrap()])
@@ -1011,8 +1013,6 @@ Color = Red / Green / Blue
             "expected the render thunk `{symbol}` in the binary's defined symbols"
         );
     }
-
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
@@ -1030,11 +1030,13 @@ fn non_debug_build_has_no_ql_debug_info() {
     ensure_runtime_lib(Path::new(quilon).parent().expect("binary has a parent dir"));
 
     let src = "^ = () -> Num => < 7 >\n";
-    let dir = std::env::temp_dir().join(format!("quilon_nodbg_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).expect("create temp dir");
-    let ql = dir.join("plain.qn");
+    let dir = tempfile::Builder::new()
+        .prefix("quilon_nodbg_")
+        .tempdir()
+        .expect("create temp dir");
+    let ql = dir.path().join("plain.qn");
     std::fs::write(&ql, src).expect("write temp source");
-    let bin = dir.join("plain");
+    let bin = dir.path().join("plain");
 
     let build = Command::new(quilon)
         .args(["build", ql.to_str().unwrap()])
@@ -1060,8 +1062,6 @@ fn non_debug_build_has_no_ql_debug_info() {
         !info_out.contains("plain.qn"),
         "a non-debug build must not carry `.qn` debug info, got:\n{info_out}"
     );
-
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// The entry frame reads as `^`, a real corelib function is steppable, and an `@`-primitive
@@ -1100,11 +1100,13 @@ fn debug_build_names_entry_and_steps_into_corelib_over_primitives() {
   cli.hasFlag([\"-v\"], \"-v\") ? 1 : 0
 >
 ";
-    let dir = std::env::temp_dir().join(format!("quilon_dbgentry_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).expect("create temp dir");
-    let ql = dir.join("entry.qn");
+    let dir = tempfile::Builder::new()
+        .prefix("quilon_dbgentry_")
+        .tempdir()
+        .expect("create temp dir");
+    let ql = dir.path().join("entry.qn");
     std::fs::write(&ql, src).expect("write temp source");
-    let bin = dir.join("entry");
+    let bin = dir.path().join("entry");
 
     let build = Command::new(quilon)
         .args(["build", ql.to_str().unwrap()])
@@ -1162,8 +1164,6 @@ fn debug_build_names_entry_and_steps_into_corelib_over_primitives() {
         !out.contains("time.qn"),
         "core.time's `@`-primitive/inert exports must leak no `.qn` debug entry, got:\n{out}"
     );
-
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// A `<< "path.qn"` user-file import is attributed to that file's real on-disk path, so a
@@ -1184,20 +1184,23 @@ fn debug_build_attributes_user_file_import_to_its_real_path() {
     }
     ensure_runtime_lib(Path::new(quilon).parent().expect("binary has a parent dir"));
 
-    let dir = std::env::temp_dir().join(format!("quilon_dbgimport_{}", std::process::id()));
-    std::fs::create_dir_all(dir.join("lib")).expect("create temp lib dir");
+    let dir = tempfile::Builder::new()
+        .prefix("quilon_dbgimport_")
+        .tempdir()
+        .expect("create temp dir");
+    std::fs::create_dir_all(dir.path().join("lib")).expect("create temp lib dir");
     std::fs::write(
-        dir.join("lib/util.qn"),
+        dir.path().join("lib/util.qn"),
         ">> triple = (n :: Num) -> Num => < n * 3 >\n",
     )
     .expect("write imported module");
-    let ql = dir.join("main.qn");
+    let ql = dir.path().join("main.qn");
     std::fs::write(
         &ql,
         "<< \"lib/util.qn\"\n\n^ = () -> Num => < util.triple(4) >\n",
     )
     .expect("write root source");
-    let bin = dir.join("main");
+    let bin = dir.path().join("main");
 
     let build = Command::new(quilon)
         .args(["build", ql.to_str().unwrap()])
@@ -1230,8 +1233,6 @@ fn debug_build_attributes_user_file_import_to_its_real_path() {
         "the imported function must be attributed to its real path, got {:?}",
         triple.1
     );
-
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// A relative source path must still be recorded absolutely. A debugger resolves a
@@ -1305,11 +1306,13 @@ fn debug_build_declares_a_match_payload_binding() {
   label.size
 >
 ";
-    let dir = std::env::temp_dir().join(format!("quilon_dbgpayload_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).expect("create temp dir");
-    let ql = dir.join("payload.qn");
+    let dir = tempfile::Builder::new()
+        .prefix("quilon_dbgpayload_")
+        .tempdir()
+        .expect("create temp dir");
+    let ql = dir.path().join("payload.qn");
     std::fs::write(&ql, src).expect("write temp source");
-    let bin = dir.join("payload");
+    let bin = dir.path().join("payload");
 
     let build = Command::new(quilon)
         .args(["build", ql.to_str().unwrap()])
@@ -1347,8 +1350,6 @@ fn debug_build_declares_a_match_payload_binding() {
         page_line, 4,
         "`page` should be attributed to its own arm's source line"
     );
-
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// Two sequential `::` bindings in the same block. Before the fix, `=`/`:=` locals all shared
@@ -1379,11 +1380,13 @@ User = { name :: Text, age :: Num }
   p.size
 >
 ";
-    let dir = std::env::temp_dir().join(format!("quilon_dbgnest_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).expect("create temp dir");
-    let ql = dir.join("nest.qn");
+    let dir = tempfile::Builder::new()
+        .prefix("quilon_dbgnest_")
+        .tempdir()
+        .expect("create temp dir");
+    let ql = dir.path().join("nest.qn");
     std::fs::write(&ql, src).expect("write temp source");
-    let bin = dir.join("nest");
+    let bin = dir.path().join("nest");
 
     let build = Command::new(quilon)
         .args(["build", ql.to_str().unwrap()])
@@ -1417,8 +1420,6 @@ User = { name :: Text, age :: Num }
         "`p`'s lexical block (0x{p_scope:x}) should start strictly after `u`'s (0x{u_scope:x}), \
          so a debugger paused before `p`'s binding does not list it yet, got:\n{out}"
     );
-
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// A binding as the LAST statement of a block has no further codegen of its own to carry its
@@ -1453,11 +1454,13 @@ f = (n :: Num) -> $ => <
   7
 >
 ";
-    let dir = std::env::temp_dir().join(format!("quilon_dbgtrailing_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).expect("create temp dir");
-    let ql = dir.join("trailing.qn");
+    let dir = tempfile::Builder::new()
+        .prefix("quilon_dbgtrailing_")
+        .tempdir()
+        .expect("create temp dir");
+    let ql = dir.path().join("trailing.qn");
     std::fs::write(&ql, src).expect("write temp source");
-    let bin = dir.join("trailing");
+    let bin = dir.path().join("trailing");
 
     let build = Command::new(quilon)
         .args(["build", ql.to_str().unwrap()])
@@ -1497,6 +1500,4 @@ f = (n :: Num) -> $ => <
         "`last`'s lexical block (0x{last_scope:x}) should start strictly after `doubled`'s \
          (0x{doubled_scope:x}), got:\n{out}"
     );
-
-    let _ = std::fs::remove_dir_all(&dir);
 }

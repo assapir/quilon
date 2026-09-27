@@ -15,7 +15,7 @@ use quilon::diagnostic::codes::{self, ALL, Code};
 use quilon::driver;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::atomic::{AtomicU64, Ordering};
+use tempfile::TempDir;
 
 /// Codes verified directly against the file system rather than a source fence: their
 /// reference section shows the CLI command that hits them, not `.qn` source (the failure is
@@ -145,17 +145,12 @@ fn example_for(code: Code) -> Option<Example> {
     Some(Example { source, siblings })
 }
 
-static SEQ: AtomicU64 = AtomicU64::new(0);
-
 /// A fresh temp directory named after `tag`, for one example's sibling files.
-fn temp_dir_for(tag: &str) -> PathBuf {
-    let seq = SEQ.fetch_add(1, Ordering::Relaxed);
-    let dir = std::env::temp_dir().join(format!(
-        "quilon_errors_ref_{}_{tag}_{seq}",
-        std::process::id()
-    ));
-    std::fs::create_dir_all(&dir).expect("create temp dir");
-    dir
+fn temp_dir_for(tag: &str) -> TempDir {
+    tempfile::Builder::new()
+        .prefix(&format!("quilon_errors_ref_{tag}_"))
+        .tempdir()
+        .expect("create temp dir")
 }
 
 fn write_siblings(dir: &Path, siblings: &[(String, String)]) {
@@ -215,9 +210,8 @@ fn every_front_end_example_raises_its_own_code() {
             panic!("{code}: its reference section has no `quilon`/`quilon ignore` example")
         });
         let dir = temp_dir_for(&code.to_string());
-        write_siblings(&dir, &example.siblings);
-        let got = front_end_code(&dir, &example.source);
-        let _ = std::fs::remove_dir_all(&dir);
+        write_siblings(dir.path(), &example.siblings);
+        let got = front_end_code(dir.path(), &example.source);
 
         if got != Some(code) {
             failures.push(format!(
@@ -241,13 +235,14 @@ fn every_front_end_example_raises_its_own_code() {
 }
 
 /// Write `source` to a temp `.qn` file of its own (not shared — a runtime failure's process
-/// may abort loudly, and a build's output binary needs a stable path beside it) and return
-/// its path.
-fn write_program(tag: &str, source: &str) -> PathBuf {
+/// may abort loudly, and a build's output binary needs a stable path beside it), returning
+/// the path alongside the owning [`TempDir`] — kept bound for as long as the caller needs
+/// the file (and any sibling it builds, such as QN401's output binary) to exist.
+fn write_program(tag: &str, source: &str) -> (TempDir, PathBuf) {
     let dir = temp_dir_for(tag);
-    let path = dir.join("program.qn");
+    let path = dir.path().join("program.qn");
     std::fs::write(&path, source).expect("write temp program");
-    path
+    (dir, path)
 }
 
 fn quilon_run(program: &Path, stdin: Stdio) -> (i32, String) {
@@ -281,7 +276,7 @@ fn runtime_examples_raise_their_own_code() {
     ] {
         let example = example_for(code)
             .unwrap_or_else(|| panic!("{code}: its reference section has no example"));
-        let program = write_program(&code.to_string(), &example.source);
+        let (_dir, program) = write_program(&code.to_string(), &example.source);
         let (exit, stderr) = quilon_run(&program, Stdio::null());
         assert_ne!(exit, 0, "{code}: the example must fail, got: {stderr}");
         assert!(
@@ -299,7 +294,7 @@ fn runtime_examples_raise_their_own_code() {
 fn qn504_allocation_failed_example_raises_its_own_code() {
     let example =
         example_for(Code::AllocationFailed).expect("QN504's reference section has an example");
-    let program = write_program("QN504", &example.source);
+    let (_dir, program) = write_program("QN504", &example.source);
     let (exit, stderr) = quilon_run(&program, Stdio::null());
     assert_ne!(exit, 0, "QN504's example must fail, got: {stderr}");
     assert!(
@@ -316,12 +311,13 @@ fn qn504_allocation_failed_example_raises_its_own_code() {
 /// reaches `@readStdin` is written here instead.
 #[test]
 fn qn505_read_failed_example_raises_its_own_code() {
-    let program = write_program(
+    let (_dir, program) = write_program(
         "QN505",
         "<< core.io\n^ = () -> Num => <\n  io.print(io.@readStdin())\n  0\n>\n",
     );
     let stdin_dir = temp_dir_for("QN505_stdin");
-    let directory_as_stdin = std::fs::File::open(&stdin_dir).expect("open a directory for reading");
+    let directory_as_stdin =
+        std::fs::File::open(stdin_dir.path()).expect("open a directory for reading");
     let (_exit, stderr) = quilon_run(&program, Stdio::from(directory_as_stdin));
     assert!(
         stderr.contains(&format!("error[{}]", Code::ReadFailed)),
@@ -334,7 +330,7 @@ fn qn505_read_failed_example_raises_its_own_code() {
 /// cannot exist.
 #[test]
 fn qn401_native_build_failure_raises_its_own_code() {
-    let program = write_program("QN401", "^ = () -> Num => < 0 >\n");
+    let (_dir, program) = write_program("QN401", "^ = () -> Num => < 0 >\n");
     let out = program.with_file_name("program_out");
     let output = Command::new(env!("CARGO_BIN_EXE_quilon"))
         .args(["build", program.to_str().unwrap(), "--linker"])
@@ -361,7 +357,7 @@ fn qn401_native_build_failure_raises_its_own_code() {
 fn qn101_nesting_too_deep_example_raises_its_own_code() {
     let n = 200;
     let source = format!("^ = () -> Num => < {}1{} >\n", "(".repeat(n), ")".repeat(n));
-    let program = write_program("QN101", &source);
+    let (_dir, program) = write_program("QN101", &source);
     let output = Command::new(env!("CARGO_BIN_EXE_quilon"))
         .args(["check", program.to_str().unwrap()])
         .output()
@@ -386,7 +382,7 @@ fn qn101_nesting_too_deep_example_raises_its_own_code() {
 fn qn339_no_entry_point_example_raises_its_own_code() {
     let example =
         example_for(Code::NoEntryPoint).expect("QN339's reference section has an example");
-    let program = write_program("QN339", &example.source);
+    let (_dir, program) = write_program("QN339", &example.source);
     let output = Command::new(env!("CARGO_BIN_EXE_quilon"))
         .args(["run", program.to_str().unwrap()])
         .output()

@@ -61,6 +61,9 @@ indicatif = "0.18"
 libc = "0.2"
 # Reading the `quilon test --reporter json` event stream back in the harness tests.
 serde_json = "1.0"
+# Scratch directories/files for tests: a `TempDir`/`NamedTempFile` removes itself on drop,
+# including on panic, so a test never leaves one behind on the shared box it runs on.
+tempfile = "3.27"
 
 [build-dependencies]
 # Compressing `libquilon_rt.a` before it is embedded into the compiler binary.

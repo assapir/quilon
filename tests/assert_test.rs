@@ -14,9 +14,9 @@
 //! `jit::run_program`, because a failing assertion terminates the process it runs in, which
 //! would take the test runner with it.
 
-use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use tempfile::TempDir;
 
 mod common;
 use common::{ensure_runtime_lib, frame, position};
@@ -27,23 +27,27 @@ fn quilon() -> &'static str {
     env!("CARGO_BIN_EXE_quilon")
 }
 
-fn tmp_dir() -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("quilon_assert_test_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).expect("create temp dir");
-    dir
+fn tmp_dir() -> TempDir {
+    tempfile::Builder::new()
+        .prefix("quilon_assert_test_")
+        .tempdir()
+        .expect("create temp dir")
 }
 
-/// Write `src` to a uniquely-named `.qn` file under the per-process temp dir.
-fn write_program(tag: &str, src: &str) -> PathBuf {
-    let path = tmp_dir().join(format!("{tag}.qn"));
-    let mut f = std::fs::File::create(&path).expect("create .qn");
-    f.write_all(src.as_bytes()).expect("write .qn");
-    path
+/// Write `src` to a uniquely-named `.qn` file in a fresh temp dir, returning the dir
+/// alongside the path — the `TempDir` must stay bound for as long as the file (or a
+/// sibling written next to it) needs to exist.
+fn write_program(tag: &str, src: &str) -> (TempDir, PathBuf) {
+    let dir = tmp_dir();
+    let path = dir.path().join(format!("{tag}.qn"));
+    std::fs::write(&path, src).expect("write .qn");
+    (dir, path)
 }
 
-/// `(exit_code, stderr)` from `quilon run <file>` (in-process JIT, as a subprocess).
-fn run_jit(tag: &str, src: &str) -> (i32, String) {
-    let path = write_program(tag, src);
+/// Like [`run_jit`], also returning the temp dir and the path the program ran from — for a
+/// caller that builds an expectation against the reported location.
+fn run_jit_at(tag: &str, src: &str) -> (i32, String, TempDir, PathBuf) {
+    let (dir, path) = write_program(tag, src);
     let out = Command::new(quilon())
         .args(["run", path.to_str().unwrap()])
         .output()
@@ -51,7 +55,15 @@ fn run_jit(tag: &str, src: &str) -> (i32, String) {
     (
         out.status.code().unwrap_or(-1),
         String::from_utf8_lossy(&out.stderr).into_owned(),
+        dir,
+        path,
     )
+}
+
+/// `(exit_code, stderr)` from `quilon run <file>` (in-process JIT, as a subprocess).
+fn run_jit(tag: &str, src: &str) -> (i32, String) {
+    let (code, stderr, _dir, _path) = run_jit_at(tag, src);
+    (code, stderr)
 }
 
 /// `quilon run` on an entry point whose body is `body` — the shape most cases here need.
@@ -69,11 +81,11 @@ fn tool_available(tool: &str) -> bool {
         .is_ok()
 }
 
-/// `(exit_code, stderr)` from a native AOT build (`quilon build --linker <linker>`)
-/// then executing the resulting binary.
-fn run_aot(tag: &str, src: &str, linker: &str) -> (i32, String) {
-    let path = write_program(tag, src);
-    let bin = tmp_dir().join(format!("{tag}.{linker}.bin"));
+/// Like [`run_aot`], also returning the temp dir and the source path it built — for a
+/// caller that builds an expectation against the reported location.
+fn run_aot_at(tag: &str, src: &str, linker: &str) -> (i32, String, TempDir, PathBuf) {
+    let (dir, path) = write_program(tag, src);
+    let bin = dir.path().join(format!("{tag}.{linker}.bin"));
     let build = Command::new(quilon())
         .args(["build", path.to_str().unwrap(), "--linker", linker])
         .args(["-o", bin.to_str().unwrap()])
@@ -88,6 +100,8 @@ fn run_aot(tag: &str, src: &str, linker: &str) -> (i32, String) {
     (
         out.status.code().unwrap_or(-1),
         String::from_utf8_lossy(&out.stderr).into_owned(),
+        dir,
+        path,
     )
 }
 
@@ -440,10 +454,9 @@ fn a_matcher_with_the_wrong_number_of_arguments_is_refused() {
 #[test]
 fn a_failing_assert_reports_the_call_site_in_full() {
     let src = "^ = () -> $ => <\n  assert(6 * 7, equals(41))\n>\n";
-    let (code, stderr) = run_jit("site_full", src);
+    let (code, stderr, _dir, path) = run_jit_at("site_full", src);
     assert_eq!(code, FAIL_CODE);
 
-    let path = tmp_dir().join("site_full.qn");
     let expected = format!(
         "error[QN500]: assertion failed: expected 41, got 42\n{}\n",
         frame(
@@ -462,10 +475,9 @@ fn a_failing_assert_reports_the_call_site_in_full() {
 #[test]
 fn an_assert_inside_a_helper_reports_that_helper_line() {
     let src = "check = (n :: Num) -> $ => <\n  assert(n * 2, equals(5))\n>\n\n^ = () -> $ => <\n  check(2)\n>\n";
-    let (code, stderr) = run_jit("site_helper_line", src);
+    let (code, stderr, _dir, path) = run_jit_at("site_helper_line", src);
     assert_eq!(code, FAIL_CODE);
 
-    let path = tmp_dir().join("site_helper_line.qn");
     assert!(
         stderr.contains(&position(&path, 2, 3)),
         "must report the assertion's own line 2, column 3, got: {stderr:?}"
@@ -481,12 +493,11 @@ fn an_assert_inside_a_helper_reports_that_helper_line() {
 #[test]
 fn fail_at_reports_its_caller() {
     let src = "<< core.test\n\nassertEven = (n :: Num, site :: Site) -> $ => <\n  n % 2 == 0 ? $ : test.failAt(\"assertion failed: `n` is odd\", site)\n>\n^ = () -> $ => <\n  assertEven(3)\n>\n";
-    let (code, stderr) = run_jit("site_fail_at", src);
+    let (code, stderr, _dir, path) = run_jit_at("site_fail_at", src);
     assert_eq!(code, FAIL_CODE);
 
     // `failAt` composes its frame in Quilon (`corelib/test.qn`): the position line, then
     // the message.
-    let path = tmp_dir().join("site_fail_at.qn");
     assert!(
         stderr.starts_with(&format!(
             "{}:7:3:\nassertion failed: 3 is odd",
@@ -504,14 +515,22 @@ fn fail_at_reports_its_caller() {
 /// line — the location follows the span's file, not the file being compiled.
 #[test]
 fn a_failure_in_an_imported_module_reports_that_module() {
-    let helper = write_program(
-        "site_helper",
+    // Both files must share one directory — the importer's `<< "site_helper.qn"` resolves
+    // relative to it — so this writes them into one `TempDir` directly rather than through
+    // [`write_program`], which hands back a fresh directory per call.
+    let dir = tmp_dir();
+    let helper = dir.path().join("site_helper.qn");
+    std::fs::write(
+        &helper,
         ">> checkDouble = (n :: Num) -> $ => <\n  assert(n * 2, equals(5))\n>\n",
-    );
-    let main = write_program(
-        "site_importer",
+    )
+    .expect("write helper .qn");
+    let main = dir.path().join("site_importer.qn");
+    std::fs::write(
+        &main,
         "<< \"site_helper.qn\"\n\n^ = () -> $ => <\n  site_helper.checkDouble(2)\n>\n",
-    );
+    )
+    .expect("write importer .qn");
     let out = Command::new(quilon())
         .args(["run", main.to_str().unwrap()])
         .output()
@@ -550,7 +569,7 @@ fn the_value_under_test_is_evaluated_once() {
         "  assert([1, 2].each((n :: Num) => io.print(n)), contains(1))\n",
         ">\n"
     );
-    let path = write_program("evaluated_once", src);
+    let (_dir, path) = write_program("evaluated_once", src);
     let out = Command::new(quilon())
         .args(["run", path.to_str().unwrap()])
         .output()
@@ -587,14 +606,14 @@ fn native_aot_assert_exit_codes() {
     );
 
     for linker in &linkers {
-        let (code, _) = run_aot(
+        let (code, _, _dir, _path) = run_aot_at(
             &format!("aot_pass_{linker}"),
             "^ = () -> $ => < assert(2 + 2, equals(4)) >\n",
             linker,
         );
         assert_eq!(code, 0, "native AOT ({linker}): a holding assert exits 0");
 
-        let (code, stderr) = run_aot(
+        let (code, stderr, _dir, path) = run_aot_at(
             &format!("aot_fail_{linker}"),
             "^ = () -> $ => < assert(2 + 2, equals(5)) >\n",
             linker,
@@ -610,11 +629,7 @@ fn native_aot_assert_exit_codes() {
         // The location is compiled IN, so a native binary reports it exactly as the JIT
         // does — no debug info, no unwinder, nothing to install.
         assert!(
-            stderr.contains(&position(
-                &tmp_dir().join(format!("aot_fail_{linker}.qn")),
-                1,
-                18
-            )),
+            stderr.contains(&position(&path, 1, 18)),
             "native AOT ({linker}): the report must name its call site, got: {stderr:?}"
         );
     }

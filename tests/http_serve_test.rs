@@ -98,10 +98,9 @@ checkReply = (reply :: http.Response, expectedStatus :: Num, expectedBody :: Tex
 fn run_client_check(quilon: &str, address: &str) -> (Option<i32>, String) {
     let file = common::temp_ql("http_serve_client_check", &client_check_program(address));
     let output = Command::new(quilon)
-        .args(["run", file.to_str().unwrap()])
+        .args(["run", file.path().to_str().unwrap()])
         .output()
         .expect("run the client-check program");
-    let _ = std::fs::remove_file(&file);
     (
         output.status.code(),
         String::from_utf8_lossy(&output.stderr).into_owned(),
@@ -250,7 +249,7 @@ fn jit_http_serve_answers_then_kill_stops_the_server() {
     let file = common::temp_ql("http_serve_jit", &program("127.0.0.1:0"));
 
     let mut child = Command::new(quilon)
-        .args(["run", file.to_str().unwrap()])
+        .args(["run", file.path().to_str().unwrap()])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -274,7 +273,6 @@ fn jit_http_serve_answers_then_kill_stops_the_server() {
         0,
         "the server's own process exits 0 once kill has settled the accept loop"
     );
-    let _ = std::fs::remove_file(&file);
 }
 
 #[test]
@@ -294,8 +292,13 @@ fn aot_http_serve_answers_then_kill_stops_the_server() {
     let quilon = env!("CARGO_BIN_EXE_quilon");
     ensure_runtime_lib(Path::new(quilon).parent().expect("binary has a parent dir"));
 
-    let source = common::temp_ql("http_serve_aot", &program("127.0.0.1:0"));
-    let binary = std::env::temp_dir().join(format!("quilon_http_serve_aot_{}", std::process::id()));
+    let dir = tempfile::Builder::new()
+        .prefix("quilon_http_serve_aot_")
+        .tempdir()
+        .expect("create temp dir");
+    let source = dir.path().join("serve.qn");
+    std::fs::write(&source, program("127.0.0.1:0")).expect("write temp .qn");
+    let binary = dir.path().join("serve");
     let build = Command::new(quilon)
         .args(["build", source.to_str().unwrap(), "--linker", linker])
         .args(["-o", binary.to_str().unwrap()])
@@ -306,7 +309,6 @@ fn aot_http_serve_answers_then_kill_stops_the_server() {
         "`quilon build` failed: {}",
         String::from_utf8_lossy(&build.stderr)
     );
-    let _ = std::fs::remove_file(&source);
 
     let mut child = Command::new(&binary)
         .stdin(Stdio::null())
@@ -332,7 +334,6 @@ fn aot_http_serve_answers_then_kill_stops_the_server() {
         0,
         "native AOT: the server's own process exits 0 once kill has settled the accept loop"
     );
-    let _ = std::fs::remove_file(&binary);
 }
 
 /// Like [`program`], but binds through `http.@serve`'s `Address` overload instead of a
@@ -376,7 +377,7 @@ fn jit_http_serve_binds_through_the_address_overload() {
     );
 
     let mut child = Command::new(quilon)
-        .args(["run", file.to_str().unwrap()])
+        .args(["run", file.path().to_str().unwrap()])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -403,7 +404,6 @@ fn jit_http_serve_binds_through_the_address_overload() {
         0,
         "the server's own process exits 0 once kill has settled the accept loop"
     );
-    let _ = std::fs::remove_file(&file);
 }
 
 /// A server whose handler echoes a POST's body back as the reply (`Created` carrying
@@ -456,7 +456,7 @@ fn run_body_echo_server(max_body_size: u64, drive: impl FnOnce(&str, u16)) {
     );
 
     let mut child = Command::new(quilon)
-        .args(["run", file.to_str().unwrap()])
+        .args(["run", file.path().to_str().unwrap()])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -478,7 +478,6 @@ fn run_body_echo_server(max_body_size: u64, drive: impl FnOnce(&str, u16)) {
         0,
         "the server's own process exits 0 once kill has settled the accept loop"
     );
-    let _ = std::fs::remove_file(&file);
 }
 
 #[test]
@@ -555,7 +554,7 @@ fn run_hummus_server(drive: impl FnOnce(&str, u16)) {
     let file = common::temp_ql("http_serve_keep_alive", &program("127.0.0.1:0"));
 
     let mut child = Command::new(quilon)
-        .args(["run", file.to_str().unwrap()])
+        .args(["run", file.path().to_str().unwrap()])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -577,7 +576,6 @@ fn run_hummus_server(drive: impl FnOnce(&str, u16)) {
         0,
         "the server's own process exits 0 once kill has settled the accept loop"
     );
-    let _ = std::fs::remove_file(&file);
 }
 
 #[test]
@@ -735,7 +733,7 @@ fn jit_http_serve_closes_an_idle_connection_after_its_configured_timeout() {
     );
 
     let mut child = Command::new(quilon)
-        .args(["run", file.to_str().unwrap()])
+        .args(["run", file.path().to_str().unwrap()])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -768,5 +766,4 @@ fn jit_http_serve_closes_an_idle_connection_after_its_configured_timeout() {
         0,
         "the server's own process exits 0 once kill has settled the accept loop"
     );
-    let _ = std::fs::remove_file(&file);
 }

@@ -6,7 +6,6 @@
 //! separates these from a `Text` that happens to read the same.
 
 use quilon::driver::front_end;
-use std::io::Write;
 
 mod common;
 use common::assert_exit_linked;
@@ -14,15 +13,13 @@ use common::assert_exit_linked;
 /// The front end must REJECT `src` — written to a temp file so its `<<` imports resolve the
 /// way they do for a real program.
 fn assert_rejected(src: &str) {
-    let dir =
-        std::env::temp_dir().join(format!("quilon_info_{}_{}", std::process::id(), src.len()));
-    std::fs::create_dir_all(&dir).expect("create temp dir");
-    let file = dir.join("prog.qn");
-    let mut handle = std::fs::File::create(&file).expect("write temp source");
-    handle.write_all(src.as_bytes()).expect("write temp source");
-    drop(handle);
+    let dir = tempfile::Builder::new()
+        .prefix("quilon_info_")
+        .tempdir()
+        .expect("create temp dir");
+    let file = dir.path().join("prog.qn");
+    std::fs::write(&file, src).expect("write temp source");
     let result = front_end(&file);
-    let _ = std::fs::remove_dir_all(&dir);
     assert!(result.is_err(), "expected a compile error for:\n{src}");
 }
 

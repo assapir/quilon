@@ -794,37 +794,36 @@ mod tests {
         assert_eq!(file_path(&uri), None);
     }
 
-    /// A unique scratch directory under the system temp dir, for a test that writes real
-    /// files — never the per-user cache `corelib_cache_dir` itself resolves to.
-    fn scratch_dir(tag: &str) -> PathBuf {
-        std::env::temp_dir().join(format!(
-            "quilon_lsp_corelib_{tag}_{}_{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ))
+    /// A unique scratch directory, for a test that writes real files — never the per-user
+    /// cache `corelib_cache_dir` itself resolves to.
+    fn scratch_dir(tag: &str) -> tempfile::TempDir {
+        tempfile::Builder::new()
+            .prefix(&format!("quilon_lsp_corelib_{tag}_"))
+            .tempdir()
+            .expect("create scratch dir")
     }
 
     #[test]
     fn materialize_corelib_writes_every_module_at_its_dwarf_relative_path() {
         let root = scratch_dir("layout");
-        materialize_corelib(&root).expect("writes cleanly");
+        materialize_corelib(root.path()).expect("writes cleanly");
         for (name, source) in crate::modules::CORELIB_MODULES {
-            let path = root.join(crate::codegen::debug::corelib_relative_path(name));
+            let path = root
+                .path()
+                .join(crate::codegen::debug::corelib_relative_path(name));
             let written = std::fs::read_to_string(&path)
                 .unwrap_or_else(|e| panic!("{} was not written: {e}", path.display()));
             assert_eq!(written, *source, "{} has the wrong content", path.display());
         }
-        std::fs::remove_dir_all(&root).ok();
     }
 
     #[test]
     fn materialize_corelib_leaves_an_up_to_date_file_untouched() {
         let root = scratch_dir("idempotent");
-        materialize_corelib(&root).expect("first write");
-        let path = root.join(crate::codegen::debug::corelib_relative_path("core.io"));
+        materialize_corelib(root.path()).expect("first write");
+        let path = root
+            .path()
+            .join(crate::codegen::debug::corelib_relative_path("core.io"));
         let before = std::fs::metadata(&path)
             .expect("written once")
             .modified()
@@ -833,7 +832,7 @@ mod tests {
         // A second call over the same, unchanged sources must not rewrite the file — if it
         // did, a fast-changing mtime would show it (best-effort: some filesystems coarsen
         // mtime resolution, so this only asserts what a coarse clock can still catch).
-        materialize_corelib(&root).expect("second, idempotent write");
+        materialize_corelib(root.path()).expect("second, idempotent write");
         let after = std::fs::metadata(&path)
             .expect("still there")
             .modified()
@@ -841,6 +840,5 @@ mod tests {
         if let (Some(before), Some(after)) = (before, after) {
             assert_eq!(before, after, "an up-to-date file was rewritten");
         }
-        std::fs::remove_dir_all(&root).ok();
     }
 }

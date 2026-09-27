@@ -22,7 +22,7 @@ const UNOBTAINABLE_RANGE: &str = "^ = () -> Num => <\n  xs = 1 <- 90071992547409
 
 #[test]
 fn an_allocation_the_collector_cannot_satisfy_aborts() {
-    let (code, stderr, _) = run_program("alloc_oom", UNOBTAINABLE_RANGE);
+    let (code, stderr, _, _dir) = run_program("alloc_oom", UNOBTAINABLE_RANGE);
     assert_eq!(code, 5, "a failed allocation must exit 5: {stderr}");
     assert!(
         stderr.contains("out of memory: cannot allocate 72057594037927936 bytes"),
@@ -46,7 +46,7 @@ fn a_native_build_refuses_the_same_size() {
 /// method result — still allocate and read back exactly as before.
 #[test]
 fn ordinary_array_allocation_is_unaffected() {
-    let (code, stderr, _) = run_program(
+    let (code, stderr, _, _dir) = run_program(
         "alloc_ok",
         "^ = () -> Num => <\n  xs = [1, 2, 3]\n  big = 1 <- 1000\n  doubled = xs.map(n => n * 2)\n  xs.size + big.size / 100 + doubled[2]\n>",
     );

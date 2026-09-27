@@ -167,7 +167,7 @@ fn a_bound_but_unused_launch_settles_before_the_block_returns() {
 #[test]
 fn a_sibling_launch_still_settles_after_an_earlier_one_faults() {
     let file = temp_ql("sibling_settles", TWO_UNFORCED_READS);
-    let (code, _, stderr) = run_with_unreadable_stdin(&file);
+    let (code, _, stderr) = run_with_unreadable_stdin(file.path());
     assert_eq!(code, Some(5), "a read fault exits 5: {stderr}");
     assert_eq!(
         stderr.matches("QN505").count(),
@@ -175,13 +175,12 @@ fn a_sibling_launch_still_settles_after_an_earlier_one_faults() {
         "both launches must settle (and fault) at the block's close — not just the first: \
          {stderr}"
     );
-    let _ = std::fs::remove_file(&file);
 }
 
 #[test]
 fn faults_from_two_launches_report_in_launch_order() {
     let file = temp_ql("fault_order", TWO_UNFORCED_READS);
-    let (code, _, stderr) = run_with_unreadable_stdin(&file);
+    let (code, _, stderr) = run_with_unreadable_stdin(file.path());
     assert_eq!(code, Some(5), "a read fault exits 5: {stderr}");
     // `first = io.@readStdin()` is line 5, `second = io.@readStdin()` is line 6 of the source
     // above — the first launch's own report must appear before the second's.
@@ -195,27 +194,24 @@ fn faults_from_two_launches_report_in_launch_order() {
         first_at < second_at,
         "faults must report in launch order (first launched, first reported): {stderr}"
     );
-    let _ = std::fs::remove_file(&file);
 }
 
 #[test]
 fn a_directly_forced_fault_reports_and_exits() {
     let file = temp_ql("forced_fault", ONE_READ_FORCED_DIRECTLY);
-    let (code, _, stderr) = run_with_unreadable_stdin(&file);
+    let (code, _, stderr) = run_with_unreadable_stdin(file.path());
     assert_eq!(code, Some(5), "a read fault exits 5: {stderr}");
     assert!(
         stderr.contains("QN505"),
         "expected a read-failure report: {stderr}"
     );
-    let _ = std::fs::remove_file(&file);
 }
 
 #[test]
 fn self_tail_recursive_function_with_a_direct_launch_still_runs_correctly() {
     let file = temp_ql("tco_launch", SELF_TAIL_RECURSIVE_WITH_A_DIRECT_LAUNCH);
-    let (code, _, stderr) = run_with_piped_stdin(&file, b"");
+    let (code, _, stderr) = run_with_piped_stdin(file.path(), b"");
     assert_eq!(code, Some(0), "the loop must still pass: {stderr}");
-    let _ = std::fs::remove_file(&file);
 }
 
 #[test]
@@ -238,11 +234,10 @@ fn self_tail_recursive_function_with_a_direct_launch_runs_in_constant_stack() {
         "deep_tco_launch",
         DEEP_SELF_TAIL_RECURSIVE_WITH_A_DIRECT_LAUNCH,
     );
-    let (code, _, stderr) = run_with_piped_stdin(&file, b"");
+    let (code, _, stderr) = run_with_piped_stdin(file.path(), b"");
     assert_eq!(
         code,
         Some(0),
         "20,000 calls must still pass in bounded stack, not overflow: {stderr}"
     );
-    let _ = std::fs::remove_file(&file);
 }

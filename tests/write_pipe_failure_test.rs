@@ -7,12 +7,10 @@
 use std::io::Read;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
-use std::sync::atomic::{AtomicU64, Ordering};
+use tempfile::TempDir;
 
 mod common;
 use common::{ensure_runtime_lib, tool_available};
-
-static SEQ: AtomicU64 = AtomicU64::new(0);
 
 /// A program that floods stdout with far more lines than a pipe can hold unread, so a
 /// reader that closes early is certain to still be mid-stream when its next write lands.
@@ -20,13 +18,17 @@ const CHATTY_PROGRAM: &str = "<< core.io\n\
      shout = (n :: Num) -> Num => <\n  io.print(\"still shouting into the void\")\n  n <= 1 ? 0 : shout(n - 1)\n>\n\
      ^ = () -> Num => < shout(200000) >\n";
 
-fn temp_program(tag: &str) -> PathBuf {
-    let seq = SEQ.fetch_add(1, Ordering::Relaxed);
-    let dir = std::env::temp_dir().join(format!("quilon_pipe_fail_{}_{seq}", std::process::id()));
-    std::fs::create_dir_all(&dir).expect("create temp dir");
-    let path = dir.join(format!("{tag}.qn"));
+/// Write [`CHATTY_PROGRAM`] into a fresh temp dir, returning the dir alongside the path —
+/// kept bound for as long as the caller needs the file (and, for the native test, its
+/// built binary next to it) to exist.
+fn temp_program(tag: &str) -> (TempDir, PathBuf) {
+    let dir = tempfile::Builder::new()
+        .prefix("quilon_pipe_fail_")
+        .tempdir()
+        .expect("create temp dir");
+    let path = dir.path().join(format!("{tag}.qn"));
     std::fs::write(&path, CHATTY_PROGRAM).expect("write temp program");
-    path
+    (dir, path)
 }
 
 /// Spawn `command` with stdout and stderr piped, read a few bytes from stdout, then drop
@@ -51,7 +53,7 @@ fn run_and_close_reader_early(mut command: Command) -> (Option<i32>, String) {
 
 #[test]
 fn quilon_run_reports_a_broken_pipe_instead_of_finishing_quietly() {
-    let program = temp_program("jit");
+    let (_dir, program) = temp_program("jit");
     let mut command = Command::new(env!("CARGO_BIN_EXE_quilon"));
     command.args(["run", program.to_str().unwrap()]);
 
@@ -78,7 +80,7 @@ fn native_binary_reports_a_broken_pipe_instead_of_dying_to_sigpipe() {
     let quilon = PathBuf::from(env!("CARGO_BIN_EXE_quilon"));
     ensure_runtime_lib(quilon.parent().expect("the compiler's directory"));
 
-    let program = temp_program("native");
+    let (_dir, program) = temp_program("native");
     let binary = program.with_extension("");
     let build = Command::new(&quilon)
         .args(["build", program.to_str().unwrap()])

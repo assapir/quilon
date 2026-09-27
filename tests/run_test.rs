@@ -1840,16 +1840,11 @@ fn run_program_whose_only_result_parameter_caller_is_inside_an_erased_test_block
 #[test]
 fn test_command_runs_a_program_whose_helper_is_only_reachable_from_its_own_test_block() {
     let quilon = std::path::PathBuf::from(env!("CARGO_BIN_EXE_quilon"));
-    let seq = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    let dir = std::env::temp_dir().join(format!(
-        "quilon_test_command_unreachable_helper_{}_{seq}",
-        std::process::id()
-    ));
-    std::fs::create_dir_all(&dir).expect("create temp dir");
-    let file = dir.join("describe.qn");
+    let dir = tempfile::Builder::new()
+        .prefix("quilon_test_command_unreachable_helper_")
+        .tempdir()
+        .expect("create temp dir");
+    let file = dir.path().join("describe.qn");
     std::fs::write(
         &file,
         r#"
@@ -1881,8 +1876,6 @@ test.describe("describe", () => <
         stdout.contains("1 passed, 0 failed"),
         "expected the one `ok` case to pass, got:\n{stdout}"
     );
-
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
@@ -3047,7 +3040,7 @@ fn run_now_measures_that_sleep_actually_waited() {
 /// the crash is real, and a JIT run in-process would take the test harness down with it.
 #[test]
 fn deep_non_tail_recursion_reports_stack_overflow_not_a_bare_segfault() {
-    let (code, stderr, _) = run_program(
+    let (code, stderr, _, _dir) = run_program(
         "stack_overflow",
         "deep = (n :: Num) -> Num => < n == 0 ? 0 : 1 + deep(n - 1) >\n^ = () -> Num => < deep(10000000) >",
     );
@@ -3098,18 +3091,13 @@ fn native_aot_non_ascii_function_name_and_record_field() {
                ^ = () -> Num => <\n  ףסא = größe(Punkt { höhe = 21 })\n  ףסא\n>";
 
     for linker in &linkers {
-        let seq = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let dir = std::env::temp_dir().join(format!(
-            "quilon_non_ascii_{linker}_{}_{seq}",
-            std::process::id()
-        ));
-        std::fs::create_dir_all(&dir).expect("create temp dir");
-        let file = dir.join("größe.qn");
+        let dir = tempfile::Builder::new()
+            .prefix(&format!("quilon_non_ascii_{linker}_"))
+            .tempdir()
+            .expect("create temp dir");
+        let file = dir.path().join("größe.qn");
         std::fs::write(&file, src).expect("write temp program");
-        let binary = dir.join("größe");
+        let binary = dir.path().join("größe");
 
         let build = Command::new(&quilon)
             .arg("build")
@@ -3163,7 +3151,7 @@ fn run_aborts_holds_when_the_lambda_ends_fail_loud() {
 fn run_aborts_fails_and_says_the_lambda_returned() {
     let src = "^ = () -> $ => < assert(() => 1, aborts()) >\n";
 
-    let (code, stderr, _) = run_program("aborts_returns", src);
+    let (code, stderr, _, _dir) = run_program("aborts_returns", src);
     assert_eq!(code, ABORTS_FAIL_CODE);
     assert!(
         stderr.contains("the lambda to abort, but it returned"),
@@ -3192,7 +3180,7 @@ fn run_not_aborts_holds_when_the_lambda_returns() {
 fn run_not_aborts_fails_and_shows_the_withheld_report() {
     let src = "^ = () -> $ => <\n  xs :: []Num = [1, 2]\n  assert(() => xs[9], not(aborts()))\n>\n";
 
-    let (code, stderr, _) = run_program("not_aborts_fails", src);
+    let (code, stderr, _, _dir) = run_program("not_aborts_fails", src);
     assert_eq!(code, ABORTS_FAIL_CODE);
     assert!(
         stderr.contains("expected the lambda not to abort, but it aborted"),
@@ -3258,14 +3246,14 @@ fn run_a_trap_inside_a_trap_each_catch_their_own_abort() {
 /// as -infinity — lands on i32::MIN, whose low 8 bits are 0.
 #[test]
 fn run_entry_point_nan_result_exits_zero() {
-    let (code, stderr, _) = run_program("entry_nan", "^ = () -> Num => < 0 / 0 >");
+    let (code, stderr, _, _dir) = run_program("entry_nan", "^ = () -> Num => < 0 / 0 >");
     assert_eq!(code, 0, "a NaN result must exit 0, got {code}: {stderr}");
 }
 
 /// -infinity clamps to i32::MIN, whose low 8 bits are 0 — the same as NaN.
 #[test]
 fn run_entry_point_negative_infinity_result_exits_zero() {
-    let (code, stderr, _) = run_program("entry_neg_inf", "^ = () -> Num => < 0 - 1 / 0 >");
+    let (code, stderr, _, _dir) = run_program("entry_neg_inf", "^ = () -> Num => < 0 - 1 / 0 >");
     assert_eq!(
         code, 0,
         "a -infinity result must exit 0, got {code}: {stderr}"
@@ -3275,7 +3263,7 @@ fn run_entry_point_negative_infinity_result_exits_zero() {
 /// +infinity clamps to i32::MAX, whose low 8 bits are 255.
 #[test]
 fn run_entry_point_positive_infinity_result_exits_255() {
-    let (code, stderr, _) = run_program("entry_pos_inf", "^ = () -> Num => < 1 / 0 >");
+    let (code, stderr, _, _dir) = run_program("entry_pos_inf", "^ = () -> Num => < 1 / 0 >");
     assert_eq!(
         code, 255,
         "a +infinity result must exit 255, got {code}: {stderr}"
@@ -3286,7 +3274,7 @@ fn run_entry_point_positive_infinity_result_exits_255() {
 /// own low-8-bits convention narrows it, exactly as it always did.
 #[test]
 fn run_entry_point_in_range_result_still_wraps_at_a_byte() {
-    let (code, stderr, _) = run_program("entry_in_range", "^ = () -> Num => < 300 >");
+    let (code, stderr, _, _dir) = run_program("entry_in_range", "^ = () -> Num => < 300 >");
     assert_eq!(code, 44, "300 must exit 44, got {code}: {stderr}");
 }
 

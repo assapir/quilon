@@ -2,7 +2,7 @@
 //! go-to-definition (including across an import), completion, semantic tokens, and test
 //! lenses.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use quilon::driver::TestBlocks;
 use quilon::lexer::ROOT_FILE;
@@ -13,17 +13,11 @@ use quilon::lsp::analysis::{
 };
 
 /// A unique temporary directory for a test that needs real files (import resolution).
-fn temporary_directory(tag: &str) -> PathBuf {
-    let directory = std::env::temp_dir().join(format!(
-        "quilon_lsp_{tag}_{}_{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
-    std::fs::create_dir_all(&directory).expect("create temp dir");
-    directory
+fn temporary_directory(tag: &str) -> tempfile::TempDir {
+    tempfile::Builder::new()
+        .prefix(&format!("quilon_lsp_{tag}_"))
+        .tempdir()
+        .expect("create temp dir")
 }
 
 /// The byte offset of `needle`'s first occurrence in `text`, plus `into` bytes.
@@ -406,10 +400,10 @@ fn references_to_a_solely_declared_type_list_only_itself() {
 fn definition_resolves_across_a_file_import() {
     let directory = temporary_directory("import_definition");
     let module_text = ">> add = (a :: Num, b :: Num) -> Num => < a + b >\n";
-    std::fs::write(directory.join("lib.qn"), module_text).expect("write module");
+    std::fs::write(directory.path().join("lib.qn"), module_text).expect("write module");
 
     let text = "<< \"lib.qn\"\n\n^ = () -> Num => < lib.add(1, 2) >\n";
-    let root = directory.join("buffer.qn");
+    let root = directory.path().join("buffer.qn");
     let checked = check_text(&root, text).expect("checks clean");
 
     let definition = definition_at(&checked.program, offset_of(text, "lib.add", 4))
@@ -429,8 +423,6 @@ fn definition_resolves_across_a_file_import() {
         location.path
     );
     assert_eq!(definition.start, offset_of(module_text, ">> add", 0));
-
-    std::fs::remove_dir_all(&directory).ok();
 }
 
 /// Go to definition on `io.@readStdin` — an `@` leaf IO primitive reached through its
@@ -601,15 +593,13 @@ fn references_answer_nothing_for_an_unresolvable_offset() {
 fn references_answer_nothing_for_a_name_declared_in_another_file() {
     let directory = temporary_directory("import_references");
     let module_text = ">> add = (a :: Num, b :: Num) -> Num => < a + b >\n";
-    std::fs::write(directory.join("lib.qn"), module_text).expect("write module");
+    std::fs::write(directory.path().join("lib.qn"), module_text).expect("write module");
 
     let text = "<< \"lib.qn\"\n\n^ = () -> Num => < lib.add(1, 2) >\n";
-    let root = directory.join("buffer.qn");
+    let root = directory.path().join("buffer.qn");
     let checked = check_text(&root, text).expect("checks clean");
 
     assert!(references_at(&checked.program, text, offset_of(text, "lib.add", 4)).is_none());
-
-    std::fs::remove_dir_all(&directory).ok();
 }
 
 fn text_reassigning_a_local_through_a_lambda() -> &'static str {
@@ -1140,7 +1130,7 @@ fn a_protocol_session_answers_over_an_in_memory_connection() {
     // per-user cache — no other test in this binary reads or sets `XDG_CACHE_HOME`, so
     // scoping the mutation to this window is safe.
     let scratch_cache = temporary_directory("corelibdir_cache");
-    unsafe { std::env::set_var("XDG_CACHE_HOME", &scratch_cache) };
+    unsafe { std::env::set_var("XDG_CACHE_HOME", scratch_cache.path()) };
     client
         .sender
         .send(lsp_request(10, "quilon/corelibDir", Value::Null))
@@ -1149,7 +1139,7 @@ fn a_protocol_session_answers_over_an_in_memory_connection() {
     unsafe { std::env::remove_var("XDG_CACHE_HOME") };
     let dir = dir.as_str().expect("a directory path string");
     assert!(
-        Path::new(dir).starts_with(&scratch_cache),
+        Path::new(dir).starts_with(scratch_cache.path()),
         "expected the scratch XDG_CACHE_HOME to be honored: {dir}"
     );
     // `core.io` maps to `corelib/io.qn` — same layout a `--debug` build's DWARF names it
@@ -1159,7 +1149,6 @@ fn a_protocol_session_answers_over_an_in_memory_connection() {
         std::fs::read_to_string(&io_path).expect("core.io was written"),
         include_str!("../corelib/io.qn"),
     );
-    std::fs::remove_dir_all(&scratch_cache).ok();
 
     client
         .sender
@@ -1182,10 +1171,10 @@ fn rename_on_an_imported_name_answers_an_error_naming_its_file() {
 
     let directory = temporary_directory("import_rename");
     let module_text = ">> add = (a :: Num, b :: Num) -> Num => < a + b >\n";
-    std::fs::write(directory.join("lib.qn"), module_text).expect("write module");
+    std::fs::write(directory.path().join("lib.qn"), module_text).expect("write module");
 
     let text = "<< \"lib.qn\"\n\n^ = () -> Num => < lib.add(1, 2) >\n";
-    let root = directory.join("buffer.qn");
+    let root = directory.path().join("buffer.qn");
     let uri = format!("file://{}", root.display());
 
     let (client, served) = started_session();
@@ -1241,8 +1230,6 @@ fn rename_on_an_imported_name_answers_an_error_naming_its_file() {
         .send(lsp_notification("exit", Value::Null))
         .unwrap();
     served.join().expect("the server thread joins");
-
-    std::fs::remove_dir_all(&directory).ok();
 }
 
 /// Definition, references, and rename all answer over a document with a type error on an

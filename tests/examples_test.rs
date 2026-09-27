@@ -233,10 +233,10 @@ fn runnable_examples_match_across_jit_and_aot() {
     let quilon = env!("CARGO_BIN_EXE_quilon");
     ensure_runtime_lib(Path::new(quilon).parent().expect("binary has a parent dir"));
 
-    // Unique per process so concurrent `cargo test` invocations never share (and
-    // clobber) output binary paths. Cleaned up at the end.
-    let tmp = std::env::temp_dir().join(format!("quilon_aot_gate_{}", std::process::id()));
-    std::fs::create_dir_all(&tmp).expect("create temp dir");
+    let tmp = tempfile::Builder::new()
+        .prefix("quilon_aot_gate_")
+        .tempdir()
+        .expect("create temp dir");
 
     for src in runnable_examples() {
         let name = src.file_name().unwrap().to_string_lossy().to_string();
@@ -253,7 +253,7 @@ fn runnable_examples_match_across_jit_and_aot() {
 
         // Native AOT via each available linker (`quilon build --linker ...`).
         for linker in &linkers {
-            let bin = tmp.join(format!("{name}.{linker}"));
+            let bin = tmp.path().join(format!("{name}.{linker}"));
             let build = Command::new(quilon)
                 .args(["build", src.to_str().unwrap(), "--linker", linker])
                 .args(["-o", bin.to_str().unwrap()])
@@ -277,9 +277,6 @@ fn runnable_examples_match_across_jit_and_aot() {
             );
         }
     }
-
-    // Best-effort cleanup of this run's intermediates.
-    let _ = std::fs::remove_dir_all(&tmp);
 }
 
 /// Every runnable example must build and run under `--debug`: a debug build runs the LLVM
@@ -294,12 +291,14 @@ fn runnable_examples_build_and_run_with_debug_info() {
     let quilon = env!("CARGO_BIN_EXE_quilon");
     ensure_runtime_lib(Path::new(quilon).parent().expect("binary has a parent dir"));
 
-    let tmp = std::env::temp_dir().join(format!("quilon_debug_gate_{}", std::process::id()));
-    std::fs::create_dir_all(&tmp).expect("create temp dir");
+    let tmp = tempfile::Builder::new()
+        .prefix("quilon_debug_gate_")
+        .tempdir()
+        .expect("create temp dir");
 
     for src in runnable_examples() {
         let name = src.file_name().unwrap().to_string_lossy().to_string();
-        let bin = tmp.join(&name);
+        let bin = tmp.path().join(&name);
         let build = Command::new(quilon)
             .args(["build", "--debug", src.to_str().unwrap()])
             .args(["-o", bin.to_str().unwrap()])
@@ -319,7 +318,4 @@ fn runnable_examples_build_and_run_with_debug_info() {
             "{name}: debug-info build did not exit 0"
         );
     }
-
-    // Best-effort cleanup of this run's intermediates.
-    let _ = std::fs::remove_dir_all(&tmp);
 }

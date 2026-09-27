@@ -143,7 +143,7 @@ fn jit_read_forces_at_a_strict_comparison() {
     let file = temp_ql("assert", ASSERT_READ);
 
     // Matching input: the deferred value forces to "hello" at the compare → assertion holds.
-    let (code, _) = jit_run(&file, b"hello\n");
+    let (code, _) = jit_run(file.path(), b"hello\n");
     assert_eq!(
         code,
         Some(0),
@@ -152,26 +152,23 @@ fn jit_read_forces_at_a_strict_comparison() {
 
     // Different input: the SAME forced value must reach the compare and fail the assertion —
     // proving the real read flowed through, not a constant.
-    let (code, _) = jit_run(&file, b"goodbye\n");
+    let (code, _) = jit_run(file.path(), b"goodbye\n");
     assert_eq!(
         code,
         Some(5),
         "a non-matching @readStdin value must trip the assertion"
     );
-
-    let _ = std::fs::remove_file(&file);
 }
 
 #[test]
 fn jit_read_forces_at_a_print() {
     let file = temp_ql("echo", ECHO_READ);
-    let (code, stdout) = jit_run(&file, b"transform me\n");
+    let (code, stdout) = jit_run(file.path(), b"transform me\n");
     assert_eq!(code, Some(0));
     assert_eq!(
         stdout, b"transform me\n",
         "print should force the deferred @readStdin value and echo the line"
     );
-    let _ = std::fs::remove_file(&file);
 }
 
 #[test]
@@ -180,7 +177,7 @@ fn jit_global_store_forces_at_a_read_in_another_function() {
 
     // Matching input: `eavesdrop` stores the deferred read into `squawk`; `^`, a separate
     // function, forces it at the compare → assertion holds.
-    let (code, _) = jit_run(&file, b"the parrot has seen everything\n");
+    let (code, _) = jit_run(file.path(), b"the parrot has seen everything\n");
     assert_eq!(
         code,
         Some(0),
@@ -190,26 +187,23 @@ fn jit_global_store_forces_at_a_read_in_another_function() {
 
     // Different input: the same forced value must reach the compare and fail the
     // assertion — proving the read is the real, forced line, not an unforced sentinel.
-    let (code, _) = jit_run(&file, b"nothing to see here\n");
+    let (code, _) = jit_run(file.path(), b"nothing to see here\n");
     assert_eq!(
         code,
         Some(5),
         "a non-matching line stored through the global must still trip the assertion"
     );
-
-    let _ = std::fs::remove_file(&file);
 }
 
 #[test]
 fn jit_global_store_forces_at_a_print_in_another_function() {
     let file = temp_ql("global_store_print", GLOBAL_STORE_THEN_PRINT);
-    let (code, stdout) = jit_run(&file, b"the walls have ears\n");
+    let (code, stdout) = jit_run(file.path(), b"the walls have ears\n");
     assert_eq!(code, Some(0));
     assert_eq!(
         stdout, b"the walls have ears\n",
         "print should force the global's deferred value and echo the line stored into it"
     );
-    let _ = std::fs::remove_file(&file);
 }
 
 #[test]
@@ -222,9 +216,13 @@ fn aot_global_store_forces_at_a_read_in_another_function() {
     let quilon = env!("CARGO_BIN_EXE_quilon");
     ensure_runtime_lib(Path::new(quilon).parent().expect("binary has a parent dir"));
 
-    let source = temp_ql("global_store_assert_aot", GLOBAL_STORE_THEN_ASSERT);
-    let binary =
-        std::env::temp_dir().join(format!("quilon_global_store_aot_{}", std::process::id()));
+    let dir = tempfile::Builder::new()
+        .prefix("quilon_global_store_aot_")
+        .tempdir()
+        .expect("create temp dir");
+    let source = dir.path().join("program.qn");
+    std::fs::write(&source, GLOBAL_STORE_THEN_ASSERT).expect("write temp .qn");
+    let binary = dir.path().join("program");
 
     let build = Command::new(quilon)
         .args(["build", source.to_str().unwrap(), "--linker", linker])
@@ -249,9 +247,6 @@ fn aot_global_store_forces_at_a_read_in_another_function() {
         Some(5),
         "native AOT: a non-matching line stored through the global must trip the assertion"
     );
-
-    let _ = std::fs::remove_file(&source);
-    let _ = std::fs::remove_file(&binary);
 }
 
 #[test]
@@ -259,13 +254,12 @@ fn jit_two_reads_serialize_into_consecutive_lines() {
     // Two eager @readStdin launches must read consecutive lines in order (the stdin gate
     // serializes them) — not crash on a shared fd or drop/interleave bytes.
     let file = temp_ql("two", TWO_READS);
-    let (code, _) = jit_run(&file, b"hello\nworld\n");
+    let (code, _) = jit_run(file.path(), b"hello\nworld\n");
     assert_eq!(
         code,
         Some(0),
         "two @readStdin launches should read \"hello\" then \"world\""
     );
-    let _ = std::fs::remove_file(&file);
 }
 
 #[test]
@@ -278,8 +272,13 @@ fn aot_read_forces_at_a_strict_comparison() {
     let quilon = env!("CARGO_BIN_EXE_quilon");
     ensure_runtime_lib(Path::new(quilon).parent().expect("binary has a parent dir"));
 
-    let source = temp_ql("assert_aot", ASSERT_READ);
-    let binary = std::env::temp_dir().join(format!("quilon_read_aot_{}", std::process::id()));
+    let dir = tempfile::Builder::new()
+        .prefix("quilon_read_aot_")
+        .tempdir()
+        .expect("create temp dir");
+    let source = dir.path().join("program.qn");
+    std::fs::write(&source, ASSERT_READ).expect("write temp .qn");
+    let binary = dir.path().join("program");
 
     let build = Command::new(quilon)
         .args(["build", source.to_str().unwrap(), "--linker", linker])
@@ -304,9 +303,6 @@ fn aot_read_forces_at_a_strict_comparison() {
         Some(5),
         "native AOT: non-matching @readStdin must trip the assertion"
     );
-
-    let _ = std::fs::remove_file(&source);
-    let _ = std::fs::remove_file(&binary);
 }
 
 #[test]
@@ -316,7 +312,7 @@ fn write_is_byte_verbatim_and_print_renders_the_same_text() {
     // the same text rendered for a reader — each invalid byte as U+FFFD — plus a newline.
     // A NUL is content in both: neither path stops at it or shortens the output.
     let file = temp_ql("bytes", WRITE_THEN_PRINT);
-    let (code, stdout) = jit_run(&file, b"a\0b\xffc\n");
+    let (code, stdout) = jit_run(file.path(), b"a\0b\xffc\n");
     assert_eq!(code, Some(0));
 
     let (verbatim, rendered) = stdout.split_at(5);
@@ -329,20 +325,16 @@ fn write_is_byte_verbatim_and_print_renders_the_same_text() {
         "a\0b\u{fffd}c\n".as_bytes(),
         "`print` should render the invalid byte and keep the NUL"
     );
-
-    let _ = std::fs::remove_file(&file);
 }
 
 #[test]
 fn jit_atomic_binding_reassignment_may_force_via_a_plain_binding_first() {
     let file = temp_ql("atomic_reassignment_accepted", ATOMIC_REASSIGNMENT_ACCEPTED);
-    let (code, _) = jit_run(&file, b"ab\n");
+    let (code, _) = jit_run(file.path(), b"ab\n");
     assert_eq!(
         code,
         Some(2),
         "hits should end at 2: 0 plus the 2-grapheme line's length, forced ahead of the \
          reassignment"
     );
-
-    let _ = std::fs::remove_file(&file);
 }

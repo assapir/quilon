@@ -10,19 +10,25 @@
 mod series;
 use series::{Series, Trend};
 
-/// A unique scratch path, since tests in a binary run in parallel.
-fn scratch(tag: &str) -> String {
-    let dir = std::env::temp_dir().join(format!("quilon-series-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).expect("create scratch dir");
-    dir.join(format!("{tag}.tsv"))
+/// A unique scratch path in its own temp dir, since tests in a binary run in parallel.
+/// The `TempDir` must stay bound alongside the path for as long as the test needs the
+/// file to exist — it removes the directory on drop.
+fn scratch(tag: &str) -> (tempfile::TempDir, String) {
+    let dir = tempfile::Builder::new()
+        .prefix("quilon_series_")
+        .tempdir()
+        .expect("create scratch dir");
+    let path = dir
+        .path()
+        .join(format!("{tag}.tsv"))
         .to_string_lossy()
-        .into_owned()
+        .into_owned();
+    (dir, path)
 }
 
 #[test]
 fn a_series_round_trips_through_a_file() {
-    let path = scratch("round_trip");
-    let _ = std::fs::remove_file(&path);
+    let (_dir, path) = scratch("round_trip");
     let mut written = Series::default();
     written.record("flat", "codegen", 37.4);
     written.record("flat", "total", 50.1);
@@ -38,8 +44,7 @@ fn a_series_round_trips_through_a_file() {
 /// and a program can share a name without one shadowing the other.
 #[test]
 fn two_families_share_one_file_without_seeing_each_other() {
-    let path = scratch("two_families");
-    let _ = std::fs::remove_file(&path);
+    let (_dir, path) = scratch("two_families");
     let mut compile = Series::default();
     compile.record("shared_name", "total", 50.1);
     compile.append_to(&path, "compile_speed").expect("write");
@@ -67,7 +72,7 @@ fn a_missing_baseline_is_empty_not_an_error() {
 
 #[test]
 fn a_malformed_line_is_skipped_rather_than_fatal() {
-    let path = scratch("malformed");
+    let (_dir, path) = scratch("malformed");
     std::fs::write(
         &path,
         "compile_speed\tflat\ttotal\t50.1\ngarbage\ncompile_speed\tflat\tlex\tnot-a-number\n",
@@ -109,8 +114,7 @@ fn a_delta_is_a_signed_percentage_of_the_baseline() {
 /// come out as zero rather than as anything at all.
 #[test]
 fn a_recorded_run_is_the_next_runs_baseline() {
-    let path = scratch("round_two");
-    let _ = std::fs::remove_file(&path);
+    let (_dir, path) = scratch("round_two");
     let mut first = Trend::new(Series::default(), Some(path.clone()), "compile_speed");
     first.delta("flat", "total", 50.0);
     first.finish();

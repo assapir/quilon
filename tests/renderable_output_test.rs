@@ -11,7 +11,7 @@ use common::{
 /// and the same rendering reaches interpolation, `eprint` and `write`.
 #[test]
 fn a_render_member_is_what_makes_a_type_printable() {
-    let run = run_program_named(
+    let (run, _dir) = run_program_named(
         "render_member.qn",
         r#"
 << core.io
@@ -41,7 +41,7 @@ Money = {
 /// its type name, a sum its variant, an array its elements.
 #[test]
 fn a_type_without_a_render_member_uses_the_default_for_its_shape() {
-    let run = run_program_named(
+    let (run, _dir) = run_program_named(
         "render_default.qn",
         r#"
 << core.io
@@ -85,7 +85,7 @@ fn a_trailing_site_does_not_hide_a_member_behind_the_builtin() {
     // A user `print` whose trailing `Site` makes its visible arity match the built-in's
     // used to be rejected; with the module's set closed it is an ordinary function, and
     // the compiler still fills the site in.
-    let run = run_program_named(
+    let (run, _dir) = run_program_named(
         "print_with_site.qn",
         r#"
 print = (label :: Text, at :: Site) -> Num => < label.size + at.line >
@@ -138,7 +138,7 @@ fn a_call_at_another_arity_reports_the_builtins_arity() {
 /// passes the rendered bytes through as they are.
 #[test]
 fn write_renders_a_non_text_value() {
-    let run = run_program_named(
+    let (run, _dir) = run_program_named(
         "write_renders.qn",
         r#"
 << core.io
@@ -186,7 +186,7 @@ Tag = {
 /// values instead of an empty/garbage `NotOk` payload.
 #[test]
 fn printing_a_mapped_array_of_results_reads_every_variants_unified_payload() {
-    let run = run_program_named(
+    let (run, _dir) = run_program_named(
         "array_result_unification.qn",
         r#"
 << core.io

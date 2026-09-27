@@ -7,26 +7,22 @@
 //! with a diagnostic. Every "past the limit" case here nests thousands of levels
 //! deep — enough that the pre-guard parser aborted with exit 134 on this input.
 
-use std::io::Write;
 use std::process::{Command, Output};
 
-/// Write `source` to a temp `.qn` file and run `quilon check` on it. The file
-/// lives under the system temp dir, namespaced by pid + `name` so parallel test
-/// runs don't collide.
+/// Write `source` to a temp `.qn` file and run `quilon check` on it.
 fn check(name: &str, source: &str) -> Output {
-    let mut path = std::env::temp_dir();
-    path.push(format!("quilon_depth_{}_{}.qn", std::process::id(), name));
-    let mut f = std::fs::File::create(&path).expect("create temp .qn");
-    f.write_all(source.as_bytes()).expect("write temp .qn");
+    let file = tempfile::Builder::new()
+        .prefix(&format!("quilon_depth_{name}_"))
+        .suffix(".qn")
+        .tempfile()
+        .expect("create temp .qn");
+    std::fs::write(file.path(), source).expect("write temp .qn");
 
-    let out = Command::new(env!("CARGO_BIN_EXE_quilon"))
+    Command::new(env!("CARGO_BIN_EXE_quilon"))
         .arg("check")
-        .arg(&path)
+        .arg(file.path())
         .output()
-        .expect("run quilon");
-
-    let _ = std::fs::remove_file(&path);
-    out
+        .expect("run quilon")
 }
 
 /// Assert the run failed *cleanly*: it exited with a normal non-zero status (not
