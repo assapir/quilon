@@ -2,8 +2,8 @@
 
 use crate::ast::{
     BinaryOperator, Expression, FunctionDeclaration, Import, InterpolationPart, Item,
-    MethodDeclaration, ModulePath, Parameter, Program, Statement, TypeDeclaration, TypeDefinition,
-    TypeNameUse, UnaryOperator, VariableDeclaration,
+    MethodDeclaration, ModulePath, Parameter, Program, Statement, TrapDeclaration, TypeDeclaration,
+    TypeDefinition, TypeNameUse, UnaryOperator, VariableDeclaration,
 };
 use crate::diagnostic::Code;
 use crate::lexer::{FileId, Lexer, ROOT_FILE, Span, StrChunk, Token, TokenKind};

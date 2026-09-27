@@ -31,6 +31,9 @@ impl<'a> Parser<'a> {
                 self.parse_import().map(|import| imports.push(import))
             } else if self.at_test_block() {
                 self.parse_expression().map(|expr| test_blocks.push(expr))
+            } else if self.check(&TokenKind::Trap) {
+                self.parse_trap_declaration()
+                    .map(|trap| items.push(Item::TrapDeclaration(trap)))
             } else {
                 self.parse_item().map(|item| items.push(item))
             };
@@ -106,6 +109,25 @@ impl<'a> Parser<'a> {
         Ok(Import {
             path,
             span: self.span(start.start, end.end),
+        })
+    }
+
+    /// Placement/uniqueness are the checker's job, not this function's.
+    pub(super) fn parse_trap_declaration(&mut self) -> Result<TrapDeclaration, ParseError> {
+        let start = self.current_span();
+        self.expect(&TokenKind::Trap)?;
+        let arms = self.parse_arm_list()?;
+        if arms.is_empty() {
+            return Err(ParseError::new(
+                Code::EmptyTrap,
+                self.span(start.start, self.previous_span().end),
+                "a signal trap needs at least one `|` arm",
+            ));
+        }
+        let end = arms.last().unwrap().span.end;
+        Ok(TrapDeclaration {
+            arms,
+            span: self.span(start.start, end),
         })
     }
 

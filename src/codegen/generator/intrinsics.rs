@@ -272,6 +272,9 @@ impl<'ctx> CodeGenerator<'ctx> {
                 &[ptr.into(), i64t.into(), ptr.into(), ptr.into(), ptr.into()],
                 false,
             ),
+            // void __trap_install(double signalIndex, ptr armFn) — signalIndex is an index
+            // into the fixed `Signal` variant order, never a raw OS signal number.
+            "__trap_install" => void.fn_type(&[f64t.into(), ptr.into()], false),
             // { ptr, i64 } __connection_read_launch(double connectionId) — `Connection`'s
             // `@read`: launch a background read of whatever bytes have arrived and return
             // the DEFERRED Text immediately, forced (via `__force_text`) at its strict-use

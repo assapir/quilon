@@ -90,6 +90,12 @@ pub fn reachable_functions(program: &Program) -> Option<HashSet<&str>> {
                     mentions(&method.body, &mut pending);
                 }
             }
+            // The runtime calls an arm directly, with no call site to mention it.
+            Item::TrapDeclaration(trap) => {
+                for arm in &trap.arms {
+                    mentions(&arm.body, &mut pending);
+                }
+            }
         }
     }
 
@@ -239,6 +245,8 @@ fn mentions<'a>(expression: &'a Expression, out: &mut Vec<&'a str>) {
                             mentions(&method.body, out);
                         }
                     }
+                    // A trap is a top-level-only item; never a block statement.
+                    Statement::Item(Item::TrapDeclaration(_)) => {}
                 }
             }
         }

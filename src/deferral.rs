@@ -225,6 +225,13 @@ impl<'a> Taint<'a> {
                     self.analyze_method(method);
                 }
             }
+            // The runtime calls an arm directly, so its own launch is joined here too.
+            Item::TrapDeclaration(trap) => {
+                for arm in &trap.arms {
+                    let scope = self.fresh_scope();
+                    self.strict(&arm.body, &scope);
+                }
+            }
         }
     }
 
@@ -434,6 +441,10 @@ impl<'a> Taint<'a> {
                     for method in t.type_definition.methods() {
                         self.analyze_method(method);
                     }
+                }
+                // A trap is a top-level-only item; never a block statement.
+                Statement::Item(Item::TrapDeclaration(_)) => {
+                    unreachable!("a trap is a top-level-only item")
                 }
                 Statement::Expression(e) => {
                     if index == last {
@@ -788,6 +799,18 @@ mod tests {
     fn a_pure_block_is_not_a_launch_scope() {
         let i = info("^ = () -> Num => < 1 + 2 * 3 >");
         assert!(i.launch_scopes.is_empty());
+    }
+
+    #[test]
+    fn a_trap_arms_own_deferred_body_is_forced() {
+        let src = "!> | Interrupt(s) => @readStdin()\n^ = () -> Num => < 0 >";
+        assert_eq!(info(src).force_sites.len(), 1);
+    }
+
+    #[test]
+    fn a_trap_arm_that_never_forces_has_no_force_site() {
+        let src = "!> | Interrupt(s) => 1\n^ = () -> Num => < 0 >";
+        assert_eq!(info(src).force_sites.len(), 0);
     }
 
     #[test]

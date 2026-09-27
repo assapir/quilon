@@ -136,6 +136,8 @@ fn collect(
                         block_local.insert(declaration.name.clone());
                     }
                     Statement::Item(Item::TypeDeclaration(_)) => {}
+                    // A trap is top-level-only; never a block statement.
+                    Statement::Item(Item::TrapDeclaration(_)) => {}
                 }
             }
         }

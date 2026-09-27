@@ -41,6 +41,7 @@ mod tco;
 #[cfg(test)]
 mod tests;
 mod text;
+mod trap;
 
 use mangle::{fmt_parameter_types, mangle_overload, method_symbol, type_mangle};
 use oracle::zeroed;
@@ -103,6 +104,14 @@ fn all_type_declarations<'a>(program: &'a Program) -> Vec<&'a TypeDeclaration> {
                     &declaration.value,
                     &mut collect_from_blocks,
                 );
+            }
+            Item::TrapDeclaration(trap) => {
+                for arm in &trap.arms {
+                    let _ = crate::ast::walk::try_for_each_subexpression(
+                        &arm.body,
+                        &mut collect_from_blocks,
+                    );
+                }
             }
         }
     }
@@ -318,6 +327,8 @@ pub struct CodeGenerator<'ctx> {
     // helper) can append a block AFTER the one execution actually continues from, so the
     // true resume point has to be recorded explicitly rather than derived.
     init_block: Option<inkwell::basic_block::BasicBlock<'ctx>>,
+    // Signal trap arms as `(signal index, function)`, installed once `^`'s entry emits.
+    trap_arms: Vec<(usize, FunctionValue<'ctx>)>,
 }
 
 /// The loop-lowering context for self-tail-call optimization of one function. Present
@@ -447,6 +458,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             fn_call_site_arity: HashMap::new(),
             init_function: None,
             init_block: None,
+            trap_arms: Vec::new(),
         };
         codegen.register_builtin_sum_types();
         codegen.register_builtin_record_types();
@@ -945,6 +957,20 @@ impl<'ctx> CodeGenerator<'ctx> {
             .build_call(init_function, &[], "")
             .map_err(ctx("Failed to call __ql_init"))?;
 
+        // Here, not in bare `main`: installing a trap spawns a fiber, which needs the
+        // scheduler `__run_fiber_main` is what starts.
+        if !self.trap_arms.is_empty() {
+            let install = self.get_intrinsic("__trap_install")?;
+            let f64_type = self.context.f64_type();
+            for (index, arm_function) in self.trap_arms.clone() {
+                let signal_index = f64_type.const_float(index as f64);
+                let arm_ptr = arm_function.as_global_value().as_pointer_value();
+                self.builder
+                    .build_call(install, &[signal_index.into(), arm_ptr.into()], "")
+                    .map_err(ctx("Failed to install a signal trap arm"))?;
+            }
+        }
+
         let user_entry = self
             .module
             .get_function("^")
@@ -1053,6 +1079,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                 self.generate_function_declaration(declaration)
             }
             Item::TypeDeclaration(declaration) => self.generate_type_declaration(declaration),
+            Item::TrapDeclaration(trap) => self.generate_trap(trap),
         }
     }
 

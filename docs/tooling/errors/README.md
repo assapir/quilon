@@ -108,6 +108,7 @@ its name relative to the first block (`` ```quilon title="lib/util.qn" ``).
 | [QN114](syntax.md#qn114--match-used-as-a-match-arm-body-without-parentheses) | match used as a match-arm body without parentheses |
 | [QN115](syntax.md#qn115--a-line-final--closed-a-block-earlier-than-intended) | a line-final `>` closed a block earlier than intended |
 | [QN116](syntax.md#qn116--text-pattern-with-interpolation) | text pattern with interpolation |
+| [QN117](syntax.md#qn117--signal-trap-with-no-arms) | signal trap with no arms |
 | [QN200](modules.md#qn200---primitive-declared-outside-the-corelib) | `@` primitive declared outside the corelib |
 | [QN201](modules.md#qn201--missing-module) | missing module |
 | [QN202](modules.md#qn202--private-member-reached-through-its-module) | private member reached through its module |
@@ -171,6 +172,11 @@ its name relative to the first block (`` ```quilon title="lib/util.qn" ``).
 | [QN351](semantics.md#qn351--unresolved-result-payload) | unresolved `Result` payload |
 | [QN352](semantics.md#qn352--top-level-function-never-called) | top-level function never called |
 | [QN353](semantics.md#qn353--top-level-function-reachable-only-from-test-blocks) | top-level function reachable only from test blocks |
+| [QN354](semantics.md#qn354--signal-trap-outside-the-root-file) | signal trap outside the root file |
+| [QN355](semantics.md#qn355--second-signal-trap) | second signal trap |
+| [QN356](semantics.md#qn356--signal-trap-without-coreprocess) | signal trap without `core.process` |
+| [QN357](semantics.md#qn357--signal-trap-arm-without-a-signal-pattern) | signal trap arm without a signal pattern |
+| [QN358](semantics.md#qn358--duplicate-signal-trap-arm) | duplicate signal trap arm |
 | [QN400](build.md#qn400--code-generation-failed) | code generation failed |
 | [QN401](build.md#qn401--native-build-failed) | native build failed |
 | [QN500](runtime.md#qn500--assertion-failed) | assertion failed |

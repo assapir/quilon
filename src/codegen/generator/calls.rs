@@ -996,7 +996,7 @@ impl<'ctx> CodeGenerator<'ctx> {
     /// constructor. Shape-only: every caller already knows its field values in order, so
     /// this needs no type name to pick between them — the call site's own inferred type is
     /// what tells Quilon code which one it is.
-    fn build_plain_record(
+    pub(super) fn build_plain_record(
         &mut self,
         fields: &[BasicValueEnum<'ctx>],
     ) -> Result<BasicValueEnum<'ctx>, String> {

@@ -61,6 +61,7 @@ pub mod stack_overflow;
 pub mod test_registry;
 pub mod text;
 pub mod time;
+pub mod trap;
 
 pub use abort_trap::{__abort_trap_report, __abort_trap_run};
 pub use collections::{
@@ -98,6 +99,7 @@ pub use text::{
     __text_to_upper, __text_trim_end, __text_trim_start,
 };
 pub use time::{__now, __sleep};
+pub use trap::__trap_install;
 
 use mem::QnSlice;
 use std::os::raw::{c_char, c_int, c_void};
@@ -273,6 +275,7 @@ intrinsic_registry! {
     __test_case_run_guarded: extern "C" fn(*const c_void, *mut c_void),
     __abort_trap_run: extern "C" fn(*const c_void, *mut c_void) -> u8,
     __abort_trap_report: extern "C" fn() -> QnSlice,
+    __trap_install: extern "C" fn(f64, *const c_void),
 }
 
 // Shared unit-test support. `GC_LOCK` is taken by GC-touching tests in more than one

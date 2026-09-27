@@ -192,10 +192,15 @@ pub fn qualify_module(
 
     for item in &mut program.items {
         check_claim(item, scope)?;
+        // A trap declares no name of its own to rename.
+        if let Item::TrapDeclaration(_) = item {
+            continue;
+        }
         let name = match item {
             Item::VariableDeclaration(d) => &mut d.name,
             Item::FunctionDeclaration(d) => &mut d.name,
             Item::TypeDeclaration(d) => &mut d.name,
+            Item::TrapDeclaration(_) => unreachable!("handled above"),
         };
         if let Some(renamed) = renames.get(name.as_str()) {
             *name = renamed.clone();
@@ -370,6 +375,19 @@ impl Walker<'_> {
                 }
                 Ok(())
             }
+            // A bare pattern name (`Interrupt`) is left untouched — the checker resolves it
+            // against `process.Signal`'s variants itself.
+            Item::TrapDeclaration(trap) => {
+                for arm in &mut trap.arms {
+                    self.locals.push(HashSet::new());
+                    let result = self
+                        .pattern(&mut arm.pattern)
+                        .and_then(|()| self.expression(&mut arm.body));
+                    self.locals.pop();
+                    result?;
+                }
+                Ok(())
+            }
         }
     }
 
@@ -448,6 +466,10 @@ impl Walker<'_> {
                 self.function_declaration_body(declaration)
             }
             Statement::Item(item @ Item::TypeDeclaration(_)) => self.item(item),
+            // Top-level-only; never a block statement.
+            Statement::Item(Item::TrapDeclaration(_)) => {
+                unreachable!("a trap is a top-level-only item")
+            }
         }
     }
 

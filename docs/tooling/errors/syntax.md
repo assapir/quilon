@@ -286,3 +286,16 @@ greet = (title :: Text, name :: Text) -> Text => < name ?
 
 Write the pattern as a plain literal — `| "Smith" => …` — and compare the computed part
 in the arm's body instead.
+
+### QN117 — signal trap with no arms
+
+`!>` with no `| Pattern => expression` arm after it. A trap with nothing to match keeps
+every signal at its OS default already — write at least one arm, or remove the trap.
+
+```quilon ignore
+<< core.process
+
+!>
+
+^ = () -> Num => < 0 >
+```

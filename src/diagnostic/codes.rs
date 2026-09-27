@@ -64,6 +64,7 @@ codes! {
     NestedMatchNeedsParens = 114 => "match used as a match-arm body without parentheses",
     EarlyBlockClose = 115 => "a line-final `>` closed a block earlier than intended",
     InterpolatedTextPattern = 116 => "text pattern with interpolation",
+    EmptyTrap = 117 => "signal trap with no arms",
 
     // Family 2 — module resolution and linking
     AtDeclarationOutsideCorelib = 200 => "`@` primitive declared outside the corelib",
@@ -131,6 +132,11 @@ codes! {
     UnresolvedResultPayload = 351 => "unresolved `Result` payload",
     NeverReachable = 352 => "top-level function never called",
     ReachableOnlyFromTests = 353 => "top-level function reachable only from test blocks",
+    TrapOutsideRootFile = 354 => "signal trap outside the root file",
+    SecondTrap = 355 => "second signal trap",
+    TrapWithoutProcessImport = 356 => "signal trap without `core.process`",
+    TrapArmNotASignalPattern = 357 => "signal trap arm without a signal pattern",
+    DuplicateTrapArm = 358 => "duplicate signal trap arm",
 
     // Family 4 — codegen and build
     CodegenFailed = 400 => "code generation failed",
