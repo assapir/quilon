@@ -209,9 +209,15 @@ fn ensure_registered() {
     if REGISTRATION_SETTLED.replace(true) {
         return;
     }
-    __gc_init();
+    // Through the same one-time gate `scheduler::run` uses, rather than duplicating
+    // `GC_init`/`GC_allow_register_threads` behind a second, independent `Once` — two
+    // uncoordinated first-time gates racing each other (one thread's first allocation
+    // here, another thread's first `run()`, at the same moment) has no guarantee from
+    // bdwgc's own docs of being safe, and `install_hooks` is already idempotent and safe
+    // to call from a thread that never runs a scheduler at all.
+    install_hooks();
     // SAFETY: a plain query, no preconditions beyond the collector being initialized
-    // (`__gc_init` above, idempotent, guarantees that).
+    // (`install_hooks` above, idempotent, guarantees that).
     if unsafe { GC_thread_is_registered() } == 0 {
         SELF_REGISTERED.with(|cell| *cell.borrow_mut() = Some(register_thread()));
     }
