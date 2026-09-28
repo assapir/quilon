@@ -1,0 +1,13 @@
+# `MACOSX_DEPLOYMENT_TARGET` reaches every build script and `rustc` invocation Cargo spawns
+# for this workspace, on every platform Cargo runs `[env]` unconditionally for — the only
+# way to give a THIRD-PARTY crate's own build script (not just quilon-rt's) the same target.
+# `ring` (a transitive dependency of `rustls`, for TLS) compiles hand-tuned assembly through
+# the `cc` crate; without this, its objects pick up the CI runner's ambient SDK version
+# rather than the deployment target quilon-rt and the final link already agree on, tripping
+# `.github/actions/verify-self-contained-asset`'s "was built for newer macOS version" check.
+# Value: rustc's own default for `x86_64`/`aarch64-apple-darwin`, the same one
+# `build_support/deployment_target.rs::macos_deployment_target()` falls back to when this
+# variable is absent — keep the two in agreement if that default ever moves. Meaningless
+# (and unread) on every non-Apple target.
+[env]
+MACOSX_DEPLOYMENT_TARGET = "11.0"
