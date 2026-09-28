@@ -3,9 +3,6 @@
 //! -> codegen -> JIT) and asserts the program's real exit code, mirroring `run_test.rs`.
 
 use std::process::Command;
-use std::sync::atomic::{AtomicU64, Ordering};
-
-// Unique suffix for temp files across parallel subprocess crash tests.
 
 mod common;
 use common::{
@@ -13,8 +10,6 @@ use common::{
     tool_available,
 };
 use std::time::{Duration, Instant};
-
-static CRASH_SEQ: AtomicU64 = AtomicU64::new(0);
 
 /// Run `src` via `quilon run` in a SUBPROCESS and assert it aborts with exit code 5
 /// and prints `expect_stderr` to stderr. Used for the fail-loud runtime paths (an invalid
@@ -35,22 +30,20 @@ fn assert_run_aborts(src: &str, expect_stderr: &str) {
 /// Run `src` as a subprocess (never the in-process JIT — these programs call `__exit`,
 /// which would take the test runner with them) and return `(exit code, stderr)`.
 fn run_and_capture(src: &str) -> (i32, String) {
-    let seq = CRASH_SEQ.fetch_add(1, Ordering::Relaxed);
-    let dir =
-        std::env::temp_dir().join(format!("quilon_replace_abort_{}_{seq}", std::process::id()));
-    std::fs::create_dir_all(&dir).expect("create temp dir");
-    let file = dir.join("prog.qn");
+    let dir = tempfile::Builder::new()
+        .prefix("quilon_replace_abort_")
+        .tempdir()
+        .expect("create temp dir");
+    let file = dir.path().join("prog.qn");
     std::fs::write(&file, src).expect("write temp program");
     let out = Command::new(env!("CARGO_BIN_EXE_quilon"))
         .args(["run", file.to_str().unwrap()])
         .output()
         .expect("run quilon run");
-    let captured = (
+    (
         out.status.code().unwrap_or(-1),
         String::from_utf8_lossy(&out.stderr).into_owned(),
-    );
-    let _ = std::fs::remove_dir_all(&dir);
-    captured
+    )
 }
 
 // ---- split ----------------------------------------------------------------
@@ -311,7 +304,7 @@ fn repeat_literal_negative_or_fractional_count_is_a_compile_error() {
 fn a_replace_misuse_reports_its_own_location() {
     // The underline covers the CALL — `"a-a-a".replace("a", "b", n)` — not the trailing
     // `.size` the result feeds into.
-    let run = run_program_named(
+    let (run, _dir) = run_program_named(
         "replace_misuse.qn",
         "^ = () -> Num => <\n  n = 2 + 3\n  \"a-a-a\".replace(\"a\", \"b\", n).size\n>",
     );
@@ -795,7 +788,7 @@ fn at_takes_exactly_one_num_index() {
 fn replace_all_50000_repeats_finishes_quickly_under_jit() {
     let src = "<< core.io\n^ = () -> Num => <\n  big = \"ab\".repeat(50000)\n  io.print(big.replaceAll(\"a\", \"\").length)\n  0\n>";
     let start = Instant::now();
-    let run = run_program_named("replace_all_perf_jit.qn", src);
+    let (run, _dir) = run_program_named("replace_all_perf_jit.qn", src);
     let elapsed = start.elapsed();
     assert_eq!(run.code, 0, "program failed: {}", run.stderr);
     assert_eq!(
@@ -833,7 +826,7 @@ fn split_50000_repeats_finishes_quickly_under_jit() {
     // "ab" x 50000 has 50000 occurrences of "b", so splitting on it yields 50001 pieces.
     let src = "<< core.io\n^ = () -> Num => <\n  big = \"ab\".repeat(50000)\n  io.print(big.split(\"b\").size)\n  0\n>";
     let start = Instant::now();
-    let run = run_program_named("split_perf_jit.qn", src);
+    let (run, _dir) = run_program_named("split_perf_jit.qn", src);
     let elapsed = start.elapsed();
     assert_eq!(run.code, 0, "program failed: {}", run.stderr);
     assert_eq!(

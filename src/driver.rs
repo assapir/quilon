@@ -499,20 +499,16 @@ mod tests {
             .join(name)
     }
 
-    /// Write `source` to a unique temp `.qn` file and return its path.
-    fn temp_source(source: &str) -> PathBuf {
-        let mut path = std::env::temp_dir();
-        let unique = format!(
-            "quilon_at_decl_{}_{}.qn",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        );
-        path.push(unique);
-        std::fs::write(&path, source).expect("write temp .qn");
-        path
+    /// Write `source` to a unique temp `.qn` file and return the [`tempfile::NamedTempFile`]
+    /// owning it — kept bound for as long as the test needs the file to exist.
+    fn temp_source(source: &str) -> tempfile::NamedTempFile {
+        let file = tempfile::Builder::new()
+            .prefix("quilon_at_decl_")
+            .suffix(".qn")
+            .tempfile()
+            .expect("create temp .qn");
+        std::fs::write(file.path(), source).expect("write temp .qn");
+        file
     }
 
     #[test]
@@ -532,8 +528,7 @@ mod tests {
     #[test]
     fn user_source_may_not_declare_an_at_primitive() {
         let path = temp_source("@bad = () -> Num => < 0 >\n^ = () -> Num => < 0 >\n");
-        let result = front_end(&path);
-        let _ = std::fs::remove_file(&path);
+        let result = front_end(path.path());
         match result {
             Ok(_) => panic!("a user `@` declaration must be rejected"),
             Err(error) => assert!(
@@ -548,8 +543,7 @@ mod tests {
         // `@name := value` is an atomic binding, not an `@` primitive declaration — the
         // parser strips the `@` from the stored name, so this must check clean.
         let path = temp_source("@naps := 0\n^ = () -> Num => < naps >\n");
-        let result = front_end(&path);
-        let _ = std::fs::remove_file(&path);
+        let result = front_end(path.path());
         assert!(
             result.is_ok(),
             "a top-level atomic binding should check clean: {:?}",

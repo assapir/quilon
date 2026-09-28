@@ -22,7 +22,7 @@ const PROGRAM: &str = r#"
 
 #[test]
 fn a_qn_program_runs() {
-    let run = run_program_named(&format!("modern{EXTENSION}"), PROGRAM);
+    let (run, _dir) = run_program_named(&format!("modern{EXTENSION}"), PROGRAM);
     assert_eq!(run.code, 7);
     assert_eq!(run.stdout, "out");
     assert_eq!(run.stderr, "", "a source named correctly says nothing");
@@ -30,7 +30,7 @@ fn a_qn_program_runs() {
 
 #[test]
 fn a_ql_program_is_rejected_by_name() {
-    let run = run_program_named("legacy.ql", PROGRAM);
+    let (run, _dir) = run_program_named("legacy.ql", PROGRAM);
     assert_ne!(run.code, 7, "a `.ql` file is not a Quilon source");
     assert_eq!(run.stdout, "", "it is rejected before it is compiled");
     assert!(
@@ -44,7 +44,7 @@ fn a_ql_program_is_rejected_by_name() {
 fn a_source_with_no_extension_is_rejected_too() {
     // The rule is what a source is *named*, not what it isn't: a bare name is no more a
     // Quilon source than a `.ql` one, and gets the same answer.
-    let run = run_program_named("program", PROGRAM);
+    let (run, _dir) = run_program_named("program", PROGRAM);
     assert_ne!(run.code, 7);
     assert!(
         run.stderr.contains("program") && run.stderr.contains(EXTENSION),
@@ -55,11 +55,13 @@ fn a_source_with_no_extension_is_rejected_too() {
 
 #[test]
 fn a_ql_module_import_is_rejected_under_its_own_name() {
-    let root = run_program_named(
+    // `_dir` must stay bound (not `_`) — `helper.ql` is written into it below, and
+    // `run_file` reruns `root` out of it, both after this call has returned.
+    let (root_run, _dir) = run_program_named(
         &format!("root{EXTENSION}"),
         "<< \"helper.ql\"\n\n^ = () -> Num => <\n  answer()\n>\n",
-    )
-    .path;
+    );
+    let root = root_run.path;
     let directory = root.parent().expect("the program's directory");
     std::fs::write(
         directory.join("helper.ql"),

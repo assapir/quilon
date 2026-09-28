@@ -297,17 +297,18 @@ fn build_and_run(quilon: &Path, linker: &str, dir: &Path) -> i32 {
 #[test]
 fn every_intrinsic_survives_the_aot_link() {
     let quilon = PathBuf::from(env!("CARGO_BIN_EXE_quilon"));
-    let dir = std::env::temp_dir().join(format!("quilon-intrinsic-link-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).expect("creating the work directory");
+    let dir = tempfile::Builder::new()
+        .prefix("quilon_intrinsic_link_")
+        .tempdir()
+        .expect("creating the work directory");
 
     for linker in linkers_on_path() {
         assert_eq!(
-            build_and_run(&quilon, linker, &dir),
+            build_and_run(&quilon, linker, dir.path()),
             0,
             "the every-intrinsic program must exit 0 (linker={linker})"
         );
     }
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// The same program under the JIT, where a missing intrinsic is a call to a null address
@@ -315,9 +316,11 @@ fn every_intrinsic_survives_the_aot_link() {
 #[test]
 fn every_intrinsic_resolves_under_the_jit() {
     let quilon = PathBuf::from(env!("CARGO_BIN_EXE_quilon"));
-    let dir = std::env::temp_dir().join(format!("quilon-intrinsic-jit-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).expect("creating the work directory");
-    let source = dir.join("every_intrinsic.qn");
+    let dir = tempfile::Builder::new()
+        .prefix("quilon_intrinsic_jit_")
+        .tempdir()
+        .expect("creating the work directory");
+    let source = dir.path().join("every_intrinsic.qn");
     std::fs::write(&source, EVERY_INTRINSIC).expect("writing the test program");
 
     let run = Command::new(&quilon)
@@ -331,7 +334,6 @@ fn every_intrinsic_resolves_under_the_jit() {
         "the JIT could not resolve every intrinsic:\n{}",
         String::from_utf8_lossy(&run.stderr)
     );
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// The program above is only a gate on every intrinsic for as long as it actually
@@ -340,9 +342,11 @@ fn every_intrinsic_resolves_under_the_jit() {
 #[test]
 fn the_smoke_program_reaches_every_intrinsic() {
     let quilon = PathBuf::from(env!("CARGO_BIN_EXE_quilon"));
-    let dir = std::env::temp_dir().join(format!("quilon-intrinsic-cover-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).expect("creating the work directory");
-    let source = dir.join("every_intrinsic.qn");
+    let dir = tempfile::Builder::new()
+        .prefix("quilon_intrinsic_cover_")
+        .tempdir()
+        .expect("creating the work directory");
+    let source = dir.path().join("every_intrinsic.qn");
     std::fs::write(&source, EVERY_INTRINSIC).expect("writing the test program");
 
     let compile = Command::new(&quilon)
@@ -392,8 +396,6 @@ fn the_smoke_program_reaches_every_intrinsic() {
         "the smoke program no longer reaches {unreached:?}, so the link gate would not \
          notice those being dropped — extend the program to use them again"
     );
-
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// The `-u` mechanism itself, rather than the archive's contents.
@@ -527,10 +529,11 @@ mod forced_undefined_symbols {
             return;
         };
 
-        let dir =
-            std::env::temp_dir().join(format!("quilon-intrinsic-forced-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).expect("creating the work directory");
-        let source = dir.join("barely_any_intrinsic.qn");
+        let dir = tempfile::Builder::new()
+            .prefix("quilon_intrinsic_forced_")
+            .tempdir()
+            .expect("creating the work directory");
+        let source = dir.path().join("barely_any_intrinsic.qn");
         std::fs::write(&source, BARELY_ANY_INTRINSIC).expect("writing the test program");
 
         let compile = Command::new(&quilon)
@@ -549,7 +552,7 @@ mod forced_undefined_symbols {
 
         for linker in linkers_on_path() {
             let Some(must_be_forced) =
-                intrinsics_a_plain_scan_drops(linker, &archive, &dir, &reached)
+                intrinsics_a_plain_scan_drops(linker, &archive, dir.path(), &reached)
             else {
                 continue;
             };
@@ -565,7 +568,7 @@ mod forced_undefined_symbols {
                 continue;
             }
 
-            let out = dir.join(format!("barely_any_intrinsic_{linker}"));
+            let out = dir.path().join(format!("barely_any_intrinsic_{linker}"));
             build_with(&quilon, &source, &out, linker);
             let linked = defined_symbols(&out);
             let dropped: Vec<&&str> = must_be_forced
@@ -579,6 +582,5 @@ mod forced_undefined_symbols {
                  per-intrinsic `-u` flags are no longer forcing them in"
             );
         }
-        let _ = std::fs::remove_dir_all(&dir);
     }
 }

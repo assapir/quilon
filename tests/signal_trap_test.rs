@@ -8,7 +8,7 @@ mod common;
 use common::ensure_runtime_lib;
 use std::io::{BufRead, BufReader};
 use std::os::unix::process::ExitStatusExt;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
@@ -67,19 +67,17 @@ const NO_TRAP_PROGRAM: &str = r#"
 >
 "#;
 
-/// Write `source` to a unique temp `.qn` file and return its path.
-fn temp_ql(tag: &str, source: &str) -> PathBuf {
-    let mut path = std::env::temp_dir();
-    path.push(format!(
-        "quilon_signal_trap_{tag}_{}_{}.qn",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
-    std::fs::write(&path, source).expect("write temp .qn");
-    path
+/// Write `source` to a unique temp `.qn` file and return the [`tempfile::NamedTempFile`]
+/// owning it — it must stay bound for as long as the spawned child needs the file to exist,
+/// which for every test here is until [`wait_bounded`] returns.
+fn temp_ql(tag: &str, source: &str) -> tempfile::NamedTempFile {
+    let file = tempfile::Builder::new()
+        .prefix(&format!("quilon_signal_trap_{tag}_"))
+        .suffix(".qn")
+        .tempfile()
+        .expect("create temp .qn");
+    std::fs::write(file.path(), source).expect("write temp .qn");
+    file
 }
 
 /// Wait for `child` to exit, killing it and failing loudly instead of hanging the test run
@@ -156,7 +154,7 @@ fn send_signal(pid: u32, signal: i32) {
 fn jit_sigint_runs_the_trap_arm() {
     let file = temp_ql("jit", TRAP_PROGRAM);
     let mut child = Command::new(env!("CARGO_BIN_EXE_quilon"))
-        .args(["run", file.to_str().unwrap()])
+        .args(["run", file.path().to_str().unwrap()])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -175,7 +173,6 @@ fn jit_sigint_runs_the_trap_arm() {
         Some(0),
         "the program's own `^` still returns 0 after the arm ran"
     );
-    let _ = std::fs::remove_file(&file);
 }
 
 #[test]
@@ -195,9 +192,13 @@ fn aot_sigint_runs_the_trap_arm() {
     let quilon = env!("CARGO_BIN_EXE_quilon");
     ensure_runtime_lib(Path::new(quilon).parent().expect("binary has a parent dir"));
 
-    let source = temp_ql("aot", TRAP_PROGRAM);
-    let binary =
-        std::env::temp_dir().join(format!("quilon_signal_trap_aot_{}", std::process::id()));
+    let dir = tempfile::Builder::new()
+        .prefix("quilon_signal_trap_aot_")
+        .tempdir()
+        .expect("create temp dir");
+    let source = dir.path().join("trap.qn");
+    std::fs::write(&source, TRAP_PROGRAM).expect("write temp .qn");
+    let binary = dir.path().join("trap");
     let build = Command::new(quilon)
         .args(["build", source.to_str().unwrap(), "--linker", linker])
         .args(["-o", binary.to_str().unwrap()])
@@ -208,7 +209,6 @@ fn aot_sigint_runs_the_trap_arm() {
         "`quilon build` failed: {}",
         String::from_utf8_lossy(&build.stderr)
     );
-    let _ = std::fs::remove_file(&source);
 
     let mut child = Command::new(&binary)
         .stdin(Stdio::null())
@@ -229,14 +229,13 @@ fn aot_sigint_runs_the_trap_arm() {
         Some(0),
         "native AOT: the program's own `^` still returns 0 after the arm ran"
     );
-    let _ = std::fs::remove_file(&binary);
 }
 
 #[test]
 fn a_burst_of_three_signals_runs_the_arm_exactly_twice() {
     let file = temp_ql("burst", BURST_PROGRAM);
     let mut child = Command::new(env!("CARGO_BIN_EXE_quilon"))
-        .args(["run", file.to_str().unwrap()])
+        .args(["run", file.path().to_str().unwrap()])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -274,14 +273,13 @@ fn a_burst_of_three_signals_runs_the_arm_exactly_twice() {
 
     let status = wait_bounded(child, Duration::from_secs(15));
     assert_eq!(status.code(), Some(0));
-    let _ = std::fs::remove_file(&file);
 }
 
 #[test]
 fn a_program_without_a_trap_dies_with_the_os_default_on_sigterm() {
     let file = temp_ql("no_trap", NO_TRAP_PROGRAM);
     let mut child = Command::new(env!("CARGO_BIN_EXE_quilon"))
-        .args(["run", file.to_str().unwrap()])
+        .args(["run", file.path().to_str().unwrap()])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -299,5 +297,4 @@ fn a_program_without_a_trap_dies_with_the_os_default_on_sigterm() {
         Some(libc::SIGTERM),
         "no trap installed — SIGTERM's OS default (terminate) must apply untouched, got {status:?}"
     );
-    let _ = std::fs::remove_file(&file);
 }

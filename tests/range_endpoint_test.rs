@@ -97,7 +97,7 @@ fn a_computed_endpoint_a_num_cannot_hold_aborts() {
             format!("{LIMIT} (got inf)"),
         ),
     ] {
-        let (code, stderr, _) = run_program(tag, source);
+        let (code, stderr, _, _dir) = run_program(tag, source);
         assert_eq!(code, 5, "{tag} must exit 5: {stderr}");
         assert!(
             stderr.contains(&expected),
@@ -110,7 +110,7 @@ fn a_computed_endpoint_a_num_cannot_hold_aborts() {
 /// with a caret run under it — the frame a bad `array[i]` prints.
 #[test]
 fn an_abort_reports_the_range_expression() {
-    let (code, stderr, path) = run_program("range_located", NAN_END);
+    let (code, stderr, path, _dir) = run_program("range_located", NAN_END);
     assert_eq!(code, 5);
     let expected = format!(
         "error[QN502]: a range endpoint must be a whole number (got NaN)\n{}",
@@ -168,7 +168,7 @@ fn a_lazily_consumed_range_validates_its_endpoints_the_same_way() {
             "^ = () -> Num => <\n  r = (1 <- (0.0 / 0.0)).map(n => n)\n  r.size\n>",
         ),
     ] {
-        let (code, stderr, _) = run_program(tag, source);
+        let (code, stderr, _, _dir) = run_program(tag, source);
         assert_eq!(code, 5, "{tag} must exit 5: {stderr}");
         assert!(
             stderr.contains("a range endpoint must be a whole number (got NaN)"),

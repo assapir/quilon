@@ -6,19 +6,16 @@
 mod common;
 use common::assert_exit;
 
-/// Write `bytes` to a fresh temp file and return its path.
-fn temp_data_file(tag: &str, bytes: &[u8]) -> std::path::PathBuf {
-    let mut path = std::env::temp_dir();
-    path.push(format!(
-        "quilon_streamfile_{tag}_{}_{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
-    std::fs::write(&path, bytes).expect("write temp data file");
-    path
+/// Write `bytes` to a fresh temp file and return the [`tempfile::NamedTempFile`] owning
+/// it — kept bound for as long as the program reading it (via `assert_exit`, which runs
+/// and returns synchronously) needs it to exist.
+fn temp_data_file(tag: &str, bytes: &[u8]) -> tempfile::NamedTempFile {
+    let file = tempfile::Builder::new()
+        .prefix(&format!("quilon_streamfile_{tag}_"))
+        .tempfile()
+        .expect("create temp data file");
+    std::fs::write(file.path(), bytes).expect("write temp data file");
+    file
 }
 
 #[test]
@@ -44,10 +41,9 @@ fn a_small_file_with_a_large_chunk_size_yields_ok_with_the_file_size() {
     | NotOk(_) => 0
 >
 "#,
-        path = file.display(),
+        path = file.path().display(),
     );
     assert_exit(&src, 7);
-    let _ = std::fs::remove_file(&file);
 }
 
 #[test]
@@ -72,23 +68,20 @@ fn on_chunk_returning_false_stops_after_the_first_chunk() {
     | NotOk(_) => 0
 >
 "#,
-        path = file.display(),
+        path = file.path().display(),
     );
     assert_exit(&src, 7);
-    let _ = std::fs::remove_file(&file);
 }
 
 #[test]
 fn a_missing_file_yields_not_ok() {
-    let mut path = std::env::temp_dir();
-    path.push(format!(
-        "quilon_streamfile_missing_{}_{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
+    // A path that must not exist: reserve a fresh temp dir and name a file inside it that
+    // is never created.
+    let dir = tempfile::Builder::new()
+        .prefix("quilon_streamfile_missing_")
+        .tempdir()
+        .expect("create temp dir");
+    let path = dir.path().join("never_written");
     let src = format!(
         r#"<< core.io
 
@@ -116,11 +109,10 @@ fn a_non_positive_chunk_size_yields_not_ok() {
     | NotOk(_) => 1
 >
 "#,
-            path = file.display(),
+            path = file.path().display(),
         );
         assert_exit(&src, 1);
     }
-    let _ = std::fs::remove_file(&file);
 }
 
 #[test]
@@ -138,10 +130,9 @@ fn a_chunk_size_too_large_to_allocate_yields_not_ok() {
     | NotOk(_) => 1
 >
 "#,
-        path = file.display(),
+        path = file.path().display(),
     );
     assert_exit(&src, 1);
-    let _ = std::fs::remove_file(&file);
 }
 
 #[test]
@@ -159,10 +150,9 @@ fn a_file_ending_inside_a_utf_8_sequence_yields_not_ok() {
     | NotOk(_) => 1
 >
 "#,
-        path = file.display(),
+        path = file.path().display(),
     );
     assert_exit(&src, 1);
-    let _ = std::fs::remove_file(&file);
 }
 
 #[test]
@@ -188,10 +178,9 @@ fn a_chunk_edge_inside_a_multi_byte_code_point_never_splits_it() {
     | NotOk(_) => 0
 >
 "#,
-        path = file.display(),
+        path = file.path().display(),
     );
     assert_exit(&src, 7);
-    let _ = std::fs::remove_file(&file);
 }
 
 #[test]
@@ -217,10 +206,9 @@ fn a_chunk_edge_inside_a_grapheme_cluster_never_splits_it() {
     | NotOk(_) => 0
 >
 "#,
-        path = file.display(),
+        path = file.path().display(),
     );
     assert_exit(&src, 15);
-    let _ = std::fs::remove_file(&file);
 }
 
 #[test]
@@ -240,8 +228,7 @@ fn io_stream_file_is_streamfile_with_a_default_chunk_size() {
     | NotOk(_) => 0
 >
 "#,
-        path = file.display(),
+        path = file.path().display(),
     );
     assert_exit(&src, 3);
-    let _ = std::fs::remove_file(&file);
 }

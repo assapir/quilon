@@ -202,7 +202,7 @@ fn a_deferred_value_is_forced_at_a_global_initializer() {
     let file = temp_ql("global_defer", source);
 
     let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_quilon"));
-    command.args(["run", file.to_str().unwrap()]);
+    command.args(["run", file.path().to_str().unwrap()]);
     let (code, stdout) = run_with_stdin(command, b"kaki the yak\n");
 
     assert_eq!(code, Some(0));
@@ -211,5 +211,4 @@ fn a_deferred_value_is_forced_at_a_global_initializer() {
         "kaki the yak\n",
         "the global's deferred @readStdin value must have been forced before `^` ran"
     );
-    let _ = std::fs::remove_file(&file);
 }

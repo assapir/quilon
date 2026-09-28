@@ -3,27 +3,23 @@
 //! terminates the process, so these tests drive the real `quilon` binary as a subprocess
 //! (an in-process JIT run would take the test harness down with it).
 
-use std::io::Write;
 use std::process::Command;
 
 /// Write `source` to a temp `.qn` file, `quilon run` it, and return `(exit_code, stderr)`.
 fn run(name: &str, source: &str) -> (i32, String) {
-    let mut path = std::env::temp_dir();
-    path.push(format!(
-        "quilon_write_fd_{}_{}.qn",
-        std::process::id(),
-        name
-    ));
-    let mut file = std::fs::File::create(&path).expect("create temp .qn");
-    file.write_all(source.as_bytes()).expect("write temp .qn");
+    let file = tempfile::Builder::new()
+        .prefix(&format!("quilon_write_fd_{name}_"))
+        .suffix(".qn")
+        .tempfile()
+        .expect("create temp .qn");
+    std::fs::write(file.path(), source).expect("write temp .qn");
 
     let out = Command::new(env!("CARGO_BIN_EXE_quilon"))
         .arg("run")
-        .arg(&path)
+        .arg(file.path())
         .output()
         .expect("run quilon");
 
-    let _ = std::fs::remove_file(&path);
     (
         out.status.code().unwrap_or(-1),
         String::from_utf8_lossy(&out.stderr).into_owned(),

@@ -18,6 +18,7 @@ use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::thread::JoinHandle;
+use tempfile::TempDir;
 
 /// A program that sends `PING\n` to `address`, matches the `Result`, and asserts the `Ok`
 /// response equals `expected`. The deferred `@tcpRequest` value is forced at the `?` match: a
@@ -116,19 +117,16 @@ fn spawn_pong_server(connections: usize) -> (String, JoinHandle<()>) {
     spawn_pong_server_on("127.0.0.1:0", connections)
 }
 
-/// Write `source` to a unique temp `.qn` file and return its path.
-fn temp_ql(tag: &str, source: &str) -> PathBuf {
-    let mut path = std::env::temp_dir();
-    path.push(format!(
-        "quilon_tcp_{tag}_{}_{}.qn",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
-    std::fs::write(&path, source).expect("write temp .qn");
-    path
+/// Write `source` to a unique temp `.qn` file and return the [`tempfile::NamedTempFile`]
+/// owning it — kept bound for as long as the test needs the file to exist.
+fn temp_ql(tag: &str, source: &str) -> tempfile::NamedTempFile {
+    let file = tempfile::Builder::new()
+        .prefix(&format!("quilon_tcp_{tag}_"))
+        .suffix(".qn")
+        .tempfile()
+        .expect("create temp .qn");
+    std::fs::write(file.path(), source).expect("write temp .qn");
+    file
 }
 
 /// Run `command` to completion and return its exit code.
@@ -169,21 +167,19 @@ fn jit_tcp_request_round_trips_and_forces() {
 
     let match_file = temp_ql("match", &program(&address, "PONG\\n"));
     assert_eq!(
-        jit_run(&match_file),
+        jit_run(match_file.path()),
         Some(0),
         "@tcpRequest should force to the server's \"PONG\" response and pass"
     );
 
     let mismatch_file = temp_ql("mismatch", &program(&address, "NOPE\\n"));
     assert_eq!(
-        jit_run(&mismatch_file),
+        jit_run(mismatch_file.path()),
         Some(5),
         "a non-matching expectation must trip the assertion, proving the real bytes flowed"
     );
 
     server.join().expect("server thread");
-    let _ = std::fs::remove_file(&match_file);
-    let _ = std::fs::remove_file(&mismatch_file);
 }
 
 #[test]
@@ -201,13 +197,12 @@ fn jit_tcp_request_round_trips_through_the_address_overload() {
         &program_via_address_overload("127.0.0.1", port, "PONG\\n"),
     );
     assert_eq!(
-        jit_run(&file),
+        jit_run(file.path()),
         Some(0),
         "@tcpRequest's Address overload should forward to the Text member and round-trip"
     );
 
     server.join().expect("server thread");
-    let _ = std::fs::remove_file(&file);
 }
 
 #[test]
@@ -225,13 +220,12 @@ fn jit_tcp_request_resolves_a_hostname_and_round_trips() {
 
     let file = temp_ql("hostname", &program(&hostname_address, "PONG\\n"));
     assert_eq!(
-        jit_run(&file),
+        jit_run(file.path()),
         Some(0),
         "@tcpRequest should resolve \"localhost\" and force to the server's response"
     );
 
     server.join().expect("server thread");
-    let _ = std::fs::remove_file(&file);
 }
 
 #[test]
@@ -241,11 +235,10 @@ fn jit_tcp_request_failure_returns_not_ok() {
     // delivered as a `Result` value, fail-soft.
     let file = temp_ql("closed_port", &failure_program(&closed_address()));
     assert_eq!(
-        jit_run(&file),
+        jit_run(file.path()),
         Some(0),
         "a refused connection must come back as NotOk for the program to match, not crash"
     );
-    let _ = std::fs::remove_file(&file);
 }
 
 #[test]
@@ -260,10 +253,14 @@ fn aot_tcp_request_round_trips_and_forces() {
 
     let (address, server) = spawn_pong_server(2);
 
-    let build = |tag: &str, expected: &str| -> PathBuf {
-        let source = temp_ql(tag, &program(&address, expected));
-        let binary =
-            std::env::temp_dir().join(format!("quilon_tcp_aot_{tag}_{}", std::process::id()));
+    let build = |tag: &str, expected: &str| -> (TempDir, PathBuf) {
+        let dir = tempfile::Builder::new()
+            .prefix(&format!("quilon_tcp_aot_{tag}_"))
+            .tempdir()
+            .expect("create temp dir");
+        let source = dir.path().join("program.qn");
+        std::fs::write(&source, program(&address, expected)).expect("write temp .qn");
+        let binary = dir.path().join("program");
         let out = Command::new(quilon)
             .args(["build", source.to_str().unwrap(), "--linker", linker])
             .args(["-o", binary.to_str().unwrap()])
@@ -274,18 +271,17 @@ fn aot_tcp_request_round_trips_and_forces() {
             "`quilon build` failed: {}",
             String::from_utf8_lossy(&out.stderr)
         );
-        let _ = std::fs::remove_file(&source);
-        binary
+        (dir, binary)
     };
 
-    let match_binary = build("match", "PONG\\n");
+    let (_match_dir, match_binary) = build("match", "PONG\\n");
     assert_eq!(
         run(Command::new(&match_binary)),
         Some(0),
         "native AOT: @tcpRequest should force to the server's response and pass"
     );
 
-    let mismatch_binary = build("mismatch", "NOPE\\n");
+    let (_mismatch_dir, mismatch_binary) = build("mismatch", "NOPE\\n");
     assert_eq!(
         run(Command::new(&mismatch_binary)),
         Some(5),
@@ -293,8 +289,6 @@ fn aot_tcp_request_round_trips_and_forces() {
     );
 
     server.join().expect("server thread");
-    let _ = std::fs::remove_file(&match_binary);
-    let _ = std::fs::remove_file(&mismatch_binary);
 }
 
 /// The same exchange, but reached from inside a record METHOD — the shape `core.http`'s
@@ -331,7 +325,7 @@ fn jit_tcp_request_reached_from_a_method_gets_a_scheduler() {
 
     let match_file = temp_ql("method_match", &method_program(&address, "PONG\\n"));
     assert_eq!(
-        jit_run(&match_file),
+        jit_run(match_file.path()),
         Some(0),
         "a @tcpRequest inside a method must run on the scheduler and force to the response"
     );
@@ -339,12 +333,10 @@ fn jit_tcp_request_reached_from_a_method_gets_a_scheduler() {
     // And the bytes really are the server's, not a silently-defaulted value.
     let mismatch_file = temp_ql("method_mismatch", &method_program(&address, "NOPE\\n"));
     assert_eq!(
-        jit_run(&mismatch_file),
+        jit_run(mismatch_file.path()),
         Some(5),
         "a non-matching expectation must trip the assertion, proving the real bytes flowed"
     );
 
     server.join().expect("server thread");
-    let _ = std::fs::remove_file(&match_file);
-    let _ = std::fs::remove_file(&mismatch_file);
 }

@@ -40,7 +40,11 @@ fn build_native(quilon: &str, src: &str, out: &Path) -> bool {
 #[test]
 fn native_args_size_reflects_passed_argv() {
     let quilon = env!("CARGO_BIN_EXE_quilon");
-    let bin = std::env::temp_dir().join(format!("quilon_args_size_{}", std::process::id()));
+    let dir = tempfile::Builder::new()
+        .prefix("quilon_args_size_")
+        .tempdir()
+        .expect("create temp dir");
+    let bin = dir.path().join("prog");
     if !build_native(quilon, "^ = (args :: []Text) -> Num => < args.size >", &bin) {
         return;
     }
@@ -62,9 +66,6 @@ fn native_args_size_reflects_passed_argv() {
         Some(4),
         "3 extra args -> args.size == 4 (incl. argv[0])"
     );
-
-    let _ = std::fs::remove_file(&bin);
-    let _ = std::fs::remove_file(bin.with_extension("qn"));
 }
 
 #[test]
@@ -75,7 +76,11 @@ fn jit_and_aot_argv_agree() {
     // `args.size` for the same trailing user args, including a leading `--flag` (which
     // must pass THROUGH to the program, not be parsed by quilon).
     let quilon = env!("CARGO_BIN_EXE_quilon");
-    let bin = std::env::temp_dir().join(format!("quilon_argv_parity_{}", std::process::id()));
+    let dir = tempfile::Builder::new()
+        .prefix("quilon_argv_parity_")
+        .tempdir()
+        .expect("create temp dir");
+    let bin = dir.path().join("prog");
     let src = "^ = (args :: []Text) -> Num => < args.size >";
     if !build_native(quilon, src, &bin) {
         return;
@@ -112,9 +117,6 @@ fn jit_and_aot_argv_agree() {
         // Both sides are pinned to `expected` above, which is exactly the JIT/AOT
         // parity this test guards: same trailing args -> same `args.size`.
     }
-
-    let _ = std::fs::remove_file(&bin);
-    let _ = std::fs::remove_file(&source);
 }
 
 /// An argument carrying a NUL byte is one no program can be given: a C argv holds
@@ -158,7 +160,11 @@ fn native_env_map_split_on_first_equals() {
     // with a controlled env (`env -i` would be ideal but isn't portable; instead pass a
     // known var and count).
     let quilon = env!("CARGO_BIN_EXE_quilon");
-    let bin = std::env::temp_dir().join(format!("quilon_env_map_{}", std::process::id()));
+    let dir = tempfile::Builder::new()
+        .prefix("quilon_env_map_")
+        .tempdir()
+        .expect("create temp dir");
+    let bin = dir.path().join("prog");
     let src = "<< core.io\n\
                ^ = (args :: []Text, env :: [|Text => Text|]) -> Num => <\n\
                \x20 value = env.get(\"KEY\") ? | Ok(v) => v | NotOk(_) => \"?\"\n\
@@ -185,7 +191,4 @@ fn native_env_map_split_on_first_equals() {
         stdout, "a=b=c\n",
         "KEY should map to a=b=c (value split on the FIRST '=')"
     );
-
-    let _ = std::fs::remove_file(&bin);
-    let _ = std::fs::remove_file(bin.with_extension("qn"));
 }

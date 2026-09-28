@@ -11,9 +11,6 @@
 use quilon::codegen::generator::WATERMARK;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::atomic::{AtomicU64, Ordering};
-
-static OBJECT_STAGE_TEST_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 /// Is a tool available on PATH? (Used to skip the link step gracefully when no C
 /// toolchain is installed — matching `examples_test.rs`.)
@@ -145,15 +142,13 @@ fn build_hello_and_run(
 /// the linker failure is reported.
 #[test]
 fn failed_build_preserves_adjacent_object_and_removes_its_staged_object() {
-    let sequence = OBJECT_STAGE_TEST_SEQUENCE.fetch_add(1, Ordering::Relaxed);
-    let stage = std::env::temp_dir().join(format!(
-        "quilon_object_stage_{}_{}",
-        std::process::id(),
-        sequence
-    ));
-    let temp = stage.join("temp");
-    let source = stage.join("program.qn");
-    let out = stage.join("out").join("prog");
+    let stage = tempfile::Builder::new()
+        .prefix("quilon_object_stage_")
+        .tempdir()
+        .expect("create temp dir");
+    let temp = stage.path().join("temp");
+    let source = stage.path().join("program.qn");
+    let out = stage.path().join("out").join("prog");
     let adjacent_object = out.with_extension("o");
     let sentinel = b"do not overwrite this object";
     std::fs::create_dir_all(out.parent().unwrap()).expect("create output directory");
@@ -198,8 +193,6 @@ fn failed_build_preserves_adjacent_object_and_removes_its_staged_object() {
         staged_entries.is_empty(),
         "failed build left staged files behind: {staged_entries:?}"
     );
-
-    let _ = std::fs::remove_dir_all(&stage);
 }
 
 /// End-to-end: run `quilon build` on a real example WITHOUT copying the archive
@@ -218,7 +211,11 @@ fn documented_build_flow_produces_running_binary() {
     };
 
     let quilon = Path::new(env!("CARGO_BIN_EXE_quilon"));
-    let out: PathBuf = std::env::temp_dir().join(format!("quilon_hello_{}", std::process::id()));
+    let dir = tempfile::Builder::new()
+        .prefix("quilon_hello_")
+        .tempdir()
+        .expect("create temp dir");
+    let out = dir.path().join("hello");
 
     let code = build_hello_and_run(quilon, linker, &out, "documented flow regressed", |_| {});
 
@@ -235,8 +232,6 @@ fn documented_build_flow_produces_running_binary() {
         eprintln!("skipping watermark check: needs Linux/ELF with `readelf` on PATH");
         None
     };
-
-    let _ = std::fs::remove_file(&out);
 
     assert_eq!(
         code,
@@ -275,7 +270,11 @@ fn default_build_runs_the_tail_recursion_example() {
     let example = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("examples")
         .join("tail_recursion.qn");
-    let out: PathBuf = std::env::temp_dir().join(format!("quilon_o3_tco_{}", std::process::id()));
+    let dir = tempfile::Builder::new()
+        .prefix("quilon_o3_tco_")
+        .tempdir()
+        .expect("create temp dir");
+    let out = dir.path().join("tco");
 
     let mut cmd = Command::new(quilon);
     cmd.args(["build", example.to_str().unwrap()])
@@ -289,7 +288,6 @@ fn default_build_runs_the_tail_recursion_example() {
     );
 
     let run = run_allowing_busy_executable(&mut Command::new(&out)).expect("run produced binary");
-    let _ = std::fs::remove_file(&out);
     assert_eq!(
         run.status.code(),
         Some(0),
@@ -309,18 +307,17 @@ fn native_build_reports_stack_overflow_not_a_bare_segfault() {
     };
 
     let quilon = Path::new(env!("CARGO_BIN_EXE_quilon"));
-    let dir = std::env::temp_dir().join(format!(
-        "quilon_stack_overflow_native_{}",
-        std::process::id()
-    ));
-    std::fs::create_dir_all(&dir).expect("create temp dir");
-    let source = dir.join("program.qn");
+    let dir = tempfile::Builder::new()
+        .prefix("quilon_stack_overflow_native_")
+        .tempdir()
+        .expect("create temp dir");
+    let source = dir.path().join("program.qn");
     std::fs::write(
         &source,
         "deep = (n :: Num) -> Num => < n == 0 ? 0 : 1 + deep(n - 1) >\n^ = () -> Num => < deep(10000000) >\n",
     )
     .expect("write program");
-    let out = dir.join("program");
+    let out = dir.path().join("program");
 
     let mut cmd = Command::new(quilon);
     cmd.args(["build", source.to_str().unwrap()])
@@ -334,7 +331,6 @@ fn native_build_reports_stack_overflow_not_a_bare_segfault() {
     );
 
     let run = run_allowing_busy_executable(&mut Command::new(&out)).expect("run native binary");
-    let _ = std::fs::remove_file(&out);
     let stderr = String::from_utf8_lossy(&run.stderr);
     assert_eq!(
         run.status.code(),
@@ -369,14 +365,16 @@ double = (x :: Num) -> Num => < x * 2 >
   total > 0 ? 0 : 1
 >
 ";
-    let dir = std::env::temp_dir().join(format!("quilon_optdbg_diff_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).expect("create temp dir");
-    let ql = dir.join("prog.qn");
+    let dir = tempfile::Builder::new()
+        .prefix("quilon_optdbg_diff_")
+        .tempdir()
+        .expect("create temp dir");
+    let ql = dir.path().join("prog.qn");
     std::fs::write(&ql, src).expect("write temp source");
 
     let quilon = Path::new(env!("CARGO_BIN_EXE_quilon"));
-    let optimized = dir.join("optimized");
-    let debug = dir.join("debug");
+    let optimized = dir.path().join("optimized");
+    let debug = dir.path().join("debug");
 
     for (out, extra_args) in [
         (&optimized, [].as_slice()),
@@ -406,7 +404,6 @@ double = (x :: Num) -> Num => < x * 2 >
 
     let optimized_bytes = std::fs::read(&optimized).expect("read optimized binary");
     let debug_bytes = std::fs::read(&debug).expect("read --debug binary");
-    let _ = std::fs::remove_dir_all(&dir);
 
     assert_ne!(
         optimized_bytes, debug_bytes,
@@ -431,13 +428,15 @@ fn nested_sum_type_builds_and_runs_natively() {
   s ? | Circle(r) => r * r | Square(side) => side * side
 >
 ";
-    let dir = std::env::temp_dir().join(format!("quilon_nested_sum_build_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).expect("create temp dir");
-    let ql = dir.join("prog.qn");
+    let dir = tempfile::Builder::new()
+        .prefix("quilon_nested_sum_build_")
+        .tempdir()
+        .expect("create temp dir");
+    let ql = dir.path().join("prog.qn");
     std::fs::write(&ql, src).expect("write temp source");
 
     let quilon = Path::new(env!("CARGO_BIN_EXE_quilon"));
-    let out = dir.join("prog");
+    let out = dir.path().join("prog");
     let mut cmd = Command::new(quilon);
     cmd.args(["build", ql.to_str().unwrap()])
         .args(["--linker", linker])
@@ -450,7 +449,6 @@ fn nested_sum_type_builds_and_runs_natively() {
     );
 
     let run = run_allowing_busy_executable(&mut Command::new(&out)).expect("run built binary");
-    let _ = std::fs::remove_dir_all(&dir);
     assert_eq!(run.status.code(), Some(36), "wrong exit code");
 }
 
@@ -480,14 +478,15 @@ describe = (m :: Mixed) -> Num => <
 >
 ^ = () -> Num => < depth(Node(Node(Leaf))) + describe(A(2)) + describe(B(\"ab\")) >
 ";
-    let dir =
-        std::env::temp_dir().join(format!("quilon_recursive_sum_build_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).expect("create temp dir");
-    let ql = dir.join("prog.qn");
+    let dir = tempfile::Builder::new()
+        .prefix("quilon_recursive_sum_build_")
+        .tempdir()
+        .expect("create temp dir");
+    let ql = dir.path().join("prog.qn");
     std::fs::write(&ql, src).expect("write temp source");
 
     let quilon = Path::new(env!("CARGO_BIN_EXE_quilon"));
-    let out = dir.join("prog");
+    let out = dir.path().join("prog");
     let mut cmd = Command::new(quilon);
     cmd.args(["build", ql.to_str().unwrap()])
         .args(["--linker", linker])
@@ -500,7 +499,6 @@ describe = (m :: Mixed) -> Num => <
     );
 
     let run = run_allowing_busy_executable(&mut Command::new(&out)).expect("run built binary");
-    let _ = std::fs::remove_dir_all(&dir);
     // depth(Node(Node(Leaf))) = 2, describe(A(2)) = 2, describe(B("ab")) = 2 -> 6.
     assert_eq!(run.status.code(), Some(6), "wrong exit code");
 }
@@ -520,13 +518,15 @@ Wagon = { next :: []Wagon, cargo :: Num }
   w.next[0].cargo + w.cargo
 >
 ";
-    let dir = std::env::temp_dir().join(format!("quilon_wagon_array_build_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).expect("create temp dir");
-    let ql = dir.join("prog.qn");
+    let dir = tempfile::Builder::new()
+        .prefix("quilon_wagon_array_build_")
+        .tempdir()
+        .expect("create temp dir");
+    let ql = dir.path().join("prog.qn");
     std::fs::write(&ql, src).expect("write temp source");
 
     let quilon = Path::new(env!("CARGO_BIN_EXE_quilon"));
-    let out = dir.join("prog");
+    let out = dir.path().join("prog");
     let mut cmd = Command::new(quilon);
     cmd.args(["build", ql.to_str().unwrap()])
         .args(["--linker", linker])
@@ -539,7 +539,6 @@ Wagon = { next :: []Wagon, cargo :: Num }
     );
 
     let run = run_allowing_busy_executable(&mut Command::new(&out)).expect("run built binary");
-    let _ = std::fs::remove_dir_all(&dir);
     assert_eq!(run.status.code(), Some(3), "wrong exit code");
 }
 
@@ -560,14 +559,17 @@ fn distributed_binary_builds_via_embedded_runtime() {
         return;
     };
 
-    let stage = std::env::temp_dir().join(format!("quilon_dist_sim_{}", std::process::id()));
-    let bin_dir = stage.join("bin"); // holds ONLY the copied quilon binary
-    let cache = stage.join("cache"); // stands in for $XDG_CACHE_HOME
+    let stage = tempfile::Builder::new()
+        .prefix("quilon_dist_sim_")
+        .tempdir()
+        .expect("create temp dir");
+    let bin_dir = stage.path().join("bin"); // holds ONLY the copied quilon binary
+    let cache = stage.path().join("cache"); // stands in for $XDG_CACHE_HOME
     std::fs::create_dir_all(&bin_dir).expect("create staged bin dir");
 
     let quilon = bin_dir.join("quilon");
     stage_quilon_binary(&quilon);
-    let out = stage.join("hello");
+    let out = stage.path().join("hello");
 
     let staged_env = |cmd: &mut Command| {
         cmd.env_remove("QUILON_RT_LIB")
@@ -626,8 +628,6 @@ fn distributed_binary_builds_via_embedded_runtime() {
         warm_mtime.expect("mtime"),
         "warm-cache build rewrote the cached archive instead of reusing it"
     );
-
-    let _ = std::fs::remove_dir_all(&stage);
 }
 
 /// Self-contained output: a binary `quilon build` produces must NOT name a shared
@@ -653,7 +653,11 @@ fn produced_binary_does_not_depend_on_a_shared_libgc() {
     }
 
     let quilon = Path::new(env!("CARGO_BIN_EXE_quilon"));
-    let out: PathBuf = std::env::temp_dir().join(format!("quilon_nogc_{}", std::process::id()));
+    let dir = tempfile::Builder::new()
+        .prefix("quilon_nogc_")
+        .tempdir()
+        .expect("create temp dir");
+    let out = dir.path().join("hello");
     let code = build_hello_and_run(quilon, linker, &out, "self-contained GC", |_| {});
 
     let mut cmd = Command::new(lister);
@@ -661,7 +665,6 @@ fn produced_binary_does_not_depend_on_a_shared_libgc() {
         cmd.arg("-L");
     }
     let deps = cmd.arg(&out).output().expect("list dynamic dependencies");
-    let _ = std::fs::remove_file(&out);
 
     assert_eq!(code, Some(0), "hello_world native binary did not run");
     assert!(

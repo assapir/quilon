@@ -49,8 +49,10 @@ fn main() {
     }
 
     let quilon = Path::new(env!("CARGO_BIN_EXE_quilon"));
-    let workdir = std::env::temp_dir().join("quilon-runtime-bench");
-    let _ = std::fs::create_dir_all(&workdir);
+    let workdir = tempfile::Builder::new()
+        .prefix("quilon_runtime_bench_")
+        .tempdir()
+        .expect("create the bench work directory");
 
     // `--baseline <path>` compares against a previous run, `--metrics <path>` records this
     // one. Both absent prints the tables exactly as they always have.
@@ -71,7 +73,7 @@ fn main() {
     println!("{rule}");
     for (stem, shape) in PROGRAMS {
         let source = runtime_dir().join(format!("{stem}.qn"));
-        let binary = workdir.join(stem);
+        let binary = workdir.path().join(stem);
 
         let build = measure(Command::new(quilon).args([
             "build".as_ref(),
@@ -112,7 +114,7 @@ fn main() {
     }
     println!();
 
-    latency_table(quilon, &workdir, &mut trend);
+    latency_table(quilon, workdir.path(), &mut trend);
     trend.finish();
 }
 

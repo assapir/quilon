@@ -3,28 +3,25 @@
 //! the offending source line and its underline reach stderr, and that the process still
 //! exits non-zero.
 
-use std::io::Write;
 use std::process::Command;
 
 mod common;
 use common::position;
 
-/// Write `source` to a temp `.qn` file and run `quilon check` on it. The file
-/// lives under the cargo target tmp dir so parallel test runs don't collide.
+/// Write `source` to a temp `.qn` file and run `quilon check` on it.
 fn check_output(name: &str, source: &str) -> std::process::Output {
-    let mut path = std::env::temp_dir();
-    path.push(format!("quilon_diag_{}_{}.qn", std::process::id(), name));
-    let mut f = std::fs::File::create(&path).expect("create temp .qn");
-    f.write_all(source.as_bytes()).expect("write temp .qn");
+    let file = tempfile::Builder::new()
+        .prefix(&format!("quilon_diag_{name}_"))
+        .suffix(".qn")
+        .tempfile()
+        .expect("create temp .qn");
+    std::fs::write(file.path(), source).expect("write temp .qn");
 
-    let out = Command::new(env!("CARGO_BIN_EXE_quilon"))
+    Command::new(env!("CARGO_BIN_EXE_quilon"))
         .arg("check")
-        .arg(&path)
+        .arg(file.path())
         .output()
-        .expect("run quilon");
-
-    let _ = std::fs::remove_file(&path);
-    out
+        .expect("run quilon")
 }
 
 /// Return the exit status and diagnostic stream for an invalid program.
@@ -77,15 +74,17 @@ fn check_writes_status_to_stderr_not_stdout() {
 #[test]
 fn quiet_prints_no_status_but_still_the_diagnostic() {
     let run = |source: &str| {
-        let mut path = std::env::temp_dir();
-        path.push(format!("quilon_diag_quiet_{}.qn", std::process::id()));
-        std::fs::write(&path, source).expect("write temp .qn");
+        let file = tempfile::Builder::new()
+            .prefix("quilon_diag_quiet_")
+            .suffix(".qn")
+            .tempfile()
+            .expect("create temp .qn");
+        std::fs::write(file.path(), source).expect("write temp .qn");
         let out = Command::new(env!("CARGO_BIN_EXE_quilon"))
             .args(["--quiet", "check"])
-            .arg(&path)
+            .arg(file.path())
             .output()
             .expect("run quilon");
-        let _ = std::fs::remove_file(&path);
         (
             out.status.success(),
             String::from_utf8_lossy(&out.stderr).into_owned(),
@@ -182,15 +181,17 @@ fn parse_error_reports_line_col() {
 /// at that byte offset.
 #[test]
 fn a_type_error_in_an_imported_module_names_that_module() {
-    let dir = std::env::temp_dir().join(format!("quilon_diag_import_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).expect("create temp dir");
-    let module = dir.join("broken_lib.qn");
+    let dir = tempfile::Builder::new()
+        .prefix("quilon_diag_import_")
+        .tempdir()
+        .expect("create temp dir");
+    let module = dir.path().join("broken_lib.qn");
     std::fs::write(
         &module,
         "~ a module with a type error\n>> broken = (n :: Num) -> Text => < n >\n",
     )
     .expect("write module");
-    let main = dir.join("importer.qn");
+    let main = dir.path().join("importer.qn");
     std::fs::write(&main, "<< \"broken_lib.qn\"\n^ = () -> Num => < 0 >\n").expect("write main");
 
     let out = Command::new(env!("CARGO_BIN_EXE_quilon"))
@@ -209,7 +210,6 @@ fn a_type_error_in_an_imported_module_names_that_module() {
         stderr.contains(">> broken = (n :: Num) -> Text => < n >"),
         "the error must show the imported module's own source line, got: {stderr:?}"
     );
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// A function's body is a `< >` block, always. A bare expression after `=>` is a parse

@@ -14,7 +14,7 @@ mod common;
 
 use common::{connect_with_timeout, ensure_runtime_lib, read_announced_port};
 use std::io::{Read, Write};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
@@ -70,19 +70,17 @@ respond = (connection :: net.Connection) -> $ => <
     .to_string()
 }
 
-/// Write `source` to a unique temp `.qn` file and return its path.
-fn temp_ql(tag: &str, source: &str) -> PathBuf {
-    let mut path = std::env::temp_dir();
-    path.push(format!(
-        "quilon_tcp_serve_{tag}_{}_{}.qn",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
-    std::fs::write(&path, source).expect("write temp .qn");
-    path
+/// Write `source` to a unique temp `.qn` file and return the [`tempfile::NamedTempFile`]
+/// owning it — kept bound for as long as the spawned server child needs the file to
+/// exist, which for every test here is until [`wait_bounded`] returns.
+fn temp_ql(tag: &str, source: &str) -> tempfile::NamedTempFile {
+    let file = tempfile::Builder::new()
+        .prefix(&format!("quilon_tcp_serve_{tag}_"))
+        .suffix(".qn")
+        .tempfile()
+        .expect("create temp .qn");
+    std::fs::write(file.path(), source).expect("write temp .qn");
+    file
 }
 
 /// Wait for `child` to exit, killing it and failing loudly instead of hanging the test run
@@ -130,7 +128,7 @@ fn jit_tcp_serve_echoes_then_kill_stops_the_server() {
     let file = temp_ql("jit", &program("127.0.0.1:0"));
 
     let mut child = Command::new(env!("CARGO_BIN_EXE_quilon"))
-        .args(["run", file.to_str().unwrap()])
+        .args(["run", file.path().to_str().unwrap()])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -145,7 +143,6 @@ fn jit_tcp_serve_echoes_then_kill_stops_the_server() {
         0,
         "the server's own process exits 0 once kill has settled the accept loop"
     );
-    let _ = std::fs::remove_file(&file);
 }
 
 #[test]
@@ -157,7 +154,7 @@ fn jit_tcp_serve_binds_a_hostname() {
     let file = temp_ql("jit_hostname", &program("localhost:0"));
 
     let mut child = Command::new(env!("CARGO_BIN_EXE_quilon"))
-        .args(["run", file.to_str().unwrap()])
+        .args(["run", file.path().to_str().unwrap()])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -172,7 +169,6 @@ fn jit_tcp_serve_binds_a_hostname() {
         0,
         "the server's own process exits 0 once kill has settled the accept loop"
     );
-    let _ = std::fs::remove_file(&file);
 }
 
 #[test]
@@ -180,7 +176,7 @@ fn jit_tcp_serve_binds_through_the_address_overload() {
     let file = temp_ql("jit_address_overload", &program_via_address_overload());
 
     let mut child = Command::new(env!("CARGO_BIN_EXE_quilon"))
-        .args(["run", file.to_str().unwrap()])
+        .args(["run", file.path().to_str().unwrap()])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -195,7 +191,6 @@ fn jit_tcp_serve_binds_through_the_address_overload() {
         0,
         "the server's own process exits 0 once kill has settled the accept loop"
     );
-    let _ = std::fs::remove_file(&file);
 }
 
 #[test]
@@ -215,8 +210,13 @@ fn aot_tcp_serve_echoes_then_kill_stops_the_server() {
     let quilon = env!("CARGO_BIN_EXE_quilon");
     ensure_runtime_lib(Path::new(quilon).parent().expect("binary has a parent dir"));
 
-    let source = temp_ql("aot", &program("127.0.0.1:0"));
-    let binary = std::env::temp_dir().join(format!("quilon_tcp_serve_aot_{}", std::process::id()));
+    let dir = tempfile::Builder::new()
+        .prefix("quilon_tcp_serve_aot_")
+        .tempdir()
+        .expect("create temp dir");
+    let source = dir.path().join("serve.qn");
+    std::fs::write(&source, program("127.0.0.1:0")).expect("write temp .qn");
+    let binary = dir.path().join("serve");
     let build = Command::new(quilon)
         .args(["build", source.to_str().unwrap(), "--linker", linker])
         .args(["-o", binary.to_str().unwrap()])
@@ -227,7 +227,6 @@ fn aot_tcp_serve_echoes_then_kill_stops_the_server() {
         "`quilon build` failed: {}",
         String::from_utf8_lossy(&build.stderr)
     );
-    let _ = std::fs::remove_file(&source);
 
     let mut child = Command::new(&binary)
         .stdin(Stdio::null())
@@ -244,5 +243,4 @@ fn aot_tcp_serve_echoes_then_kill_stops_the_server() {
         0,
         "native AOT: the server's own process exits 0 once kill has settled the accept loop"
     );
-    let _ = std::fs::remove_file(&binary);
 }

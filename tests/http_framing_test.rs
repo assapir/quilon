@@ -14,7 +14,7 @@ mod common;
 use common::ensure_runtime_lib;
 use std::io::{Read, Write};
 use std::net::TcpListener;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::{Command, Stdio};
 use std::thread::JoinHandle;
 
@@ -112,19 +112,16 @@ fn spawn_one_shot_server(reply: Vec<u8>) -> (String, JoinHandle<()>) {
     (address, handle)
 }
 
-/// Write `source` to a unique temp `.qn` file and return its path.
-fn temp_ql(tag: &str, source: &str) -> PathBuf {
-    let mut path = std::env::temp_dir();
-    path.push(format!(
-        "quilon_http_framing_{tag}_{}_{}.qn",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
-    std::fs::write(&path, source).expect("write temp .qn");
-    path
+/// Write `source` to a unique temp `.qn` file and return the [`tempfile::NamedTempFile`]
+/// owning it — kept bound for as long as the test needs the file to exist.
+fn temp_ql(tag: &str, source: &str) -> tempfile::NamedTempFile {
+    let file = tempfile::Builder::new()
+        .prefix(&format!("quilon_http_framing_{tag}_"))
+        .suffix(".qn")
+        .tempfile()
+        .expect("create temp .qn");
+    std::fs::write(file.path(), source).expect("write temp .qn");
+    file
 }
 
 /// Run `command` to completion and return its exit code.
@@ -162,12 +159,11 @@ fn jit_dechunks_a_reply_whose_chunk_boundary_splits_a_multi_byte_character() {
     let (address, server) = spawn_one_shot_server(chunked_reply_splitting_a_multi_byte_character());
     let file = temp_ql("chunked", &get_program(&address, "h\u{e9}llo"));
     assert_eq!(
-        jit_run(&file),
+        jit_run(file.path()),
         Some(0),
         "a chunk edge inside 'é' must still dechunk to the whole character"
     );
     server.join().expect("server thread");
-    let _ = std::fs::remove_file(&file);
 }
 
 #[test]
@@ -175,12 +171,11 @@ fn jit_a_short_content_length_reply_sends_not_ok() {
     let (address, server) = spawn_one_shot_server(truncated_content_length_reply());
     let file = temp_ql("truncated", &expect_not_ok_program(&address));
     assert_eq!(
-        jit_run(&file),
+        jit_run(file.path()),
         Some(0),
         "a Content-Length longer than the bytes present must send NotOk, not a partial body"
     );
     server.join().expect("server thread");
-    let _ = std::fs::remove_file(&file);
 }
 
 #[test]
@@ -188,12 +183,11 @@ fn jit_a_head_reply_with_content_length_sends_ok() {
     let (address, server) = spawn_one_shot_server(headless_content_length_reply());
     let file = temp_ql("head", &head_program(&address));
     assert_eq!(
-        jit_run(&file),
+        jit_run(file.path()),
         Some(0),
         "a HEAD reply's Content-Length describes a body that is never sent, not a truncation"
     );
     server.join().expect("server thread");
-    let _ = std::fs::remove_file(&file);
 }
 
 #[test]
@@ -206,9 +200,13 @@ fn aot_dechunks_a_reply_whose_chunk_boundary_splits_a_multi_byte_character() {
     ensure_runtime_lib(Path::new(quilon).parent().expect("binary has a parent dir"));
 
     let (address, server) = spawn_one_shot_server(chunked_reply_splitting_a_multi_byte_character());
-    let source = temp_ql("aot_chunked", &get_program(&address, "h\u{e9}llo"));
-    let binary =
-        std::env::temp_dir().join(format!("quilon_http_framing_aot_{}", std::process::id()));
+    let dir = tempfile::Builder::new()
+        .prefix("quilon_http_framing_aot_")
+        .tempdir()
+        .expect("create temp dir");
+    let source = dir.path().join("program.qn");
+    std::fs::write(&source, get_program(&address, "h\u{e9}llo")).expect("write temp .qn");
+    let binary = dir.path().join("program");
     let out = Command::new(quilon)
         .args(["build", source.to_str().unwrap(), "--linker", linker])
         .args(["-o", binary.to_str().unwrap()])
@@ -226,6 +224,4 @@ fn aot_dechunks_a_reply_whose_chunk_boundary_splits_a_multi_byte_character() {
     );
 
     server.join().expect("server thread");
-    let _ = std::fs::remove_file(&source);
-    let _ = std::fs::remove_file(&binary);
 }

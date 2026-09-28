@@ -76,7 +76,7 @@ fn an_importer_may_define_every_name_the_client_uses() {
         ">\n",
     );
 
-    let run = common::run_program_named("own_names.qn", source);
+    let (run, _dir) = common::run_program_named("own_names.qn", source);
     assert_eq!(
         run.code, 0,
         "an importer must be free to define every name `core.http` keeps to itself:\n{}{}",

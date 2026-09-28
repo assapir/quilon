@@ -24,7 +24,7 @@ fn quilon() -> &'static str {
 /// differing only in the code and the message text.
 #[test]
 fn an_assertion_and_a_runtime_check_frame_alike() {
-    let (assert_code, assert_stderr, assertion) = run_program(
+    let (assert_code, assert_stderr, assertion, _assertion_dir) = run_program(
         "assertion",
         "<< core.test\n^ = () -> $ => <\n  assert(1, equals(2))\n>\n",
     );
@@ -43,7 +43,7 @@ fn an_assertion_and_a_runtime_check_frame_alike() {
         )
     );
 
-    let (bounds_code, bounds_stderr, bounds) = run_program(
+    let (bounds_code, bounds_stderr, bounds, _bounds_dir) = run_program(
         "bounds",
         "^ = () -> Num => <\n  a = [1]\n  n = 9\n  a[n]\n>\n",
     );
@@ -64,8 +64,9 @@ fn an_assertion_and_a_runtime_check_frame_alike() {
 /// and the underline.
 #[test]
 fn a_compile_error_frames_alike() {
-    // A plain type mismatch is a one-span report, the frame the runtime draws.
-    let (_, _, file) = run_program(
+    // A plain type mismatch is a one-span report, the frame the runtime draws. `_dir` must
+    // stay bound: `file` is reread below by `quilon --quiet check`, after this returns.
+    let (_, _, file, _dir) = run_program(
         "mismatch",
         "^ = () -> Num => <\n  x :: Num = true\n  x\n>\n",
     );
@@ -104,7 +105,8 @@ fn a_native_build_reports_the_same_location() {
     ensure_runtime_lib(Path::new(quilon()).parent().expect("binary has a parent"));
 
     let src = "^ = () -> Num => <\n  a = [1, 2]\n  n = 5\n  a[n]\n>\n";
-    let (jit_code, jit_stderr, file) = run_program("native", src);
+    // `_dir` must stay bound: `file` is rebuilt below by `quilon build`, after this returns.
+    let (jit_code, jit_stderr, file, _dir) = run_program("native", src);
 
     let binary = file.with_extension("bin");
     let build = Command::new(quilon())
