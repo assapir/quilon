@@ -434,9 +434,7 @@ mod tests {
                 spawn(|| {
                     // Let the sibling connect, allocate, and park on read.
                     sleep(Duration::from_millis(10));
-                    // Through `gc::with_gc_active`, the same way a real, allocation-triggered
-                    // collection would run — see `scheduler::tests::collect`'s own comment.
-                    crate::gc::with_gc_active(|| unsafe { GC_gcollect() });
+                    unsafe { GC_gcollect() };
                 });
             });
         });
