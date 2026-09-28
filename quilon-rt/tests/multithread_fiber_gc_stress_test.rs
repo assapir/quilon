@@ -266,3 +266,51 @@ fn microbench_1m_small_allocations() {
     });
     eprintln!("1M small allocations: {:?}", start.elapsed());
 }
+
+/// Round 3 microbenchmark: design A's cost is per switch, and specifically under
+/// contention — every switch anywhere in the process briefly holds `GC_dont_gc` above
+/// zero (a single global counter), so the more concurrent switching, the more a collector
+/// hammering `GC_gcollect` finds collection held off. Four worker threads each run their
+/// own scheduler with one fiber doing 100k switches (`sleep(0)`, park/resume), while a
+/// fifth thread calls `GC_gcollect` in a tight loop for the same duration. Wall time only
+/// (not collections/switches — this is a timing comparison, not a survival one); run on
+/// both the design-C and design-A commits, see the PR body for the numbers.
+#[test]
+#[ignore = "microbenchmark; run on both the design-C and design-A commits, see the PR body"]
+fn microbench_4threads_100k_switches_under_collector_pressure() {
+    let stop = Arc::new(AtomicBool::new(false));
+    let collector = {
+        let stop = Arc::clone(&stop);
+        std::thread::spawn(move || {
+            let _gc_thread = quilon_rt::register_thread();
+            while !stop.load(Ordering::Relaxed) {
+                unsafe { GC_gcollect() };
+            }
+        })
+    };
+
+    let start = std::time::Instant::now();
+    let workers: Vec<_> = (0..4)
+        .map(|_| {
+            std::thread::spawn(|| {
+                let _gc_thread = quilon_rt::register_thread();
+                run(|| {
+                    spawn(|| {
+                        for _ in 0..100_000 {
+                            sleep(Duration::from_nanos(0));
+                        }
+                    });
+                });
+            })
+        })
+        .collect();
+    for worker in workers {
+        worker.join().expect("a worker thread panicked");
+    }
+    let elapsed = start.elapsed();
+
+    stop.store(true, Ordering::Relaxed);
+    collector.join().expect("the collector thread panicked");
+
+    eprintln!("4 threads x 100k switches under collector pressure: {elapsed:?}");
+}
