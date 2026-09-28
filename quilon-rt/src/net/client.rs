@@ -121,8 +121,8 @@ pub(super) fn request_error_text(address: &str, stage: &str, error: &io::Error) 
 /// `options` at the call site — see `generate_at_primitive`'s `"tcpRequest"` arm) select
 /// the connection's transport and certificate checking. `tls == 0` runs the exact same
 /// plain-TCP exchange [`__tcp_request_launch`] does; `tls != 0` hands the exchange to
-/// [`super::tls::tls_request`] instead, which parks the calling fiber for the handshake
-/// (on the blocking-call pool) and again while the request/response bytes cross the wire.
+/// `super::tls::tls_request` instead, which parks the calling fiber for the handshake (on
+/// the blocking-call pool) and again while the request/response bytes cross the wire.
 ///
 /// # Safety contract (upheld by the compiler)
 /// Same as [`__tcp_request_launch`].
