@@ -78,6 +78,42 @@
 //! (never blocking, once set) by every later collection. The `#[no_mangle]` GC intrinsics
 //! (`__gc_init`, the allocation binding) live in [`crate::mem`]; this module holds only
 //! the scheduler-side scanning integration.
+//!
+//! ## Round 3 — design A: hold the collector off across every switch
+//!
+//! Round 2 (design C, see the PR body) replaced this whole scheme with permanent
+//! per-fiber roots and found it correct but expensive — this round restores the scheme
+//! above (per-thread lock-free registry, `GC_set_stackbottom`, `GC_push_other_roots`) and
+//! adds exactly one thing to close the residual race the round-1 stress test found: the
+//! raw stack-pointer switch inside `corosensei`'s `resume`/`suspend`, during which
+//! `GC_set_stackbottom`'s recorded target and the true SP are briefly for two different
+//! stacks (see the doc above — unchanged). `switch_disable`/`switch_enable` bracket
+//! every switch, in both directions, with `GC_disable`/`GC_enable`, so no collection —
+//! not this thread's, not any other thread's, since `GC_dont_gc` is a single global
+//! counter bdwgc's own docs say "overrides explicit `GC_gcollect()` calls as well" — can
+//! run while a switch, or the `enter_fiber`/`leave_fiber` bookkeeping bracketing it, is in
+//! flight anywhere in the process.
+//!
+//! Pairing is exactly symmetric per switch and split across two participants, because
+//! only the fiber's own code can say a jump onto its stack has landed (see the doc
+//! above): the resumer's `switch_disable()` in `crate::scheduler::resume_fiber`, called
+//! before `coroutine.resume()`, is matched by the FIBER's own `switch_enable()` once it
+//! has landed and finished `enter_fiber`'s bookkeeping (`crate::scheduler::new_fiber`'s
+//! entry, and the second half of `suspend_on`); the fiber's own `switch_disable()` before
+//! it suspends or returns, once `leave_fiber`'s bookkeeping is done, is matched by the
+//! RESUMER's `switch_enable()` once `coroutine.resume()` returns. Both bdwgc functions
+//! take the collector's global allocation lock on entry and exit (`misc.c`'s `GC_enable`/
+//! `GC_disable`: `LOCK(); GC_dont_gc±=1; UNLOCK();`) — that lock, twice per switch, is
+//! the cost this design trades for correctness; see the PR body for the measurement.
+//!
+//! `SWITCH_DEPTH` is a per-thread counter, incremented by `switch_disable` and
+//! decremented by `switch_enable`, asserted in debug builds to be exactly `0` immediately
+//! before every `switch_disable()` (proving the previous switch's `switch_enable()`
+//! already ran) and exactly `1` immediately before every `switch_enable()` (proving
+//! exactly one switch is open) — catching a broken pairing here, in our own bookkeeping,
+//! before it corrupts bdwgc's real, global `GC_dont_gc` counter (which has no such
+//! assertion in a non-`GC_ASSERTIONS` build: an unmatched `GC_enable()` decrements a
+//! signed counter with only a compiled-out `GC_ASSERT`, silently going negative).
 
 use crate::mem::__gc_init;
 use crate::stack_overflow;
@@ -102,6 +138,51 @@ unsafe extern "C" {
     fn GC_set_stackbottom(h: *mut c_void, sb: *const GcStackBase) -> *mut c_void;
     fn GC_get_my_stackbottom(sb: *mut GcStackBase) -> *mut c_void;
     fn GC_allow_register_threads();
+    fn GC_disable();
+    fn GC_enable();
+}
+
+thread_local! {
+    /// How many `switch_disable()` calls on this thread have not yet been matched by a
+    /// `switch_enable()`. See the module doc's "round 3" section for why this should
+    /// never legitimately exceed 1, even with `run_case_guarded`/`run_fault_guarded`'s
+    /// nested resumes: switches on one OS thread are always sequential, never concurrent.
+    static SWITCH_DEPTH: Cell<u32> = const { Cell::new(0) };
+}
+
+/// Disable collection for the span of one fiber switch (native-to-fiber resume, or
+/// fiber-to-native park/exit) — see the module doc. Must be matched by exactly one later
+/// [`switch_enable`] call on this same thread.
+pub(crate) fn switch_disable() {
+    SWITCH_DEPTH.with(|depth| {
+        debug_assert_eq!(
+            depth.get(),
+            0,
+            "gc::switch_disable called while a previous switch's GC_disable was still \
+             open on this thread — the disable/enable pairing this module relies on is \
+             broken"
+        );
+        depth.set(1);
+    });
+    // SAFETY: `GC_disable`/`GC_enable` nest by bdwgc's own design (a plain counter); this
+    // is one well-formed call, paired with a `switch_enable` before this thread's next
+    // `switch_disable`.
+    unsafe { GC_disable() };
+}
+
+/// Re-enable collection, matching the [`switch_disable`] call that opened this switch.
+pub(crate) fn switch_enable() {
+    // SAFETY: matches the `GC_disable` this same thread's most recent `switch_disable`
+    // call made — never called without one, asserted below in debug builds.
+    unsafe { GC_enable() };
+    SWITCH_DEPTH.with(|depth| {
+        debug_assert_eq!(
+            depth.get(),
+            1,
+            "gc::switch_enable called without a matching switch_disable on this thread"
+        );
+        depth.set(0);
+    });
 }
 
 /// An immutable, whole-state snapshot for one thread: its live fiber ranges, the fibers
