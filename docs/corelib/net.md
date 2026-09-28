@@ -15,6 +15,8 @@ Import with `<< core.net`. See the [corelib index](README.md).
 |----------|--------|
 | `net.@tcpRequest(address :: Text, requestBytes :: Text) -> Result` | One-shot request exchange: connect to `address` (`host:port`), write `requestBytes`, read the response until the peer closes (close-delimited). Yields `Ok(responseBytes)` with the whole response as a `Text` on success, or `NotOk(errorMessage)` on ANY network failure (DNS resolution, connect, write, or read) — a failure is a value to match. A value-returning [leaf IO primitive](../concurrency/README.md): the call launches the exchange and hands back a **deferred** `Result`, forced when a strict operation first reads it. |
 | `net.@tcpRequest(address :: Address, requestBytes :: Text) -> Result` | As above, given the `Address` a `server.address()` reported. |
+| `net.@tcpRequest(address :: Text, requestBytes :: Text, options :: ConnectOptions) -> Result` | As the two-argument form, with `options.transport = Tls` running the exchange over TLS first (`options.certificates` deciding whether the peer's certificate is checked) before writing `requestBytes`. `options.transport = Plain` is identical to the two-argument form. |
+| `net.@tcpRequest(address :: Address, requestBytes :: Text, options :: ConnectOptions) -> Result` | As above, given an `Address`. |
 
 The response is capped at **16 MiB**; a larger one yields `NotOk`.
 Hostname resolution runs on the runtime's blocking-call pool and parks only the calling fiber
@@ -22,6 +24,58 @@ until it answers, so it never stalls other fibers, timers, or sockets on the sch
 numeric `host:port` resolves inline with no thread at all. See
 [Concurrency runtime: blocking calls](../concurrency/runtime.md#blocking-calls) for the pool's
 sizing.
+
+## TLS
+
+`ConnectOptions`, the `Tls`-overload settings:
+
+| Member | Effect |
+|--------|--------|
+| `options.transport :: Transport` | `Plain` or `Tls`. |
+| `options.certificates :: Certificates` | `Checked` or `Unchecked`. |
+| `ConnectOptions.default() -> ConnectOptions` | `{ transport = Plain, certificates = Checked }`. |
+
+`Transport = Plain / Tls`. Over `Tls`, the handshake's server name (for SNI, and for the
+certificate's name check) is `address`'s host — an IP-literal host uses rustls's IP form of
+the server name rather than a DNS name.
+
+`Certificates = Checked / Unchecked`. `Checked` (the default) verifies the peer's
+certificate against the OS trust store — or `SSL_CERT_FILE`/`SSL_CERT_DIR` when either is
+set, which [`rustls-native-certs`](https://docs.rs/rustls-native-certs) reads instead of the
+OS store — and that the certificate is valid for the address's host. `Unchecked` accepts any
+certificate, trusted or not, still requiring the peer to hold the certificate's private key.
+
+A handshake or certificate failure yields `NotOk`, naming the address and a reason —
+plain English for the common cases, rustls's own text otherwise:
+
+```
+NotOk("tls handshake with api.example.com:443 failed: the certificate is not trusted (issued by an unknown authority)")
+NotOk("tls handshake with api.example.com:443 failed: the certificate expired on 2026-01-04")
+NotOk("tls handshake with api.example.com:443 failed: the certificate is for *.example.org, not api.example.com")
+```
+
+```quilon
+<< core.net
+<< core.test
+
+^ = () -> $ => <
+  net.@tcpRequest(
+    "example.com:443", "GET / HTTP/1.0\r\n\r\n",
+    net.ConnectOptions { transport = net.Tls, certificates = net.Checked }
+  ) ?
+    | Ok(response)  => assert(response.size > 0, equals(true))
+    | NotOk(error)  => test.failAt(error)
+>
+```
+
+### Trusting a private CA
+
+A certificate authority not in the OS trust store — a private CA for an internal service,
+say — is trusted the same two ways any TLS client on the machine trusts it: installed into
+the OS trust store, or named by the `SSL_CERT_FILE` (a PEM file) or `SSL_CERT_DIR`
+environment variable when the program runs. `core.net` has no API of its own for this —
+[`rustls-native-certs`](https://docs.rs/rustls-native-certs) reads both, and a Quilon program
+built with `quilon build` needs nothing installed beyond that variable or store entry.
 
 ```quilon
 << core.net

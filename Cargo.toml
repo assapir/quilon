@@ -64,6 +64,12 @@ serde_json = "1.0"
 # Scratch directories/files for tests: a `TempDir`/`NamedTempFile` removes itself on drop,
 # including on panic, so a test never leaves one behind on the shared box it runs on.
 tempfile = "3.27"
+# The TLS `@tcpRequest` end-to-end test's peer: a real `rustls::ServerConnection` over the
+# committed fixture certificates under `tests/fixtures/tls/`. `rustls` is already in the
+# dependency graph via `quilon-rt`; `rustls-pemfile` decodes the fixtures' PEM files into
+# the DER certs/key rustls's `ServerConfig` needs.
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "logging"] }
+rustls-pemfile = "2"
 
 [build-dependencies]
 # Compressing `libquilon_rt.a` before it is embedded into the compiler binary.

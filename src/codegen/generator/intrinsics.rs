@@ -258,6 +258,23 @@ impl<'ctx> CodeGenerator<'ctx> {
                 &[ptr.into(), ptr.into(), i64t.into(), ptr.into(), i64t.into()],
                 false,
             ),
+            // void __tcp_request_secure_launch({i8,{ptr,i64}}* out, i8* addr,i64, i8* request,i64,
+            // i64 tls, i64 uncheckedCertificates) — `@tcpRequest`'s `options :: ConnectOptions`
+            // overload: the same launch as `__tcp_request_launch`, plus the flattened
+            // `Transport`/`Certificates` discriminants (`0`/`1`) the call site reads out of
+            // `options` — see `generate_at_primitive`'s `"tcpRequest"` arm.
+            "__tcp_request_secure_launch" => ctx.void_type().fn_type(
+                &[
+                    ptr.into(),
+                    ptr.into(),
+                    i64t.into(),
+                    ptr.into(),
+                    i64t.into(),
+                    i64t.into(),
+                    i64t.into(),
+                ],
+                false,
+            ),
             // double __tcp_serve_launch(i8* address, i64 addressLen, ptr handlerFn, ptr
             // handlerEnv, Site* site) — `net.@tcpServe`: resolve `address` (`host:port`,
             // exactly as `@tcpRequest` accepts it), bind and listen, launch the accept loop

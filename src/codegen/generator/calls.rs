@@ -662,11 +662,20 @@ impl<'ctx> CodeGenerator<'ctx> {
                 // where it is forced. Nothing here dereferences it.
                 Self::call_result_to_basic(call)
             }
+            // `net.@tcpRequest(address, requestBytes)` or, the `Tls` transport overload,
+            // `net.@tcpRequest(address, requestBytes, options :: net.ConnectOptions)` — both
+            // arities, and both the `Text` and `Address` forms of `address`
+            // ([`Self::address_text_fields`]), are compiler-lowered here.
             "tcpRequest" => {
                 const NAME: &str = "core.net.@tcpRequest";
                 const CALL_FAILED: &str = "Failed to call core.net.@tcpRequest";
                 const LOAD_FAILED: &str = "Failed to load core.net.@tcpRequest result";
-                Self::expect_arity(NAME, arguments, false, 2)?;
+                if arguments.len() != 2 && arguments.len() != 3 {
+                    return Err(format!(
+                        "{NAME} expects 2 or 3 arguments, got {}",
+                        arguments.len()
+                    ));
+                }
                 let (addr_ptr, addr_len) = self.address_text_fields(&arguments[0])?;
                 let (req_ptr, req_len) = self.extract_text(&arguments[1])?;
                 // The launch writes a DEFERRED `Result` (`Ok(responseBytes)` / `NotOk(message)`,
@@ -674,20 +683,70 @@ impl<'ctx> CodeGenerator<'ctx> {
                 // an aggregate return. The loaded value is forced at its strict-use site.
                 let result_ty = self.sum_struct_type("Result");
                 let out = self.create_entry_block_alloca("tcp_request_out", result_ty.into())?;
-                let request = self.get_intrinsic("__tcp_request_launch")?;
-                self.builder
-                    .build_call(
-                        request,
-                        &[
-                            out.into(),
-                            addr_ptr.into(),
-                            addr_len.into(),
-                            req_ptr.into(),
-                            req_len.into(),
-                        ],
-                        "",
-                    )
-                    .map_err(ctx(CALL_FAILED))?;
+                match arguments.get(2) {
+                    None => {
+                        let request = self.get_intrinsic("__tcp_request_launch")?;
+                        self.builder
+                            .build_call(
+                                request,
+                                &[
+                                    out.into(),
+                                    addr_ptr.into(),
+                                    addr_len.into(),
+                                    req_ptr.into(),
+                                    req_len.into(),
+                                ],
+                                "",
+                            )
+                            .map_err(ctx(CALL_FAILED))?;
+                    }
+                    Some(options_argument) => {
+                        // `options.transport`/`options.certificates` are each a two-variant,
+                        // no-payload sum (`Transport`/`Certificates`); the runtime only needs
+                        // to tell them apart, so each flattens to one `i64` flag — whether it
+                        // IS the non-default variant (`Tls`/`Unchecked`) — rather than crossing
+                        // the FFI as a struct.
+                        // The registered variant name is the sum's fully-qualified form
+                        // (`core.net.Tls`/`core.net.Unchecked`) — `core.net`'s own canonical
+                        // name, the one `qualify_module` rewrites its declarations under,
+                        // regardless of the short alias (`net`) an importer binds it to.
+                        let transport =
+                            self.generate_field_access(options_argument, "transport")?;
+                        let tls_flag = self.variant_tag_matches("core.net.Tls", transport)?;
+                        let tls_flag = self
+                            .builder
+                            .build_int_z_extend(tls_flag, self.context.i64_type(), "tls_flag")
+                            .map_err(ctx(CALL_FAILED))?;
+                        let certificates =
+                            self.generate_field_access(options_argument, "certificates")?;
+                        let unchecked_flag =
+                            self.variant_tag_matches("core.net.Unchecked", certificates)?;
+                        let unchecked_flag = self
+                            .builder
+                            .build_int_z_extend(
+                                unchecked_flag,
+                                self.context.i64_type(),
+                                "unchecked_flag",
+                            )
+                            .map_err(ctx(CALL_FAILED))?;
+                        let request = self.get_intrinsic("__tcp_request_secure_launch")?;
+                        self.builder
+                            .build_call(
+                                request,
+                                &[
+                                    out.into(),
+                                    addr_ptr.into(),
+                                    addr_len.into(),
+                                    req_ptr.into(),
+                                    req_len.into(),
+                                    tls_flag.into(),
+                                    unchecked_flag.into(),
+                                ],
+                                "",
+                            )
+                            .map_err(ctx(CALL_FAILED))?;
+                    }
+                }
                 self.builder
                     .build_load(result_ty, out, "tcp_request")
                     .map_err(ctx(LOAD_FAILED))

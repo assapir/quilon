@@ -47,8 +47,11 @@ const READ_PRIMITIVE: &str = "readStdin";
 /// (`Ok(responseBytes)` / `NotOk(message)`), read once forced.
 const TCP_REQUEST_PRIMITIVE: &str = "tcpRequest";
 
-/// The argument count `@tcpRequest` takes (`address`, `requestBytes`).
+/// The argument count `@tcpRequest` takes: `address`, `requestBytes`, and the optional
+/// trailing `options :: net.ConnectOptions` (`Transport`/`Certificates`) the `Tls`
+/// transport overload adds.
 const TCP_REQUEST_ARITY: usize = 2;
+const TCP_REQUEST_WITH_OPTIONS_ARITY: usize = 3;
 
 /// The bare name of `Connection`'s deferred read primitive, reached through a value —
 /// `connection.@read()` — rather than a module binding; fused the same way
@@ -503,13 +506,14 @@ fn is_read_call(function: &Expression, arguments: &[Expression]) -> bool {
         && arguments.is_empty()
 }
 
-/// Whether `function`/`arguments` is a call to the `@tcpRequest` primitive
-/// (`@tcpRequest(address, requestBytes)`, exactly two arguments) — qualified or bare, the
-/// same as [`is_read_call`].
+/// Whether `function`/`arguments` is a call to the `@tcpRequest` primitive —
+/// `@tcpRequest(address, requestBytes)` or `@tcpRequest(address, requestBytes, options)` —
+/// qualified or bare, the same as [`is_read_call`].
 fn is_tcp_request_call(function: &Expression, arguments: &[Expression]) -> bool {
     matches!(function, Expression::Identifier { name, .. }
         if at_primitive_name(name) == Some(TCP_REQUEST_PRIMITIVE))
-        && arguments.len() == TCP_REQUEST_ARITY
+        && (arguments.len() == TCP_REQUEST_ARITY
+            || arguments.len() == TCP_REQUEST_WITH_OPTIONS_ARITY)
 }
 
 /// Whether `function`/`arguments` is a call to `Connection`'s `@read` primitive — the
@@ -717,6 +721,14 @@ mod tests {
         // not treated as a deferred producer: no value flows out deferred, so nothing is forced.
         let src = "<< core.net\n^ = () -> Num => <\n  r = net.@tcpRequest(\"a:1\")\n  0\n>";
         assert_eq!(force_count(src), 0);
+    }
+
+    #[test]
+    fn bound_tcp_request_with_options_is_deferred_and_forced_at_a_strict_use() {
+        // The three-argument `ConnectOptions` overload is the same producer under the taint:
+        // still deferred, still forced only where a strict use reads it.
+        let src = "<< core.net\n^ = () -> Num => <\n  o = net.ConnectOptions.default()\n  r = net.@tcpRequest(\"a:1\", \"b\", o)\n  r ? | Ok(_) => 0 | NotOk(_) => 1\n>";
+        assert_eq!(force_count(src), 1);
     }
 
     #[test]

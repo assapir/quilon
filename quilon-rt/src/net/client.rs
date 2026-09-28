@@ -19,8 +19,9 @@ use std::io;
 /// header, so without a bound a peer that never closes (or streams without end) would grow the
 /// buffer until memory ran out; past this cap the read fails and the exchange yields `NotOk`
 /// rather than exhausting memory. 16 MiB comfortably holds an HTTP response the one-shot client
-/// is meant for.
-const MAX_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
+/// is meant for. `pub(super)`: [`super::tls`]'s response cap is the same cap, for the same
+/// reason.
+pub(super) const MAX_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
 
 /// `@tcpRequest(address, requestBytes)`: launch a one-shot TCP request exchange on a background
 /// fiber and return the deferred `Result` immediately (the calling fiber does not park here). A
@@ -104,9 +105,54 @@ fn read_to_close(stream: &mut TcpStream) -> io::Result<Vec<u8>> {
 /// Build the `NotOk(message)` a failed `@tcpRequest` yields: the failing `stage`
 /// (`resolve`/`connect`/`write`/`read`), the target `address`, and the underlying error.
 fn request_error(address: &str, stage: &str, error: &io::Error) -> QnResult {
-    QnResult::not_ok(&format!(
-        "core.net.@tcpRequest to {address} failed at {stage}: {error}"
-    ))
+    QnResult::not_ok(&request_error_text(address, stage, error))
+}
+
+/// [`request_error`]'s message, as plain text — shared with [`super::tls`], whose own
+/// non-certificate stage failures (a resolve, connect, write, or read that has nothing to
+/// do with the certificate) read exactly like the plain path's.
+pub(super) fn request_error_text(address: &str, stage: &str, error: &io::Error) -> String {
+    format!("core.net.@tcpRequest to {address} failed at {stage}: {error}")
+}
+
+/// `@tcpRequest(address, requestBytes, options :: ConnectOptions)`: like
+/// [`__tcp_request_launch`], but `tls`/`unchecked_certificates` (each `0` or `1`, the
+/// flattened `Transport`/`Certificates` discriminants the code generator reads out of
+/// `options` at the call site — see `generate_at_primitive`'s `"tcpRequest"` arm) select
+/// the connection's transport and certificate checking. `tls == 0` runs the exact same
+/// plain-TCP exchange [`__tcp_request_launch`] does; `tls != 0` hands the exchange to
+/// [`super::tls::tls_request`] instead, which parks the calling fiber for the handshake
+/// (on the blocking-call pool) and again while the request/response bytes cross the wire.
+///
+/// # Safety contract (upheld by the compiler)
+/// Same as [`__tcp_request_launch`].
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
+#[unsafe(no_mangle)]
+pub extern "C" fn __tcp_request_secure_launch(
+    out: *mut QnResult,
+    address_data: *const u8,
+    address_len: i64,
+    request_data: *const u8,
+    request_len: i64,
+    tls: i64,
+    unchecked_certificates: i64,
+) {
+    let address = bytes_to_string(address_data, address_len);
+    let request = copy_bytes(request_data, request_len);
+    let tls = tls != 0;
+    let unchecked = unchecked_certificates != 0;
+    let deferred = launch_deferred_result(move || {
+        if tls {
+            match super::tls::tls_request(&address, &request, unchecked) {
+                Ok(response) => QnResult::ok(&response),
+                Err(message) => QnResult::not_ok(&message),
+            }
+        } else {
+            tcp_request(&address, &request)
+        }
+    });
+    // SAFETY: `out` is writable storage for one `QnResult` (the code generator's alloca).
+    unsafe { *out = deferred };
 }
 
 #[cfg(test)]

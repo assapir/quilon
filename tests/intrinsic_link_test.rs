@@ -80,6 +80,15 @@ linkedGreeting = "linked " + "again"
     : true
   assert(reached, equals(true))
 
+  ~ __tcp_request_secure_launch (net.@tcpRequest's ConnectOptions overload) — same guard,
+  ~ same reasoning: codegen emits the call so the link/JIT gate sees the symbol, but it
+  ~ never runs.
+  reachedSecure = args.size > 1000000
+    ? net.@tcpRequest("127.0.0.1:1", "", net.ConnectOptions { transport = net.Tls, certificates = net.Unchecked })
+      ? | Ok(_) => true | NotOk(_) => true
+    : true
+  assert(reachedSecure, equals(true))
+
   ~ __tcp_serve_launch (net.@tcpServe), __server_kill (server.kill), and — from the
   ~ handler's own compiled body, even though nothing ever connects to reach it at
   ~ runtime — __connection_read_launch/__connection_write/__connection_close, and
