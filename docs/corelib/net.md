@@ -36,14 +36,14 @@ sizing.
 | `ConnectOptions.default() -> ConnectOptions` | `{ transport = Plain, certificates = Checked }`. |
 
 `Transport = Plain / Tls`. Over `Tls`, the handshake's server name (for SNI, and for the
-certificate's name check) is `address`'s host — an IP-literal host uses rustls's IP form of
-the server name rather than a DNS name.
+certificate's name check) is `address`'s host: an IP-literal host uses rustls's IP form of
+the server name; a hostname uses its DNS form.
 
 `Certificates = Checked / Unchecked`. `Checked` (the default) verifies the peer's
-certificate against the OS trust store — or `SSL_CERT_FILE`/`SSL_CERT_DIR` when either is
-set, which [`rustls-native-certs`](https://docs.rs/rustls-native-certs) reads instead of the
-OS store — and that the certificate is valid for the address's host. `Unchecked` accepts any
-certificate, trusted or not, still requiring the peer to hold the certificate's private key.
+certificate against the OS trust store — or, when `SSL_CERT_FILE`/`SSL_CERT_DIR` is set,
+whichever one [`rustls-native-certs`](https://docs.rs/rustls-native-certs) reads then — and
+that the certificate is valid for the address's host. `Unchecked` accepts any certificate,
+trusted or not, still requiring the peer to hold the certificate's private key.
 
 A handshake or certificate failure yields `NotOk`, naming the address and a reason —
 plain English for the common cases, rustls's own text otherwise:
