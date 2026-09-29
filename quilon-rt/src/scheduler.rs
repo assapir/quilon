@@ -54,7 +54,7 @@ const FIBER_STACK_SIZE: usize = 512 * 1024;
 const SEED_STACK_SIZE: usize = 8 * 1024 * 1024;
 
 /// What a fiber yields to the scheduler when it parks.
-enum Park {
+pub(crate) enum Park {
     /// Park until `Instant`, then become ready again.
     Sleep(Instant),
     /// Park until the reactor reports this token ready. The interest was already
@@ -89,7 +89,7 @@ enum Park {
 }
 
 type FiberCoroutine = Coroutine<(), Park, (), DefaultStack>;
-type FiberYielder = Yielder<(), Park>;
+pub(crate) type FiberYielder = Yielder<(), Park>;
 
 struct Fiber {
     coroutine: FiberCoroutine,
@@ -184,7 +184,7 @@ fn with_scheduler<R>(f: impl FnOnce(&mut Scheduler) -> R) -> R {
 /// below, plus [`run_case_guarded`], starts this way rather than repeating the same
 /// get-and-assert; `name` names the caller for the panic message.
 fn current_yielder(name: &str) -> *const FiberYielder {
-    let yielder = with_worker(|worker| worker.current_yielder.get()) as *const FiberYielder;
+    let yielder = with_worker(|worker| worker.current_yielder.get());
     assert!(!yielder.is_null(), "{name}() called outside a fiber");
     yielder
 }
@@ -232,10 +232,9 @@ fn suspend_final(yielder: *const FiberYielder, park: Park) -> ! {
     )
 }
 
-/// Set the worker's current-yielder cell, cast to the opaque `*const c_void` it stores (see
-/// `crate::worker`'s module doc for why it is untyped there).
+/// Set the worker's current-yielder cell.
 fn set_current_yielder(yielder: *const FiberYielder) {
-    with_worker(|worker| worker.current_yielder.set(yielder as *const c_void));
+    with_worker(|worker| worker.current_yielder.set(yielder));
 }
 
 /// Resume `coroutine` (fiber `id`, guard page `[guard_low, guard_high)`) with its guard

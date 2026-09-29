@@ -3,11 +3,9 @@
 //! The current worker: the state that used to sit in seven separate thread-locals across
 //! `scheduler`, `launch_scope`, `net::server`, and `abort_trap`, now owned by one [`Worker`]
 //! per OS thread and reached only through [`with_worker`]/[`try_with_worker`] — never a bare
-//! thread-local read. This is a straight move, not a redesign: [`WORKER`] is still a plain
-//! `thread_local!`, so today's runtime is still exactly one worker on exactly one thread. The
-//! payoff comes later, when the M:N scheduler spawns one `Worker` per CPU: every caller
-//! already goes through the accessor here, so giving each OS thread its own worker needs no
-//! further change at those call sites.
+//! thread-local read. [`WORKER`] is a plain `thread_local!`; `scheduler::run` spawns one
+//! `Worker` per OS thread (see `docs/concurrency/runtime.md`), and every caller reaches its
+//! own through this module's accessors, never another thread's.
 //!
 //! Each field keeps its own interior mutability (a `Cell`/`RefCell` per field, not one
 //! `RefCell` around the whole struct) — exactly mirroring the independent thread-locals it
@@ -16,18 +14,12 @@
 //! used relative to each other — stays panic-free: one field's own short-scoped borrow never
 //! blocks access to a sibling field's.
 //!
-//! `current_yielder` is stored as an untyped `*const c_void` rather than
-//! `*const scheduler::FiberYielder`: `FiberYielder`'s definition depends on `scheduler`'s own
-//! private `Park` enum, and this module has no reason to see either — `scheduler` casts on
-//! its own read and write, the same way it always cast this raw pointer.
-
 use crate::launch_scope::LaunchScope;
 use crate::net::server::{ConnectionState, ServerState};
 use crate::reactor::Reactor;
-use crate::scheduler::Scheduler;
+use crate::scheduler::{FiberYielder, Scheduler};
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
-use std::os::raw::c_void;
 use std::rc::Rc;
 
 pub(crate) struct Worker {
@@ -35,17 +27,15 @@ pub(crate) struct Worker {
     pub(crate) scheduler: RefCell<Scheduler>,
     /// This worker's `mio` poll wrapper.
     pub(crate) reactor: RefCell<Reactor>,
-    /// The running fiber's `Yielder` — see the module doc for why this is untyped here.
-    pub(crate) current_yielder: Cell<*const c_void>,
+    /// The running fiber's `Yielder`.
+    pub(crate) current_yielder: Cell<*const FiberYielder>,
     /// How many `aborts()` traps are in progress on this worker right now.
     pub(crate) abort_trap_depth: Cell<u32>,
     /// The ids of the fibers currently resuming on this worker, innermost last.
     pub(crate) running_fibers: RefCell<Vec<usize>>,
-    /// Every fiber's own open launch-scope stack, keyed by fiber id (`None` for a call made
-    /// outside any fiber). See `launch_scope`.
+    /// Every fiber's own open launch-scope stack, keyed by fiber id. See `launch_scope`.
     pub(crate) launch_scopes: RefCell<HashMap<Option<usize>, Vec<LaunchScope>>>,
-    /// The withheld report from the most recent `aborts()` trap that aborted on this worker,
-    /// empty if it returned instead. See `abort_trap`.
+    /// The withheld report from this worker's most recent aborted `aborts()` trap.
     pub(crate) last_abort_report: RefCell<String>,
     /// The next `Connection`/`Server` handle id this worker hands out. See `net::server`.
     pub(crate) next_handle: Cell<u64>,
@@ -53,8 +43,7 @@ pub(crate) struct Worker {
     pub(crate) connections: RefCell<HashMap<u64, Rc<ConnectionState>>>,
     /// `net.@tcpServe`'s live servers, by handle id.
     pub(crate) servers: RefCell<HashMap<u64, Rc<ServerState>>>,
-    /// Which server's `in_flight` count a currently-running handler fiber counts against,
-    /// keyed by fiber id.
+    /// Which server's `in_flight` count each currently-running handler fiber counts against.
     pub(crate) handler_fiber_server: RefCell<HashMap<usize, usize>>,
 }
 
