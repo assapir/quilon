@@ -33,7 +33,7 @@ cross-worker wait costs no more than that. This is also why the leader alone dec
 program is done: by the time its own ready queue and parked state are both empty, every
 launch its call tree made — wherever it ran — has already settled, so nothing is left
 running elsewhere either. A helper's own idle queue means only that IT has nothing to do; it
-waits for more placed work instead of stopping.
+waits for more placed work.
 
 **Placement.** A new launch (every freestanding value-returning `@` primitive the deferral
 pass registers a launch scope around — `@readStdin`, `@tcpRequest`) and an accepted
