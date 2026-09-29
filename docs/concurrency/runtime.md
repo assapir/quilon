@@ -11,6 +11,9 @@ scheduler. The runtime pieces live in `quilon-rt/src/`: the socket types in
 `net.rs`, the scheduler + readiness plumbing in `scheduler.rs`, the `mio` poll
 wrapper in `reactor.rs`, the fiber-stack GC integration in `gc.rs`, and the
 blocking-call pool (for a call with no non-blocking form at all) in `blocking.rs`.
+The scheduler's run queue and reactor, and every other piece of state scoped to one thread
+(not one fiber, not the whole process), are fields of one `Worker` value (`worker.rs`),
+reached through a single accessor. Exactly one worker exists, on the one thread `run()` uses.
 
 The trace below follows a single `TcpStream::read` that has to wait for data.
 

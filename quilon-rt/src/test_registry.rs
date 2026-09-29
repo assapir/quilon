@@ -16,6 +16,13 @@
 //! - `REPORTER` and `SELECTION` are written by the `quilon test` CLI before the run
 //!   starts, through [`set_reporter`]/[`set_selection`]; the harness itself never sees them.
 //!
+//! Left as bare thread-locals rather than moved into `crate::worker::Worker`: `quilon test`
+//! runs exactly one suite, on one thread, per process — cases run one at a time through
+//! [`__test_case_run_guarded`]'s own nested fiber, never spread across more than one worker —
+//! so there is only ever one such run to track, on whichever thread the CLI's own call to
+//! `scheduler::run` happens to use. Truly process-global in effect, not per-worker state a
+//! future multi-worker scheduler would ever need more than one of.
+//!
 //! A case carries a failed flag: a failing `expect` sets it, and the case's close tallies it
 //! as passed or failed. What ENDS a case at its first failing `expect` is a different
 //! mechanism — [`__test_case_run_guarded`] runs the case's body on its own nested fiber

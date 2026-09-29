@@ -11,13 +11,14 @@
 //! Boehm's thread set stable (main + worker).
 //!
 //! Consequence of sharing that one worker thread across four modules' tests: they also
-//! share its thread-locals — `scheduler::SCHEDULER`/`REACTOR`,
-//! `net::server::SERVERS`/`CONNECTIONS`/`NEXT_HANDLE`/`HANDLER_FIBER_SERVER`, and
-//! `deferred::STDIN_BUSY`/`STDIN_LEFTOVER`. Every test today cleans up after itself, so
-//! this passes, but it is a real coupling: a test that leaves `SERVERS` populated or
-//! `STDIN_BUSY == true` can now poison a later test in a DIFFERENT module, where it
-//! used to only ever run on its own module's dedicated worker. A new GC-touching test
-//! must leave these thread-locals as it found them.
+//! share its state — the `crate::worker::Worker` that `scheduler`, `launch_scope`, and
+//! `net::server` all now read and write through `crate::worker::with_worker` (installed and
+//! torn down once per `scheduler::run` call), and `deferred::STDIN_BUSY`/`STDIN_LEFTOVER`
+//! (still their own bare thread-locals — see `deferred`'s own doc for why). Every test today
+//! cleans up after itself, so this passes, but it is a real coupling: a test that leaves a
+//! server registered on the worker or `STDIN_BUSY == true` can now poison a later test in a
+//! DIFFERENT module, where it used to only ever run on its own module's dedicated worker. A
+//! new GC-touching test must leave this state as it found it.
 
 use crate::gc;
 use crate::test_support::GC_LOCK;

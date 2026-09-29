@@ -369,6 +369,13 @@ fn fail_read(site: *const QnSite, error: &io::Error) -> ! {
     )
 }
 
+// Left as bare thread-locals rather than moved into `crate::worker::Worker`: fd 0 is one
+// descriptor for the whole PROCESS, not one per worker, so the gate that serializes reads of
+// it needs to be seen by every worker alike once more than one exists — a per-worker copy of
+// `STDIN_BUSY` would let a fiber on one worker and a fiber on another both believe they hold
+// the gate at once and race the same descriptor. Left exactly as today for step 1 (still one
+// worker, so a thread-local already is process-wide); making the gate genuinely cross-worker
+// is a step 2 concern, once `@readStdin` can actually be called from more than one.
 thread_local! {
     /// Bytes read past the newline of the previous `@readStdin`, kept so the next call
     /// continues the same stdin stream line-by-line rather than dropping them.

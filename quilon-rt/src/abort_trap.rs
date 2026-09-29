@@ -7,18 +7,17 @@
 //! active, `crate::report::fail_at` and `crate::process::__exit` suspend the fiber with the
 //! exit code and the report withheld from stderr, rather than terminating the process.
 
-use std::cell::RefCell;
 use std::os::raw::c_void;
 
 use crate::mem::{QnSlice, alloc_text};
+use crate::worker::with_worker;
 
-thread_local! {
-    /// The withheld report from the most recent `__abort_trap_run` that aborted — empty if
-    /// it returned instead. Read once, right after that call, by `__abort_trap_report`; a
-    /// later `__abort_trap_run` overwrites it, which is safe because codegen always reads it
-    /// (if at all) before evaluating another `aborts()` matcher.
-    static LAST_REPORT: RefCell<String> = const { RefCell::new(String::new()) };
-}
+// The withheld report from the most recent `__abort_trap_run` that aborted lives in
+// `crate::worker::Worker::last_abort_report` — read once, right after that call, by
+// `__abort_trap_report`; a later `__abort_trap_run` overwrites it, which is safe because
+// codegen always reads it (if at all) before evaluating another `aborts()` matcher. No
+// intervening park separates the two calls (see `run_abort_trap_guarded`'s own doc), so a
+// per-worker cell suffices — no fiber-keyed storage is needed here.
 
 /// Run the zero-parameter lambda `function(environment)` — the split-apart `{ ptr fn, ptr
 /// env }` of the trampoline the code generator builds for `aborts()` (see
@@ -37,11 +36,11 @@ pub extern "C" fn __abort_trap_run(function: *const c_void, environment: *mut c_
     let function: extern "C" fn(*mut c_void) -> u8 = unsafe { std::mem::transmute(function) };
     match crate::scheduler::run_abort_trap_guarded(function, environment) {
         Some(report) => {
-            LAST_REPORT.with(|last| *last.borrow_mut() = report);
+            with_worker(|worker| *worker.last_abort_report.borrow_mut() = report);
             1
         }
         None => {
-            LAST_REPORT.with(|last| last.borrow_mut().clear());
+            with_worker(|worker| worker.last_abort_report.borrow_mut().clear());
             0
         }
     }
@@ -51,7 +50,7 @@ pub extern "C" fn __abort_trap_run(function: *const c_void, environment: *mut c_
 /// when it returned instead. Backs a failing `not(aborts())`'s mismatch message.
 #[unsafe(no_mangle)]
 pub extern "C" fn __abort_trap_report() -> QnSlice {
-    LAST_REPORT.with(|last| alloc_text(last.borrow().as_bytes()))
+    with_worker(|worker| alloc_text(worker.last_abort_report.borrow().as_bytes()))
 }
 
 // See `scheduler`'s own test module for the trap's unit tests: they need a fiber (and, for

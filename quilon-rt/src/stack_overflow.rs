@@ -34,6 +34,15 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 static GUARD_LOW: AtomicUsize = AtomicUsize::new(0);
 static GUARD_HIGH: AtomicUsize = AtomicUsize::new(0);
 
+// `GUARD_LOW`/`GUARD_HIGH` are plain statics, not one of the seven per-thread cells this PR
+// moves into `crate::worker::Worker` — signal-safety (above) is why they stay off any
+// `RefCell`/`Worker` lookup at all, not just why they were thread-locals. That design is
+// single-worker-only, though: once a second worker OS thread exists, two workers each resuming
+// a fiber can call `set_current_guard` at once, and these process-wide statics let one clobber
+// the other's guard-page range right as a real fault checks it — a genuine race, not merely a
+// naming mismatch. Step 2 needs this made per-OS-thread (a `thread_local!`, the same as
+// `ALT_STACK_READY` below, for the identical signal-safety reason — never a `Worker` field).
+
 /// Record the running fiber's guard page before resuming it, returning whichever pair was
 /// current before this call — pass it to [`restore_guard`] once the resume returns. A
 /// resume can nest (`run_case_guarded` resumes a case's own fiber from inside a fiber
@@ -67,6 +76,11 @@ const MESSAGE: &[u8] = b"error[QN507]: stack overflow\n";
 /// both are handled the same way.
 const HANDLED_SIGNALS: [c_int; 2] = [libc::SIGSEGV, libc::SIGBUS];
 
+// Left as a bare thread-local rather than moved into `crate::worker::Worker`: `sigaltstack`
+// is an OS-level per-THREAD attribute, not application state a `Worker` value owns, so it
+// already has exactly the right scope for a future worker thread with zero change here — each
+// new OS thread that calls `install` (via `crate::gc::install_hooks`) gets its own alt stack
+// the first time, the same way it does today for the one thread that exists now.
 thread_local! {
     /// Whether THIS thread already has its own alternate signal stack. `sigaltstack`
     /// is per-thread, so every thread that ever runs a fiber scheduler needs one — see
