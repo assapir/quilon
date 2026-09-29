@@ -75,9 +75,13 @@ sequenceDiagram
 
 ## Blocking calls
 
-Some calls have no non-blocking form at all — `getaddrinfo` (hostname resolution) is the one
-this runtime makes — so they cannot park on reactor readiness the way a socket op does. `quilon-rt/src/blocking.rs`
-runs such a call on a helper OS thread instead, through its one entry point,
+Some calls have no non-blocking form at all, or would tie up the reactor thread every fiber
+in the process shares if they ran there. This runtime routes two kinds of work through the
+pool for those reasons: `getaddrinfo` (hostname resolution) has no non-blocking form to park
+on; a TLS handshake's CPU-bound steps (key exchange, certificate and signature verification —
+see [`core.net`'s TLS section](../corelib/net.md#tls)) run there so that work stays off the
+reactor thread. `quilon-rt/src/blocking.rs` runs such a call on a helper OS thread instead,
+through its one entry point,
 `run_blocking(job)`: it queues `job` on the pool, parks the calling fiber on a fresh reactor
 token, and returns once a worker has run it and woken the reactor through the same
 `ReactorWaker` a resolver-style call already uses. `Err` only when the pool itself could not

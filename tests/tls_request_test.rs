@@ -15,6 +15,7 @@ use std::process::{Command, Stdio};
 use std::sync::Arc;
 use std::thread::JoinHandle;
 
+use rustls::pki_types::pem::PemObject;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use rustls::{ServerConfig, ServerConnection, StreamOwned};
 
@@ -25,17 +26,14 @@ fn fixture(name: &str) -> PathBuf {
 }
 
 fn load_certs(file: &str) -> Vec<CertificateDer<'static>> {
-    let bytes = std::fs::read(fixture(file)).expect("read fixture cert");
-    rustls_pemfile::certs(&mut bytes.as_slice())
+    CertificateDer::pem_file_iter(fixture(file))
+        .expect("open fixture cert PEM")
         .collect::<Result<_, _>>()
         .expect("parse fixture cert PEM")
 }
 
 fn load_key(file: &str) -> PrivateKeyDer<'static> {
-    let bytes = std::fs::read(fixture(file)).expect("read fixture key");
-    rustls_pemfile::private_key(&mut bytes.as_slice())
-        .expect("parse fixture key PEM")
-        .expect("fixture key file carries a key")
+    PrivateKeyDer::from_pem_file(fixture(file)).expect("parse fixture key PEM")
 }
 
 /// A `ServerConfig` serving `<name>.crt`/`<name>.key` under `tests/fixtures/tls/`.

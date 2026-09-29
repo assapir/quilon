@@ -45,6 +45,11 @@ whichever one [`rustls-native-certs`](https://docs.rs/rustls-native-certs) reads
 that the certificate is valid for the address's host. `Unchecked` accepts any certificate,
 trusted or not, still requiring the peer to hold the certificate's private key.
 
+The handshake's crypto — key exchange, certificate and signature verification — runs on
+the runtime's blocking-call pool, parking only the calling fiber; the network I/O around
+it stays on the reactor, and record encryption/decryption after the handshake run inline.
+See [Concurrency runtime: blocking calls](../concurrency/runtime.md#blocking-calls).
+
 A handshake or certificate failure yields `NotOk`, naming the address and a reason —
 plain English for the common cases, rustls's own text otherwise:
 

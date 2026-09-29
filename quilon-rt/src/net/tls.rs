@@ -44,16 +44,17 @@ pub(super) fn tls_request(
         .map_err(|error| super::client::request_error_text(address, "read", &error))
 }
 
-/// Build the `ClientConnection` and drive it to completion. `write_tls`/`read_tls` move raw
-/// bytes over `stream`'s own park-on-readiness `read`/`write`; `process_new_packets` — the
-/// only step that isn't I/O — runs on the blocking-call pool, the `ClientConnection` moved
-/// into the closure and back so nothing here blocks the reactor.
+/// Build the `ClientConnection` and drive it to completion. `ClientConnection::new` already
+/// does crypto (the ClientHello's key share), so it runs on the blocking-call pool too, not
+/// just `process_new_packets` below; `write_tls`/`read_tls` move raw bytes over `stream`'s
+/// own park-on-readiness `read`/`write`, the only steps that stay on the reactor.
 fn handshake(
     config: Arc<ClientConfig>,
     server_name: ServerName<'static>,
     stream: &mut TcpStream,
 ) -> io::Result<ClientConnection> {
-    let mut conn = ClientConnection::new(config, server_name).map_err(tls_io_error)?;
+    let mut conn =
+        run_blocking(move || ClientConnection::new(config, server_name))?.map_err(tls_io_error)?;
     while conn.is_handshaking() {
         while conn.wants_write() {
             if conn.write_tls(stream)? == 0 {

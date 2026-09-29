@@ -15,9 +15,11 @@ All notable changes to Quilon are documented here.
   TLS for any URL, scheme included. Built on `rustls` 0.23 with the `ring` crypto provider,
   trusting the OS certificate store (`rustls-native-certs`, which honours
   `SSL_CERT_FILE`/`SSL_CERT_DIR`) or, absent one, the compiled-in Mozilla list
-  (`webpki-roots`) — a built binary needs nothing installed. The handshake runs on the
-  runtime's blocking-call pool, parking only the calling fiber; record encryption and
-  decryption run inline on the reactor. A handshake or certificate failure is a `NotOk`
+  (`webpki-roots`) — a built binary needs nothing installed. The handshake's crypto (key
+  exchange, certificate and signature verification) runs on the runtime's blocking-call
+  pool, parking only the calling fiber; the network I/O around it stays on the reactor, and
+  record encryption/decryption afterward run inline there too. A handshake or certificate
+  failure is a `NotOk`
   naming the address and a plain-English reason for the common cases (an untrusted issuer,
   an expired certificate with its date, a name mismatch naming both names), rustls's own
   text otherwise. See `docs/corelib/net.md#tls` and `docs/corelib/http.md#tls`. Closes
