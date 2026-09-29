@@ -139,6 +139,39 @@ fn num_plus_text_suggests_interpolation() {
     );
 }
 
+/// A type mismatch against an anonymous record renders the record in Quilon syntax
+/// (`{ field :: Type, ... }`), not the compiler's internal `Record([("field", Type)])`
+/// debug form.
+#[test]
+fn a_record_type_mismatch_prints_quilon_syntax() {
+    let src = "User = { name :: Text, age :: Num }\nolder = (u :: User) -> Num => < u.age + 1 >\n^ = () => <\n  older({ name = \"A\", age = 3 })\n>\n";
+    let (ok, stderr) = check("record", src);
+
+    assert!(!ok, "expected non-zero exit, stderr was: {stderr}");
+    assert!(
+        stderr.contains(
+            "error[QN301]: type mismatch: expected User, got { name :: Text, age :: Num }"
+        ),
+        "{stderr}"
+    );
+}
+
+/// The same rendering nests: an array of anonymous records inside another anonymous
+/// record still prints in Quilon syntax all the way down.
+#[test]
+fn a_nested_record_type_mismatch_prints_quilon_syntax() {
+    let src = "x :: Num = { crew = [{ rank = 1 }] }\n^ = () -> Num => < x >\n";
+    let (ok, stderr) = check("nested_record", src);
+
+    assert!(!ok, "expected non-zero exit, stderr was: {stderr}");
+    assert!(
+        stderr.contains(
+            "error[QN301]: type mismatch: expected Num, got { crew :: []{ rank :: Num } }"
+        ),
+        "{stderr}"
+    );
+}
+
 #[test]
 fn lexer_error_reports_line_col_and_caret() {
     // `#` is not a valid token. (`@` used to be invalid, but now marks a deferring
