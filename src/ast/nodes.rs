@@ -1270,9 +1270,11 @@ pub fn positional_field_name(index: usize) -> String {
 /// Shared by the type checker's overload diagnostics and codegen's entry-point
 /// signature diagnostic, so both render types the same way. A not-yet-concrete
 /// `Generic` (an unresolved sum payload such as the `T` in `Ok(T)`) renders as
-/// `<unknown>`. An anonymous record — named or positional — renders in Quilon syntax
-/// (`{ name :: Text, age :: Num }` / `{ Num, Num }`), the same shape it would be written
-/// in, so a diagnostic quoting a record type reads like the source that produced it.
+/// `<unknown>`. The match is exhaustive so a new `Type` variant must pick a rendering
+/// here rather than falling back to `Debug`. An anonymous record — named or positional
+/// — renders in Quilon syntax (`{ name :: Text, age :: Num }` / `{ Num, Num }`), the
+/// same shape it would be written in, so a diagnostic quoting a record type reads like
+/// the source that produced it.
 pub fn type_label(ty: &Type) -> String {
     match ty {
         Type::Num => NUM_TYPE_NAME.to_string(),
@@ -1282,6 +1284,7 @@ pub fn type_label(ty: &Type) -> String {
         Type::Array(elem) => format!("[]{}", type_label(elem)),
         Type::Map(k, v) => format!("[|{} => {}|]", type_label(k), type_label(v)),
         Type::Set(elem) => format!("[|{}|]", type_label(elem)),
+        Type::Record(fields) if fields.is_empty() => "{}".to_string(),
         Type::Record(fields) if record_fields_are_positional(fields) => {
             let rendered: Vec<String> = fields.iter().map(|(_, t)| type_label(t)).collect();
             format!("{{ {} }}", rendered.join(", "))
