@@ -436,7 +436,13 @@ pub extern "C" fn __read_launch(site: *const QnSite) -> QnSlice {
     // producer on another worker), the same way `net::client`'s own address/request
     // pointers cross a `spawn` boundary.
     let site = site as usize;
-    launch_deferred_text(move || read_stdin_text(site as *const QnSite))
+    // Taken HERE, synchronously, on the launching fiber, before the producer is even built —
+    // not inside the producer's own body, which only starts running once placement has
+    // handed it to some worker and that worker gets around to it. See `take_stdin_ticket`'s
+    // own doc for why ticket order (fixed now) rather than gate-arrival order (decided later,
+    // by racing OS thread scheduling) is what "launch order" actually requires.
+    let ticket = take_stdin_ticket();
+    launch_deferred_text(move || read_stdin_text(site as *const QnSite, ticket))
 }
 
 /// Force a deferred `Text`: the per-representation C-ABI wrapper over the generic `force`.
@@ -456,8 +462,8 @@ pub extern "C" fn __force_text(deferred_ptr: *const c_void) -> QnSlice {
 /// The `@readStdin` producer: read one line from stdin as a `Text`, serialized on the stdin
 /// gate so concurrent reads take consecutive lines rather than racing fd 0. Yields the empty
 /// `Text` at end-of-input; a genuine IO error faults at the launch site (fail-loud).
-fn read_stdin_text(site: *const QnSite) -> QnSlice {
-    acquire_stdin();
+fn read_stdin_text(site: *const QnSite, ticket: u64) -> QnSlice {
+    acquire_stdin(ticket);
     let read = read_stdin_line();
     release_stdin();
     match read {
@@ -483,50 +489,76 @@ fn fail_read(site: *const QnSite, error: &io::Error) -> ! {
 /// fd 0 is one descriptor for the whole PROCESS, not one per worker — a gate that serialized
 /// reads only among fibers on the SAME worker would let a fiber on one worker and a fiber on
 /// another both believe they hold it at once and race the same descriptor. One process-wide
-/// `Mutex`, not a `Worker` field or a thread-local, covers every worker alike; `busy` and
-/// `leftover` (the previous read's unconsumed tail) live behind the SAME lock as the waiter
-/// list precisely so a release's wake can never land in the gap between a blocked acquirer's
-/// own check and its registration (see [`Waiters`]'s own doc).
+/// `Mutex`, not a `Worker` field or a thread-local, covers every worker alike.
+///
+/// A TICKET lock, not a plain busy flag: two concurrent `@readStdin` calls must read
+/// consecutive lines in LAUNCH order, and launch order is decided once, at the moment
+/// `__read_launch` runs — before its producer fiber even exists, let alone which worker
+/// placement hands it to or when that worker's OS thread actually gets scheduled to run it
+/// for the first time. A plain "whoever reaches the gate first, or whoever a broadcast wake
+/// happens to let run first, wins" gate only preserved launch order by accident under the
+/// original single-threaded scheduler (one ready queue, so whichever fiber's turn came first
+/// in program order was also, unavoidably, whichever one the scheduler ran first) — across
+/// real OS threads racing to reach the gate, or racing a broadcast wake to re-acquire it,
+/// that accident stops holding. Handing out a ticket at launch time and serving strictly in
+/// ticket order removes the race entirely: order is fixed before any concurrency starts.
 struct StdinGate {
-    busy: bool,
+    next_ticket: u64,
+    /// The one ticket currently allowed through.
+    serving: u64,
     leftover: Vec<u8>,
     waiters: Waiters,
 }
 
 static STDIN_GATE: Mutex<StdinGate> = Mutex::new(StdinGate {
-    busy: false,
+    next_ticket: 0,
+    serving: 0,
     leftover: Vec::new(),
     waiters: Waiters(Vec::new()),
 });
 
 const STDIN_FD: i32 = 0;
 
-/// Take ownership of stdin, waiting until any current reader — on any worker — releases it.
-fn acquire_stdin() {
+/// Hand out the next stdin-read ticket, synchronously, on the calling (launching) fiber —
+/// call this from `__read_launch` itself, before the producer that will eventually
+/// [`acquire_stdin`] with it is even built. See [`StdinGate`]'s own doc for why ticket order
+/// must be fixed this early.
+fn take_stdin_ticket() -> u64 {
+    let mut gate = STDIN_GATE
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let ticket = gate.next_ticket;
+    gate.next_ticket += 1;
+    ticket
+}
+
+/// Wait until `ticket` is being served — i.e., every earlier ticket has already released the
+/// gate — on any worker.
+fn acquire_stdin(ticket: u64) {
     loop {
         let token = {
             let mut gate = STDIN_GATE
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
-            if !gate.busy {
-                gate.busy = true;
+            if gate.serving == ticket {
                 return;
             }
             gate.waiters.register()
         };
         park_on_readiness(token);
-        // Re-loop and re-check: a wake is an invitation to look, never a guarantee — the
-        // gate may already be re-taken by whichever waiter's worker ran first.
+        // Re-loop and re-check: a broadcast wake tells every waiting ticket to look, not
+        // which one's turn it actually is — only the matching ticket proceeds; every other
+        // one re-registers and parks again.
     }
 }
 
-/// Release stdin and wake every reader waiting for the gate — on every worker one is parked
-/// on; they re-contend, and the first to run claims it.
+/// Release stdin: advance to the next ticket and wake every waiter to re-check (only the
+/// one now being served actually proceeds).
 fn release_stdin() {
     let mut gate = STDIN_GATE
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
-    gate.busy = false;
+    gate.serving += 1;
     gate.waiters.wake_all();
 }
 
@@ -693,8 +725,9 @@ mod tests {
         on_gc_thread(|| {
             run(|| {
                 for _ in 0..2 {
-                    spawn(|| {
-                        acquire_stdin();
+                    let ticket = take_stdin_ticket();
+                    spawn(move || {
+                        acquire_stdin(ticket);
                         let now = CONCURRENT.fetch_add(1, Ordering::SeqCst) + 1;
                         MAX_CONCURRENT.fetch_max(now, Ordering::SeqCst);
                         // Yield while holding the gate; a second reader must wait, not enter.

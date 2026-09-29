@@ -1,16 +1,17 @@
 // SPDX-License-Identifier: GPL-2.0-only WITH Classpath-exception-2.0
 
-//! A cooperative, single-threaded fiber scheduler — the bedrock of Quilon's
-//! concurrency model (colorless implicit futures). [`spawn`] creates a stackful
-//! `corosensei` fiber and enqueues it; [`run`] drives a ready-queue + reactor loop
-//! that resumes fibers until each finishes or parks, blocks the [`Reactor`] until
-//! the nearest wake deadline, and wakes due fibers. [`sleep`] is the first yield
-//! primitive: called from inside a fiber, it parks the fiber with a deadline and
-//! yields to the scheduler.
+//! An M:N fiber scheduler — the bedrock of Quilon's concurrency model (colorless implicit
+//! futures). [`run`] starts one worker per CPU (see its own doc), each cooperatively
+//! multiplexing its own stackful `corosensei` fibers over a ready-queue + reactor loop that
+//! resumes fibers until each finishes or parks, blocks the [`Reactor`] until the nearest
+//! wake deadline, and wakes due fibers; a fiber never moves off the worker [`spawn`] (or
+//! `spawn_placed`) put it on. [`sleep`] is the first yield primitive: called from inside a
+//! fiber, it parks the fiber with a deadline and yields to its own worker's scheduler.
 //!
-//! The subtle fiber-stack GC scanning lives in [`crate::gc`]. [`__run_fiber_main`] is the
-//! C-ABI wrapper the generated `main` calls to run a program's entry on this scheduler, so
-//! the `@` leaf IO primitives (e.g. `core.time`'s `@sleep`) have a fiber to park on.
+//! The subtle fiber-stack GC scanning lives in [`crate::gc`]; cross-worker placement in
+//! `crate::placement`. [`__run_fiber_main`] is the C-ABI wrapper the generated `main`
+//! calls to run a program's entry (on worker 0) on this scheduler, so the `@` leaf IO
+//! primitives (e.g. `core.time`'s `@sleep`) have a fiber to park on.
 
 use crate::gc;
 use crate::placement;
@@ -881,6 +882,57 @@ fn run_helper(index: usize, registry: Arc<placement::Registry>, barrier: Arc<Bar
     gc::end_thread();
 }
 
+/// How many times [`spawn_worker_thread`] retries a failed spawn before giving up. 40
+/// attempts 25ms apart is a full second of retrying — resource pressure worth absorbing
+/// (a burst of other processes on the same machine each starting their own workers, this
+/// crate's own test suite among them) clears well within that; a full second still failing
+/// means the machine is genuinely out of whatever the OS refused (threads, memory), not
+/// momentarily busy.
+const WORKER_SPAWN_ATTEMPTS: u32 = 40;
+
+/// How long [`spawn_worker_thread`] waits between retries.
+const WORKER_SPAWN_RETRY_DELAY: Duration = Duration::from_millis(25);
+
+/// Spawn helper worker `index`'s OS thread, calling `new_job` fresh for each attempt (a
+/// factory rather than a single closure: `Builder::spawn` consumes its closure even on
+/// failure, so retrying needs a new one each time — `new_job` is typically just "clone a
+/// couple of `Arc`s and move them into a closure", cheap to call repeatedly). Retries a
+/// handful of times with a short pause on failure before giving up.
+///
+/// `std::thread::Builder::spawn` fails only when the OS refuses to create a new thread
+/// (`EAGAIN`-style resource pressure) — ordinarily never, but real under a machine already
+/// running many other thread-heavy processes at once (this crate's own test suite, run
+/// concurrently, reproduces it). Transient pressure clears within a few milliseconds far
+/// more often than not, so a short retry loop absorbs it; still failing after that many
+/// attempts is treated as unrecoverable (see the panic message) rather than silently
+/// running with fewer workers than asked for — a worker that never starts would deadlock
+/// the startup barrier every other worker of this run is about to wait on.
+fn spawn_worker_thread<J: FnOnce() + Send + 'static>(
+    index: usize,
+    new_job: impl Fn() -> J,
+) -> std::thread::JoinHandle<()> {
+    for attempt in 1..=WORKER_SPAWN_ATTEMPTS {
+        match std::thread::Builder::new()
+            .name(format!("quilon-worker-{index}"))
+            .spawn(new_job())
+        {
+            Ok(handle) => return handle,
+            Err(error) if attempt < WORKER_SPAWN_ATTEMPTS => {
+                eprintln!(
+                    "quilon: spawning worker thread {index} failed ({error}), retrying \
+                     (attempt {attempt}/{WORKER_SPAWN_ATTEMPTS})"
+                );
+                std::thread::sleep(WORKER_SPAWN_RETRY_DELAY);
+            }
+            Err(error) => panic!(
+                "failed to spawn worker thread {index} after {WORKER_SPAWN_ATTEMPTS} \
+                 attempts: {error}"
+            ),
+        }
+    }
+    unreachable!("the loop above always returns or panics")
+}
+
 /// Run the program: one worker per CPU (`QUILON_WORKERS` overrides the count — see
 /// `resolve_worker_count`), `main` seeded on worker 0. A helper worker runs on its own OS
 /// thread (`run_helper`); worker 0 runs right here, on the calling thread
@@ -900,10 +952,11 @@ pub fn run<F: FnOnce() + 'static>(main: F) {
         .map(|index| {
             let registry = Arc::clone(&registry);
             let barrier = Arc::clone(&barrier);
-            std::thread::Builder::new()
-                .name(format!("quilon-worker-{index}"))
-                .spawn(move || run_helper(index, registry, barrier))
-                .expect("failed to spawn a quilon worker thread")
+            spawn_worker_thread(index, move || {
+                let registry = Arc::clone(&registry);
+                let barrier = Arc::clone(&barrier);
+                move || run_helper(index, registry, barrier)
+            })
         })
         .collect();
 
