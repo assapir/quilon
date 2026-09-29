@@ -31,8 +31,16 @@ pub(crate) type Job = Box<dyn FnOnce() + Send>;
 
 struct WorkerHandle {
     /// This worker's current run-queue length, kept in step by `scheduler`'s own ready-queue
-    /// push/pop points. Placement reads every worker's count and picks the minimum.
+    /// push/pop points.
     ready_len: AtomicUsize,
+    /// Jobs placed on this worker but not yet drained onto its own ready queue. Without
+    /// this, several placement decisions made back to back (an accept loop handing off
+    /// connections one after another, faster than the first placed job's target worker can
+    /// wake up and drain it) all see the same stale `ready_len` and pile onto the very same
+    /// idle worker — a thundering herd. [`shortest_queue`](Registry::shortest_queue) reads
+    /// `ready_len + inbox_len` together so a job counts the instant it is placed, not only
+    /// once it is actually running.
+    inbox_len: AtomicUsize,
     inbox: Mutex<VecDeque<Job>>,
     waker: ReactorWaker,
     /// The token `waker.complete` is called with on every wake — never registered with any
@@ -45,6 +53,7 @@ impl WorkerHandle {
     fn new(reactor: &mut Reactor) -> Self {
         WorkerHandle {
             ready_len: AtomicUsize::new(0),
+            inbox_len: AtomicUsize::new(0),
             inbox: Mutex::new(VecDeque::new()),
             waker: reactor.helper_waker(),
             inbox_token: reactor.alloc_token(),
@@ -112,10 +121,18 @@ impl Registry {
         self.handle(index).ready_len.store(len, Ordering::Relaxed);
     }
 
-    /// The worker with the shortest run queue right now, ties to the lowest index.
+    /// The worker with the shortest run queue right now — counting a job already placed but
+    /// not yet drained the same as one actually running, so several placement decisions in
+    /// quick succession spread out instead of piling onto the same momentarily-stale-looking
+    /// worker (see [`WorkerHandle::inbox_len`]'s own doc). Ties to the lowest index.
     pub(crate) fn shortest_queue(&self) -> usize {
         (0..self.workers.len())
-            .map(|index| (self.handle(index).ready_len.load(Ordering::Relaxed), index))
+            .map(|index| {
+                let handle = self.handle(index);
+                let len = handle.ready_len.load(Ordering::Relaxed)
+                    + handle.inbox_len.load(Ordering::Relaxed);
+                (len, index)
+            })
             .min()
             .map(|(_len, index)| index)
             .expect("a registry always has at least one worker")
@@ -125,6 +142,7 @@ impl Registry {
     /// thread, including `target`'s own (a launch may place itself on its own worker).
     pub(crate) fn place(&self, target: usize, job: Job) {
         let handle = self.handle(target);
+        handle.inbox_len.fetch_add(1, Ordering::Relaxed);
         handle
             .inbox
             .lock()
@@ -136,13 +154,15 @@ impl Registry {
     /// Take every job waiting in worker `index`'s own inbox, to run on its own thread. Called
     /// only by worker `index`'s own thread, every loop iteration.
     pub(crate) fn drain(&self, index: usize) -> VecDeque<Job> {
-        std::mem::take(
-            &mut *self
-                .handle(index)
+        let handle = self.handle(index);
+        let jobs = std::mem::take(
+            &mut *handle
                 .inbox
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner()),
-        )
+        );
+        handle.inbox_len.fetch_sub(jobs.len(), Ordering::Relaxed);
+        jobs
     }
 
     /// Ask every helper worker to stop once idle, and wake each one so a worker blocked in
