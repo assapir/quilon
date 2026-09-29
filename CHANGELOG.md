@@ -6,6 +6,18 @@ All notable changes to Quilon are documented here.
 
 ### Added
 
+- **The runtime is a real M:N scheduler: one worker OS thread per CPU, fibers pinned to
+  the worker that created them.** `QUILON_WORKERS=<n>` overrides the count, for chasing a
+  scheduling bug; invalid or `0` falls back to the CPU count. Worker 0 runs `^`; a
+  freestanding value-returning `@` primitive's launch (`@readStdin`, `@tcpRequest`) and an
+  accepted `net.@tcpServe`/`http.@serve` connection's handler fiber each go to the worker
+  with the shortest run queue at that moment. `net.@tcpServe`'s accept loop itself, and a
+  `Connection`'s own reads, stay on the worker that owns them — a socket is registered with
+  exactly one worker's reactor for its whole life. A launch's join and a deferred value's
+  force work across workers, woken through the same reactor mechanism a blocking call's
+  completion already used. A program with no launches behaves exactly as before; see
+  `docs/concurrency/runtime.md`. Part of #488.
+
 - **The signal trap (`!>`) — a top-level item, one per program, in the file that defines
   `^`, matching signals via a new `core.process` module.** `!>` followed by one or more
   `| Pattern => expression` arms over `process.Signal` — `Hangup` / `Interrupt` / `Quit` /

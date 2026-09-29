@@ -3,55 +3,81 @@
 //! `net.@tcpServe`: the raw TCP server layer.
 //!
 //! The runtime owns only what the language cannot express: accepting connections and
-//! running each on its own fiber. `Connection`/`Server` are opaque handles — a `Num` id
-//! into the worker-owned tables below (`crate::worker::Worker::connections`/`servers`) —
+//! running each on its own fiber. `Connection`/`Server` are opaque handles — a `Num` id —
 //! with every method compiler-lowered (see `src/codegen/generator/calls.rs`'s
 //! `generate_at_primitive` and its `close`/`kill` interception ahead of ordinary method
 //! dispatch).
 //!
+//! **Ownership across workers.** A `Connection` handle's `ConnectionState` — the live
+//! `TcpStream`, registered with ITS OWN worker's reactor — is only ever touched from the
+//! worker that accepted it: that connection's own handler fiber (placed there once, at
+//! accept time — see `place_connection`), or the runtime's own auto-close once that
+//! fiber returns. It lives in that worker's own `crate::worker::Worker::connections` table,
+//! reached only by that worker's own thread. `Server.kill`, which may run on any worker
+//! (a handler answering by calling `server.kill()` on its own server is the deliverable's
+//! own pattern), never reaches into another worker's table for this: it force-closes a
+//! still-open connection through `ServerState::open_connections` instead, an
+//! `Arc<Mutex<..>>` map of every open connection's id to its raw descriptor alone —
+//! `shutdown(2)` needs no more than that, and acts on the descriptor directly rather than
+//! the worker-owned `RefCell`-guarded stream (see `force_shutdown_connection`).
+//!
+//! A `Server` handle's `ServerState` is reachable from any worker the same way: its
+//! `stopping`/`in_flight`/`open_connections` are `Arc`/atomic, and the table mapping every
+//! live server's id to its `ServerState` is `crate::placement::Registry::servers` — shared
+//! by every worker of this run, not owned by whichever one called `net.@tcpServe`.
+//!
 //! `net.@tcpServe`'s accept loop is a launch registered directly with `launch_scope`
-//! (through the generic `deferred::launch`, whose own return value — the deferred cell
+//! (through the generic `deferred::launch_here`, whose own return value — the deferred cell
 //! pointer — is kept on `ServerState` rather than exposed to Quilon, since `@tcpServe`'s
 //! OWN return value, the `Server` handle, is a ready `Num` built by codegen, never
-//! deferred). `Server.kill` settles that same cell before returning, so the enclosing
-//! block's own join finds it already done. Built on `super::TcpListener` and
+//! deferred), placed on the SAME worker `net.@tcpServe` was called from, never moved —
+//! `launch_here`, not the shortest-queue `launch_placed` every accepted connection's own
+//! handler fiber uses. `Server.kill` settles that same cell before returning, so the
+//! enclosing block's own join finds it already done. Built on `super::TcpListener` and
 //! [`super::TcpStream`], the plumbing shared with [`super::client`].
 
 use super::{TcpListener, TcpStream, bytes_to_string, copy_bytes, resolve};
-use crate::deferred::{launch, launch_deferred_text, settle};
+use crate::deferred::{launch_deferred_text_here, launch_here, settle};
 use crate::mem::{QnSlice, alloc_text};
 use crate::report::{QnSite, RUNTIME_EXIT_CODE, codes, fail_at};
-use crate::scheduler::{current_fiber_id, sleep, spawn};
+use crate::scheduler::{current_fiber_id, sleep};
 use crate::worker::with_worker;
-use std::cell::{Cell, RefCell};
-use std::collections::HashSet;
+use std::cell::RefCell;
+use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::os::raw::c_void;
-use std::os::unix::io::RawFd;
+use std::os::unix::io::{AsRawFd, RawFd};
 use std::rc::Rc;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-/// A connection's own state: the accepted stream (taken on close, so a further read/write
-/// after that reads as "closed" rather than reusing a dropped socket), its raw descriptor
-/// (kept outside the `RefCell` so `Server.kill` can shut it down without contending with a
-/// handler fiber's read/write, which holds the `RefCell` borrow across a park), and the
-/// server's own open-connection set, so closing removes this connection's id from it.
+/// A connection's own state — see the module doc's ownership-rule paragraph. The accepted
+/// stream (taken on close, so a further read/write after that reads as "closed" rather than
+/// reusing a dropped socket) belongs to this worker alone; the shared open-connections map
+/// (id to raw descriptor, populated before this state even exists — see `place_connection`)
+/// is both how closing tells `Server.kill` this id is gone and how `Server.kill` itself
+/// force-closes a still-open one without ever touching this `RefCell` (see
+/// `force_shutdown_connection`).
 pub(crate) struct ConnectionState {
     stream: RefCell<Option<TcpStream>>,
-    raw_fd: RawFd,
-    open_connections: Rc<RefCell<HashSet<u64>>>,
+    open_connections: Arc<Mutex<HashMap<u64, RawFd>>>,
 }
 
-/// A server's own state, reachable both from its accept loop (owns nothing here directly —
-/// the listener lives on the loop's own closure, dropped when it returns) and from
-/// `Server.kill`, run on whichever fiber calls it.
+/// A server's own state — see the module doc's ownership-rule paragraph. Reachable from the
+/// accept loop's own worker, every handler fiber's own worker, and whichever worker calls
+/// `Server.kill`.
 pub(crate) struct ServerState {
-    stopping: Rc<Cell<bool>>,
-    in_flight: Rc<Cell<usize>>,
-    open_connections: Rc<RefCell<HashSet<u64>>>,
-    /// The accept loop's own deferred cell, from the `deferred::launch` call that started
-    /// it — never exposed to Quilon; `Server.kill` [`settle`]s it so the enclosing block's
-    /// own join (over the SAME cell, registered by that same `launch` call) finds it
+    stopping: Arc<AtomicBool>,
+    in_flight: Arc<AtomicUsize>,
+    /// Every currently open connection this server accepted, id to raw descriptor —
+    /// deliberately NOT the worker-owned `ConnectionState` table: `Server.kill` may run on
+    /// a different worker than any given connection's own, and this is all it needs to
+    /// force-close one (see `force_shutdown_connection`).
+    open_connections: Arc<Mutex<HashMap<u64, RawFd>>>,
+    /// The accept loop's own deferred cell, from the `deferred::launch_here` call that
+    /// started it — never exposed to Quilon; `Server.kill` [`settle`]s it so the enclosing
+    /// block's own join (over the SAME cell, registered by that same launch) finds it
     /// already done.
     accept_loop: *mut crate::deferred::Deferred<()>,
     /// Where the listener is actually bound — used to wake the accept loop's own parked
@@ -59,16 +85,19 @@ pub(crate) struct ServerState {
     local_addr: SocketAddr,
 }
 
-/// A fresh handle id, never reused — ids are never freed back into a pool, so a stale
-/// `Connection`/`Server` value (one a program held onto past its own close/kill) can never
-/// be confused with a later, unrelated one. Handed out by the worker that owns this
-/// connection or server (see `crate::worker::Worker::next_handle`).
+// SAFETY: every field above is itself `Send`/`Sync` except `accept_loop`, a raw pointer to
+// a `Deferred<()>` — which is `Send`/`Sync` in its own right (its state is `Mutex`-guarded;
+// see `deferred::Deferred`'s own doc) but a raw pointer never auto-implements either. Every
+// access to `accept_loop` goes through `deferred::settle`, which locks that `Mutex` itself,
+// so sharing the bare pointer across threads here is exactly as sound as sharing the
+// `Deferred` it points to already is.
+unsafe impl Send for ServerState {}
+unsafe impl Sync for ServerState {}
+
+/// A fresh `Connection`/`Server` handle id, never reused — see
+/// `crate::placement::Registry::next_handle`'s own doc.
 fn next_handle() -> u64 {
-    with_worker(|worker| {
-        let id = worker.next_handle.get();
-        worker.next_handle.set(id + 1);
-        id
-    })
+    with_worker(|worker| worker.registry.next_handle())
 }
 
 /// `net.@tcpServe(address, handler)`: resolve `address` exactly as `resolve` resolves
@@ -78,8 +107,9 @@ fn next_handle() -> u64 {
 /// handle's id at once — codegen builds the `Server { handle = … }` record around it, the
 /// same way it builds the `Connection` handed to `handler`. The accept loop launches on a
 /// background fiber, registered with whatever `< >` block's launch scope is open right now
-/// (through `launch`, exactly as a value-returning primitive's producer registers) so
-/// that block's own join keeps it alive without ever forcing a value from this call — this
+/// (through `launch_here`, exactly as a value-returning primitive's producer registers with
+/// its own `launch_placed`) so that block's own join keeps it alive without ever forcing a
+/// value from this call — this
 /// call's own return is already ready. A bind failure — `address` does not parse or
 /// resolve, the port is missing or out of range, the port is already in use, or
 /// permission is refused — is fatal, reported at `site` through the same fail-loud path
@@ -124,35 +154,38 @@ pub extern "C" fn __tcp_serve_launch(
     };
     let local_addr = listener.local_addr().unwrap_or(bind_addr);
 
-    let stopping = Rc::new(Cell::new(false));
-    let in_flight = Rc::new(Cell::new(0usize));
-    let open_connections: Rc<RefCell<HashSet<u64>>> = Rc::new(RefCell::new(HashSet::new()));
+    let stopping = Arc::new(AtomicBool::new(false));
+    let in_flight = Arc::new(AtomicUsize::new(0));
+    let open_connections: Arc<Mutex<HashMap<u64, RawFd>>> = Arc::new(Mutex::new(HashMap::new()));
     // This server's identity for `Worker::handler_fiber_server` — the `in_flight` cell's own
     // address, stable for as long as any clone of it (every one taken below, and the
     // `ServerState` itself) is alive.
-    let server_identity = Rc::as_ptr(&in_flight) as usize;
+    let server_identity = Arc::as_ptr(&in_flight) as usize;
 
-    let loop_stopping = Rc::clone(&stopping);
-    let loop_in_flight = Rc::clone(&in_flight);
-    let loop_open_connections = Rc::clone(&open_connections);
-    let accept_loop = launch(move || {
+    let loop_stopping = Arc::clone(&stopping);
+    let loop_in_flight = Arc::clone(&in_flight);
+    let loop_open_connections = Arc::clone(&open_connections);
+    // `launch_here`, not `launch_placed`: the accept loop stays on the worker that called
+    // `net.@tcpServe` (see the module doc) — only each ACCEPTED CONNECTION's own handler
+    // fiber is placed by shortest queue, in `place_connection` below.
+    let accept_loop = launch_here(move || {
         loop {
-            let stream = match listener.accept() {
-                Ok((stream, _peer)) => stream,
+            let raw_stream = match listener.accept() {
+                Ok((raw_stream, _peer)) => raw_stream,
                 // A genuine accept error (not one `kill` caused) ends the loop; connections
                 // already handed to handlers keep running on their own fibers regardless.
                 Err(_) => break,
             };
-            if loop_stopping.get() {
-                drop(stream);
+            if loop_stopping.load(Ordering::SeqCst) {
+                drop(raw_stream);
                 break;
             }
-            spawn_connection_handler(
-                stream,
+            place_connection(
+                raw_stream,
                 handler_fn,
                 handler_env,
-                &loop_in_flight,
-                &loop_open_connections,
+                Arc::clone(&loop_in_flight),
+                Arc::clone(&loop_open_connections),
                 server_identity,
             );
         }
@@ -161,50 +194,78 @@ pub extern "C" fn __tcp_serve_launch(
 
     let server_id = next_handle();
     with_worker(|worker| {
-        worker.servers.borrow_mut().insert(
-            server_id,
-            Rc::new(ServerState {
-                stopping,
-                in_flight,
-                open_connections,
-                accept_loop,
-                local_addr,
-            }),
-        );
+        worker
+            .registry
+            .servers()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .insert(
+                server_id,
+                Arc::new(ServerState {
+                    stopping,
+                    in_flight,
+                    open_connections,
+                    accept_loop,
+                    local_addr,
+                }),
+            );
     });
     server_id as f64
 }
 
-/// Register `stream` as an open connection and run `handler_fn` against it on its own
-/// fiber: the accept loop's per-connection half. Auto-closes the connection once the
-/// handler returns (`close-after-handler is the runtime's`, whether or not the handler
-/// closed it itself) and only then leaves `in_flight`, so `Server.kill`'s wait sees this
-/// handler as in-flight for its whole run, not just until its connection closes.
-fn spawn_connection_handler(
-    stream: TcpStream,
+/// Place an accepted connection on the worker with the shortest run queue right now: assign
+/// its handle id and record it (and its raw descriptor) in the server's shared
+/// `open_connections` map SYNCHRONOUSLY, on the accept loop's own worker — so `in_flight`
+/// and the open-connection set are accurate immediately, before the placed job even runs,
+/// exactly as they were when this all ran on one worker — then place the actual
+/// registration and handler call as a fiber on the chosen worker
+/// (`crate::scheduler::spawn_placed`). Auto-closes the connection once the handler returns
+/// (`close-after-handler is the runtime's`, whether or not the handler closed it itself) and
+/// only then leaves `in_flight`, so `Server.kill`'s wait sees this handler as in-flight for
+/// its whole run, not just until its connection closes.
+fn place_connection(
+    raw_stream: mio::net::TcpStream,
     handler_fn: extern "C" fn(f64, *mut c_void) -> u8,
     handler_env: *mut c_void,
-    in_flight: &Rc<Cell<usize>>,
-    open_connections: &Rc<RefCell<HashSet<u64>>>,
+    in_flight: Arc<AtomicUsize>,
+    open_connections: Arc<Mutex<HashMap<u64, RawFd>>>,
     server_identity: usize,
 ) {
     let id = next_handle();
-    let raw_fd = stream.as_raw_fd();
-    with_worker(|worker| {
-        worker.connections.borrow_mut().insert(
-            id,
-            Rc::new(ConnectionState {
-                stream: RefCell::new(Some(stream)),
-                raw_fd,
-                open_connections: Rc::clone(open_connections),
-            }),
-        );
-    });
-    open_connections.borrow_mut().insert(id);
-    in_flight.set(in_flight.get() + 1);
+    let raw_fd = raw_stream.as_raw_fd();
+    open_connections
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .insert(id, raw_fd);
+    in_flight.fetch_add(1, Ordering::SeqCst);
 
-    let in_flight = Rc::clone(in_flight);
-    spawn(move || {
+    // `handler_env` isn't `Send`; it crosses to whichever worker ends up running the
+    // handler as a `usize`, the same way `net::client`'s own pointers cross a `spawn`
+    // boundary — cast back before use, on that worker's own thread.
+    let handler_env_addr = handler_env as usize;
+    crate::scheduler::spawn_placed(move || {
+        let handler_env = handler_env_addr as *mut c_void;
+        let stream = match TcpStream::from_accepted(raw_stream) {
+            Ok(stream) => stream,
+            Err(_) => {
+                open_connections
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .remove(&id);
+                in_flight.fetch_sub(1, Ordering::SeqCst);
+                return;
+            }
+        };
+        with_worker(|worker| {
+            worker.connections.borrow_mut().insert(
+                id,
+                Rc::new(ConnectionState {
+                    stream: RefCell::new(Some(stream)),
+                    open_connections: Arc::clone(&open_connections),
+                }),
+            );
+        });
+
         // Registered for the whole handler call so `Server.kill`, if THIS handler is the
         // one that calls it, can tell it is being asked to wait on its own fiber and
         // exclude it — see `wait_for_in_flight`.
@@ -218,7 +279,7 @@ fn spawn_connection_handler(
         handler_fn(id as f64, handler_env);
         with_worker(|worker| worker.handler_fiber_server.borrow_mut().remove(&fiber_id));
         close_connection(id);
-        in_flight.set(in_flight.get() - 1);
+        in_flight.fetch_sub(1, Ordering::SeqCst);
     });
 }
 
@@ -231,32 +292,36 @@ fn close_connection(id: u64) {
     let Some(state) = with_worker(|worker| worker.connections.borrow_mut().remove(&id)) else {
         return;
     };
-    state.open_connections.borrow_mut().remove(&id);
+    state
+        .open_connections
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .remove(&id);
     state.stream.borrow_mut().take();
 }
 
-/// Shut connection `id` down at the descriptor level, without touching its `RefCell` —
-/// `Server.kill`'s force-close of a connection still open past its grace period, called
-/// from a DIFFERENT fiber than the one whose handler may be parked mid-read/write on this
-/// same connection (holding that `RefCell` borrow across the park). `shutdown(2)` needs no
-/// such borrow: it acts on the descriptor directly, which is what lets it interrupt that
-/// parked read/write rather than deadlock behind it — the parked side typically wakes with
-/// EOF or a write error and finishes on its own; the descriptor itself is only actually
-/// closed once that side (or a later `Connection.close()`) drops the `TcpStream`.
+/// Shut connection `id` down at the descriptor level, without touching the owning worker's
+/// `connections` table at all — `Server.kill`'s force-close of a connection still open past
+/// its grace period, callable from ANY worker (not necessarily the one that accepted `id`;
+/// see the module doc's ownership-rule paragraph), reading only the raw descriptor `kill`'s
+/// own `ServerState::open_connections` map already carries. `shutdown(2)` needs no more:
+/// acting on the descriptor directly is what lets it interrupt a handler fiber parked
+/// mid-read/write on this same connection (on ITS OWN worker, unreachable from here) rather
+/// than deadlock behind it — the parked side typically wakes with EOF or a write error and
+/// finishes on its own; the descriptor itself is only actually closed once that side (or a
+/// later `Connection.close()`) drops the `TcpStream`, on its own worker.
 ///
 /// ponytail: a permanently stuck handler (one that never touches this connection
 /// again after the shutdown) leaves that drop — and its fiber's stack — unreclaimed
 /// forever; accepted here the way every launch on this tier is never cancelled. A
 /// fiber-cancellation primitive would let this reclaim the stack instead of leaking it.
-fn force_shutdown_connection(id: u64) {
-    let Some(state) = with_worker(|worker| worker.connections.borrow().get(&id).cloned()) else {
-        return;
-    };
-    // SAFETY: `raw_fd` names a socket this process owns for as long as the connection's
-    // table entry exists, which this call holds a clone of; `shutdown` only changes the
-    // socket's protocol state, never its descriptor's validity.
+fn force_shutdown_connection(raw_fd: RawFd) {
+    // SAFETY: `raw_fd` names a socket this process owns for as long as it stays in the
+    // server's own `open_connections` map, which the caller (`__server_kill`) reads it from
+    // and has not yet removed it from; `shutdown` only changes the socket's protocol state,
+    // never its descriptor's validity.
     unsafe {
-        libc::shutdown(state.raw_fd, libc::SHUT_RDWR);
+        libc::shutdown(raw_fd, libc::SHUT_RDWR);
     }
 }
 
@@ -269,7 +334,7 @@ fn force_shutdown_connection(id: u64) {
 #[unsafe(no_mangle)]
 pub extern "C" fn __connection_read_launch(connection_id: f64) -> QnSlice {
     let id = connection_id as u64;
-    launch_deferred_text(move || read_connection_once(id))
+    launch_deferred_text_here(move || read_connection_once(id))
 }
 
 /// Read once from connection `id`'s stream, parking on readiness until data or EOF/an error
@@ -304,7 +369,7 @@ pub extern "C" fn __connection_read_with_timeout_launch(
     // panics — taking the whole server down — on a value that is not finite, the same
     // risk `Server.kill`'s own grace period already guards against.
     let deadline = Instant::now() + bounded_duration(seconds);
-    launch_deferred_text(move || read_connection_once_with_deadline(id, deadline))
+    launch_deferred_text_here(move || read_connection_once_with_deadline(id, deadline))
 }
 
 /// [`read_connection_once`]'s timed counterpart: `""` at EOF, on any read error, on a
@@ -408,54 +473,71 @@ fn bounded_duration(seconds: f64) -> Duration {
 ///
 /// ponytail: a fixed-tick poll rather than a wake on the last handler's own finish — the
 /// simplest correct wait, at the cost of up to one tick of latency past the last handler
-/// actually finishing. Upgrade to a `park_on_address`/`wake_address` pair keyed by the
-/// server if that latency ever matters.
+/// actually finishing. Upgrade to a cross-worker wait/wake pair (`crate::deferred::Waiters`)
+/// keyed by the server if that latency ever matters.
 fn wait_for_in_flight(server: &ServerState, seconds: f64) {
     const TICK: Duration = Duration::from_millis(20);
-    let identity = Rc::as_ptr(&server.in_flight) as usize;
+    let identity = Arc::as_ptr(&server.in_flight) as usize;
     let calling_fiber_is_this_servers_own_handler = current_fiber_id().and_then(|fiber_id| {
         with_worker(|worker| worker.handler_fiber_server.borrow().get(&fiber_id).copied())
     }) == Some(identity);
     let floor = usize::from(calling_fiber_is_this_servers_own_handler);
     let deadline = Instant::now() + bounded_duration(seconds);
-    while server.in_flight.get() > floor && Instant::now() < deadline {
+    while server.in_flight.load(Ordering::SeqCst) > floor && Instant::now() < deadline {
         sleep(TICK);
     }
 }
 
 /// `Server.kill(seconds)`: stop accepting, wait up to `seconds` for in-flight handlers to
-/// finish, force-close any connection still open past that grace period, then settle the
-/// accept loop's own launch so the enclosing block's join finds it already done. Parks the
-/// calling fiber for as long as any of that takes. A no-op on an already-killed or unknown
-/// handle.
+/// finish — on every worker one may be running on, not just the calling one — force-close
+/// any connection still open past that grace period, then settle the accept loop's own
+/// launch so the enclosing block's join finds it already done. Parks the calling fiber for
+/// as long as any of that takes. Callable from any worker (see the module doc's
+/// ownership-rule paragraph); a no-op on an already-killed or unknown handle.
 #[unsafe(no_mangle)]
 pub extern "C" fn __server_kill(server_id: f64, seconds: f64) {
     let id = server_id as u64;
-    let Some(server) = with_worker(|worker| worker.servers.borrow_mut().remove(&id)) else {
+    let Some(server) = with_worker(|worker| {
+        worker
+            .registry
+            .servers()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .remove(&id)
+    }) else {
         return;
     };
-    server.stopping.set(true);
+    server.stopping.store(true, Ordering::SeqCst);
     wake_accept_loop(&server);
     wait_for_in_flight(&server, seconds);
-    let stuck: Vec<u64> = server.open_connections.borrow().iter().copied().collect();
-    for connection_id in stuck {
-        force_shutdown_connection(connection_id);
+    let stuck: Vec<RawFd> = server
+        .open_connections
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .values()
+        .copied()
+        .collect();
+    for raw_fd in stuck {
+        force_shutdown_connection(raw_fd);
     }
-    // SAFETY: `accept_loop` is the cell `launch` returned for this server's own accept
+    // SAFETY: `accept_loop` is the cell `launch_here` returned for this server's own accept
     // loop, still reachable through `server` (this function's only owner of it, since the
-    // handle was just removed from the worker's `servers` table above).
+    // handle was just removed from the registry's `servers` table above).
     unsafe {
         settle(server.accept_loop);
     }
 }
 
 /// `server_id`'s bound `SocketAddr`, or `None` on an already-killed or unknown handle.
+/// Callable from any worker.
 fn bound_address(server_id: f64) -> Option<SocketAddr> {
     let id = server_id as u64;
     with_worker(|worker| {
         worker
-            .servers
-            .borrow()
+            .registry
+            .servers()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
             .get(&id)
             .map(|server| server.local_addr)
     })
@@ -495,8 +577,10 @@ mod tests {
     fn bound_addr(server_id: f64) -> SocketAddr {
         with_worker(|worker| {
             worker
-                .servers
-                .borrow()
+                .registry
+                .servers()
+                .lock()
+                .unwrap()
                 .get(&(server_id as u64))
                 .expect("server handle")
                 .local_addr

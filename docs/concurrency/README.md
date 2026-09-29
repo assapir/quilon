@@ -9,16 +9,17 @@ sidebar:
 > Colorless implicit futures on cooperative fibers: IO returns type-invisible deferreds, strict operations force them — concurrency follows data dependence.
 
 > **Status: 🚧 in progress.** The model below is locked. Implemented: the
-> single-threaded fiber scheduler, the effect-only `time.@sleep` pause (`core.time`), the
-> deferred-value `io.@readStdin` (`core.io`), the networked `net.@tcpRequest` (`core.net`),
-> the strict, callback-driven `io.@streamFile` (`core.io`), the raw TCP server layer
-> `net.@tcpServe`/`Connection`/`Server` (`core.net`), the atomic-binding syntax
-> `@name := …`, the fiber-sharing check over `net.@tcpServe`'s handler, and the signal trap
-> (`!>`, `core.process`). Planned for
+> M:N fiber scheduler (one worker OS thread per CPU, fibers pinned to the worker that
+> created them, a new launch or accepted connection placed on the worker with the shortest
+> run queue — see `docs/concurrency/runtime.md`), the effect-only `time.@sleep` pause
+> (`core.time`), the deferred-value `io.@readStdin` (`core.io`), the networked
+> `net.@tcpRequest` (`core.net`), the strict, callback-driven `io.@streamFile` (`core.io`),
+> the raw TCP server layer `net.@tcpServe`/`Connection`/`Server` (`core.net`), the
+> atomic-binding syntax `@name := …`, the fiber-sharing check over `net.@tcpServe`'s
+> handler, and the signal trap (`!>`, `core.process`). Planned for
 > 1.0: a value-returning network primitive such as `@get`, with which two independent
-> reads finish in max-time, and the multicore (M:N) runtime — a work-stealing scheduler
-> running one worker per CPU as reported to the process, the same under `quilon run` and a
-> built binary, with the Boehm GC working across threads and atomic types enforced.
+> reads finish in max-time, atomic types (`T = @{ … }`), and work-stealing of a
+> not-yet-started launch between workers.
 
 Quilon's concurrency is **colorless**: a program is written as ordinary, blocking-*looking*
 code, and the runtime overlaps independent IO. A function that does IO is written and typed
@@ -179,7 +180,10 @@ server's connections share the same one-fiber-per-connection behavior. See
 
 ## Where it is headed
 
-A networked value-returning primitive makes independent launches overlap:
+The M:N runtime itself is in place (`docs/concurrency/runtime.md`); what is left of it is
+work-stealing a not-yet-started launch between workers and atomic types (`T = @{ … }`), so
+`@name := …`'s ad-hoc atomic binding gets a real cross-field-invariant counterpart. A
+networked value-returning primitive makes independent launches overlap:
 
 ```quilon ignore
 ~ `@get` is a leaf IO primitive (corelib/runtime) — the ONLY marked thing here.

@@ -28,7 +28,6 @@ use mio::event::Source;
 use mio::{Interest, Token};
 use std::io::{self, Read, Write};
 use std::net::{SocketAddr, ToSocketAddrs};
-use std::os::unix::io::{AsRawFd, RawFd};
 use std::time::Instant;
 
 pub mod client;
@@ -169,15 +168,6 @@ impl TcpStream {
 }
 
 impl TcpStream {
-    /// The OS descriptor underneath this stream — read-only, and stable for the stream's
-    /// whole life, so a fiber that does not otherwise touch this `TcpStream` (`Server.kill`,
-    /// forcibly closing a connection its handler fiber may itself be parked inside a read or
-    /// write of) can still act on the connection without a `&mut` that would alias one
-    /// already held across that park.
-    fn as_raw_fd(&self) -> RawFd {
-        self.inner.as_raw_fd()
-    }
-
     /// Wrap an already-connected socket (from [`TcpListener::accept`]) as a
     /// reactor-registered stream — the server side's counterpart to [`Self::connect`]'s
     /// client-side handshake, with no handshake of its own left to wait out.
@@ -213,12 +203,16 @@ impl TcpListener {
         self.inner.local_addr()
     }
 
-    /// Accept one connection, parking (via [`io_loop`]) until one is ready.
-    fn accept(&mut self) -> io::Result<(TcpStream, SocketAddr)> {
-        let (raw, address) = io_loop(&mut self.inner, self.token, Interest::READABLE, |l| {
+    /// Accept one connection, parking (via [`io_loop`]) until one is ready. Returns the RAW,
+    /// not-yet-reactor-registered stream: `net.@tcpServe`'s accept loop places each
+    /// connection on a worker before deciding whose reactor it registers with (shortest
+    /// queue at accept time), so registering it here, on the accept loop's own worker,
+    /// would be the wrong one — [`TcpStream::from_accepted`] runs on the worker that
+    /// actually ends up owning it instead.
+    fn accept(&mut self) -> io::Result<(mio::net::TcpStream, SocketAddr)> {
+        io_loop(&mut self.inner, self.token, Interest::READABLE, |l| {
             l.accept()
-        })?;
-        Ok((TcpStream::from_accepted(raw)?, address))
+        })
     }
 }
 
