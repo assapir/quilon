@@ -24,7 +24,7 @@ pub(super) const MAX_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
 /// request exchange on a background fiber, returning the deferred `Result` immediately. `tls`/
 /// `unchecked_certificates` (each `0`/`1`, the flattened `Transport`/`Certificates` discriminants
 /// — see `generate_at_primitive`'s `"tcpRequest"` arm) pick the plain exchange below or
-/// [`super::tls::tls_request`]; the two-argument call site passes `0, 0`.
+/// `super::tls::tls_request`; the two-argument call site passes `0, 0`.
 ///
 /// # Safety contract (upheld by the compiler)
 /// `out` points to writable storage for one [`QnResult`]; `address_data`/`request_data` are null,
