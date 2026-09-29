@@ -62,6 +62,7 @@ pub mod test_registry;
 pub mod text;
 pub mod time;
 pub mod trap;
+pub(crate) mod worker;
 
 pub use abort_trap::{__abort_trap_report, __abort_trap_run};
 pub use collections::{

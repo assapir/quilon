@@ -20,39 +20,33 @@
 //! every scope this FIBER still has open (innermost first), so a sibling launched earlier —
 //! whether in this block or one enclosing it — is settled and reported too, not abandoned.
 //!
-//! Scoped per FIBER, not per thread: several fibers cooperate on one OS thread (a
-//! `test.it` case's own fiber today; a server's per-connection fiber and the locked
-//! call-level launch tomorrow), parking and resuming interleaved, so a plain thread-local
-//! stack would let one fiber's close pop a scope another fiber opened and has not closed
-//! yet. Each fiber's own open scopes are kept under its own id
-//! (`crate::scheduler::current_fiber_id`).
+//! Scoped per FIBER, not per worker: several fibers cooperate on one worker (a `test.it`
+//! case's own fiber today; a server's per-connection fiber and the locked call-level launch
+//! tomorrow), parking and resuming interleaved, so a plain per-worker stack would let one
+//! fiber's close pop a scope another fiber opened and has not closed yet. Each fiber's own
+//! open scopes are kept under its own id (`crate::scheduler::current_fiber_id`), in the
+//! worker-owned map `crate::worker::Worker::launch_scopes` reaches — the worker owns the
+//! map's storage, but a key inside it is this fiber's own, not the worker's.
 
 use crate::io::write_to_fd;
 use crate::process::__exit;
 use crate::report::RUNTIME_EXIT_CODE;
-use std::cell::RefCell;
-use std::collections::HashMap;
+use crate::worker::with_worker;
 
 /// One launch's join thunk: parks until it settles, discarding the value, and hands back
 /// its rendered fault report if it faulted. Boxed so a scope holds launches of different
 /// result types (`Text`, `Result`, …) uniformly.
 type JoinThunk = Box<dyn FnOnce() -> Option<String>>;
 
-struct LaunchScope {
+pub(crate) struct LaunchScope {
     entries: Vec<JoinThunk>,
 }
 
-thread_local! {
-    /// Every fiber's own open-scope stack, keyed by fiber id — `None` is the bucket a call
-    /// made outside any fiber lands in (a `quilon-rt` unit test calling these directly), so
-    /// existing such tests behave exactly as before. A fiber's stack is removed once its
-    /// last scope closes, so a long-running process does not accumulate one entry per
-    /// fiber that has ever existed.
-    static SCOPES: RefCell<HashMap<Option<usize>, Vec<LaunchScope>>> =
-        RefCell::new(HashMap::new());
-}
-
-/// The key this thread's currently-running fiber (if any) tracks its own scopes under.
+/// The key this worker's currently-running fiber (if any) tracks its own scopes under.
+/// `None` is the bucket a call made outside any fiber lands in (a `quilon-rt` unit test
+/// calling these directly), so existing such tests behave exactly as before. A fiber's stack
+/// is removed once its last scope closes, so a long-running process does not accumulate one
+/// entry per fiber that has ever existed.
 fn current_key() -> Option<usize> {
     crate::scheduler::current_fiber_id()
 }
@@ -62,8 +56,9 @@ fn current_key() -> Option<usize> {
 #[unsafe(no_mangle)]
 pub extern "C" fn __block_scope_enter() {
     let key = current_key();
-    SCOPES.with(|scopes| {
-        scopes
+    with_worker(|worker| {
+        worker
+            .launch_scopes
             .borrow_mut()
             .entry(key)
             .or_default()
@@ -79,8 +74,9 @@ pub extern "C" fn __block_scope_enter() {
 /// primitive from inside a block it has already opened a scope for.
 pub(crate) fn register(join: impl FnOnce() -> Option<String> + 'static) {
     let key = current_key();
-    SCOPES.with(|scopes| {
-        if let Some(scope) = scopes
+    with_worker(|worker| {
+        if let Some(scope) = worker
+            .launch_scopes
             .borrow_mut()
             .get_mut(&key)
             .and_then(|stack| stack.last_mut())
@@ -98,8 +94,8 @@ pub(crate) fn register(join: impl FnOnce() -> Option<String> + 'static) {
 #[unsafe(no_mangle)]
 pub extern "C" fn __block_scope_join() {
     let key = current_key();
-    let scope = SCOPES.with(|scopes| {
-        let mut map = scopes.borrow_mut();
+    let scope = with_worker(|worker| {
+        let mut map = worker.launch_scopes.borrow_mut();
         let stack = map
             .get_mut(&key)
             .expect("__block_scope_join with no open scope");
@@ -123,7 +119,7 @@ pub extern "C" fn __block_scope_join() {
 /// `launch` value directly, outside any compiled block). Never returns.
 pub(crate) fn fault_current_fiber(own_report: String) -> ! {
     let key = current_key();
-    let stack = SCOPES.with(|scopes| scopes.borrow_mut().remove(&key));
+    let stack = with_worker(|worker| worker.launch_scopes.borrow_mut().remove(&key));
     let faults = match stack {
         // Innermost is the LAST entry pushed — settle in that order, then outward.
         Some(stack) => stack
@@ -167,20 +163,34 @@ mod tests {
     use std::sync::mpsc;
     use std::time::Duration;
 
-    /// Pop and discard every open scope — a test that panics mid-way (an `assert_eq!`
-    /// failure) would otherwise leave one open, and thread-locals in the test harness's
-    /// thread-per-test model start fresh, but this keeps each test independent of that.
+    /// Install a fresh worker on this thread — `launch_scopes` now lives inside it, so a
+    /// test calling these intrinsics directly, outside any `scheduler::run`, needs somewhere
+    /// for them to land. Tears down any worker already there first: a test that panics
+    /// mid-way (an `assert_eq!` failure) would otherwise leave one installed, and
+    /// thread-locals in the test harness's thread-per-test model start fresh regardless, but
+    /// this keeps each test independent of that.
     fn reset() {
-        SCOPES.with(|scopes| scopes.borrow_mut().clear());
+        crate::worker::teardown();
+        crate::worker::install(crate::reactor::Reactor::new().expect("reactor for a test"));
+    }
+
+    /// The `None`-keyed scope this test's direct (outside-any-fiber) calls land in.
+    fn pop_scope() -> LaunchScope {
+        with_worker(|worker| {
+            worker
+                .launch_scopes
+                .borrow_mut()
+                .get_mut(&None)
+                .and_then(|s| s.pop())
+        })
+        .unwrap()
     }
 
     #[test]
     fn join_with_no_registered_launches_settles_nothing() {
         reset();
         __block_scope_enter();
-        let scope = SCOPES
-            .with(|scopes| scopes.borrow_mut().get_mut(&None).and_then(|s| s.pop()))
-            .unwrap();
+        let scope = pop_scope();
         assert!(settle_all(scope.entries).is_empty());
     }
 
@@ -196,9 +206,7 @@ mod tests {
                 None
             });
         }
-        let scope = SCOPES
-            .with(|scopes| scopes.borrow_mut().get_mut(&None).and_then(|s| s.pop()))
-            .unwrap();
+        let scope = pop_scope();
         let faults = settle_all(scope.entries);
         assert!(faults.is_empty(), "no launch faulted");
         assert_eq!(ran.get(), 3, "every registered launch must be joined");
@@ -229,9 +237,7 @@ mod tests {
         register(|| Some("first".to_string()));
         register(|| None);
         register(|| Some("third".to_string()));
-        let scope = SCOPES
-            .with(|scopes| scopes.borrow_mut().get_mut(&None).and_then(|s| s.pop()))
-            .unwrap();
+        let scope = pop_scope();
         let faults = settle_all(scope.entries);
         assert_eq!(faults, vec!["first".to_string(), "third".to_string()]);
     }
@@ -245,14 +251,10 @@ mod tests {
         register(|| Some("inner".to_string()));
 
         // The nested block closes first: only ITS entry is joined, the outer's is untouched.
-        let inner = SCOPES
-            .with(|scopes| scopes.borrow_mut().get_mut(&None).and_then(|s| s.pop()))
-            .unwrap();
+        let inner = pop_scope();
         assert_eq!(settle_all(inner.entries), vec!["inner".to_string()]);
 
-        let outer = SCOPES
-            .with(|scopes| scopes.borrow_mut().get_mut(&None).and_then(|s| s.pop()))
-            .unwrap();
+        let outer = pop_scope();
         assert_eq!(settle_all(outer.entries), vec!["outer".to_string()]);
     }
 

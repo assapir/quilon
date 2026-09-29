@@ -4,9 +4,10 @@
 //!
 //! The runtime owns only what the language cannot express: accepting connections and
 //! running each on its own fiber. `Connection`/`Server` are opaque handles — a `Num` id
-//! into the thread-local tables below — with every method compiler-lowered (see
-//! `src/codegen/generator/calls.rs`'s `generate_at_primitive` and its `close`/`kill`
-//! interception ahead of ordinary method dispatch).
+//! into the worker-owned tables below (`crate::worker::Worker::connections`/`servers`) —
+//! with every method compiler-lowered (see `src/codegen/generator/calls.rs`'s
+//! `generate_at_primitive` and its `close`/`kill` interception ahead of ordinary method
+//! dispatch).
 //!
 //! `net.@tcpServe`'s accept loop is a launch registered directly with `launch_scope`
 //! (through the generic `deferred::launch`, whose own return value — the deferred cell
@@ -21,8 +22,9 @@ use crate::deferred::{launch, launch_deferred_text, settle};
 use crate::mem::{QnSlice, alloc_text};
 use crate::report::{QnSite, RUNTIME_EXIT_CODE, codes, fail_at};
 use crate::scheduler::{current_fiber_id, sleep, spawn};
+use crate::worker::with_worker;
 use std::cell::{Cell, RefCell};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::os::raw::c_void;
 use std::os::unix::io::RawFd;
@@ -34,7 +36,7 @@ use std::time::{Duration, Instant};
 /// (kept outside the `RefCell` so `Server.kill` can shut it down without contending with a
 /// handler fiber's read/write, which holds the `RefCell` borrow across a park), and the
 /// server's own open-connection set, so closing removes this connection's id from it.
-struct ConnectionState {
+pub(crate) struct ConnectionState {
     stream: RefCell<Option<TcpStream>>,
     raw_fd: RawFd,
     open_connections: Rc<RefCell<HashSet<u64>>>,
@@ -43,7 +45,7 @@ struct ConnectionState {
 /// A server's own state, reachable both from its accept loop (owns nothing here directly —
 /// the listener lives on the loop's own closure, dropped when it returns) and from
 /// `Server.kill`, run on whichever fiber calls it.
-struct ServerState {
+pub(crate) struct ServerState {
     stopping: Rc<Cell<bool>>,
     in_flight: Rc<Cell<usize>>,
     open_connections: Rc<RefCell<HashSet<u64>>>,
@@ -57,22 +59,14 @@ struct ServerState {
     local_addr: SocketAddr,
 }
 
-thread_local! {
-    static NEXT_HANDLE: Cell<u64> = const { Cell::new(1) };
-    static CONNECTIONS: RefCell<HashMap<u64, Rc<ConnectionState>>> = RefCell::new(HashMap::new());
-    static SERVERS: RefCell<HashMap<u64, Rc<ServerState>>> = RefCell::new(HashMap::new());
-    /// Which server's `in_flight` count a currently-running handler fiber counts against,
-    /// keyed by fiber id — see [`wait_for_in_flight`].
-    static HANDLER_FIBER_SERVER: RefCell<HashMap<usize, usize>> = RefCell::new(HashMap::new());
-}
-
 /// A fresh handle id, never reused — ids are never freed back into a pool, so a stale
 /// `Connection`/`Server` value (one a program held onto past its own close/kill) can never
-/// be confused with a later, unrelated one.
+/// be confused with a later, unrelated one. Handed out by the worker that owns this
+/// connection or server (see `crate::worker::Worker::next_handle`).
 fn next_handle() -> u64 {
-    NEXT_HANDLE.with(|next| {
-        let id = next.get();
-        next.set(id + 1);
+    with_worker(|worker| {
+        let id = worker.next_handle.get();
+        worker.next_handle.set(id + 1);
         id
     })
 }
@@ -133,7 +127,7 @@ pub extern "C" fn __tcp_serve_launch(
     let stopping = Rc::new(Cell::new(false));
     let in_flight = Rc::new(Cell::new(0usize));
     let open_connections: Rc<RefCell<HashSet<u64>>> = Rc::new(RefCell::new(HashSet::new()));
-    // This server's identity for `HANDLER_FIBER_SERVER` — the `in_flight` cell's own
+    // This server's identity for `Worker::handler_fiber_server` — the `in_flight` cell's own
     // address, stable for as long as any clone of it (every one taken below, and the
     // `ServerState` itself) is alive.
     let server_identity = Rc::as_ptr(&in_flight) as usize;
@@ -166,8 +160,8 @@ pub extern "C" fn __tcp_serve_launch(
     });
 
     let server_id = next_handle();
-    SERVERS.with(|servers| {
-        servers.borrow_mut().insert(
+    with_worker(|worker| {
+        worker.servers.borrow_mut().insert(
             server_id,
             Rc::new(ServerState {
                 stopping,
@@ -196,8 +190,8 @@ fn spawn_connection_handler(
 ) {
     let id = next_handle();
     let raw_fd = stream.as_raw_fd();
-    CONNECTIONS.with(|connections| {
-        connections.borrow_mut().insert(
+    with_worker(|worker| {
+        worker.connections.borrow_mut().insert(
             id,
             Rc::new(ConnectionState {
                 stream: RefCell::new(Some(stream)),
@@ -215,10 +209,14 @@ fn spawn_connection_handler(
         // one that calls it, can tell it is being asked to wait on its own fiber and
         // exclude it — see `wait_for_in_flight`.
         let fiber_id = current_fiber_id().expect("a spawned fiber has an id while it runs");
-        HANDLER_FIBER_SERVER
-            .with(|handlers| handlers.borrow_mut().insert(fiber_id, server_identity));
+        with_worker(|worker| {
+            worker
+                .handler_fiber_server
+                .borrow_mut()
+                .insert(fiber_id, server_identity)
+        });
         handler_fn(id as f64, handler_env);
-        HANDLER_FIBER_SERVER.with(|handlers| handlers.borrow_mut().remove(&fiber_id));
+        with_worker(|worker| worker.handler_fiber_server.borrow_mut().remove(&fiber_id));
         close_connection(id);
         in_flight.set(in_flight.get() - 1);
     });
@@ -230,7 +228,7 @@ fn spawn_connection_handler(
 /// server's open-connection set. Reused by `Connection.close()` and the post-handler
 /// auto-close.
 fn close_connection(id: u64) {
-    let Some(state) = CONNECTIONS.with(|connections| connections.borrow_mut().remove(&id)) else {
+    let Some(state) = with_worker(|worker| worker.connections.borrow_mut().remove(&id)) else {
         return;
     };
     state.open_connections.borrow_mut().remove(&id);
@@ -251,7 +249,7 @@ fn close_connection(id: u64) {
 /// forever; accepted here the way every launch on this tier is never cancelled. A
 /// fiber-cancellation primitive would let this reclaim the stack instead of leaking it.
 fn force_shutdown_connection(id: u64) {
-    let Some(state) = CONNECTIONS.with(|connections| connections.borrow().get(&id).cloned()) else {
+    let Some(state) = with_worker(|worker| worker.connections.borrow().get(&id).cloned()) else {
         return;
     };
     // SAFETY: `raw_fd` names a socket this process owns for as long as the connection's
@@ -277,7 +275,7 @@ pub extern "C" fn __connection_read_launch(connection_id: f64) -> QnSlice {
 /// Read once from connection `id`'s stream, parking on readiness until data or EOF/an error
 /// arrives. `""` when the connection has already closed, at EOF, or on any read error.
 fn read_connection_once(id: u64) -> QnSlice {
-    let Some(state) = CONNECTIONS.with(|connections| connections.borrow().get(&id).cloned()) else {
+    let Some(state) = with_worker(|worker| worker.connections.borrow().get(&id).cloned()) else {
         return alloc_text(&[]);
     };
     let mut slot = state.stream.borrow_mut();
@@ -314,7 +312,7 @@ pub extern "C" fn __connection_read_with_timeout_launch(
 /// nothing arriving — the four cases a `Text` result cannot tell apart, since none of
 /// them carries a channel to report which one happened.
 fn read_connection_once_with_deadline(id: u64, deadline: Instant) -> QnSlice {
-    let Some(state) = CONNECTIONS.with(|connections| connections.borrow().get(&id).cloned()) else {
+    let Some(state) = with_worker(|worker| worker.connections.borrow().get(&id).cloned()) else {
         return alloc_text(&[]);
     };
     let mut slot = state.stream.borrow_mut();
@@ -341,7 +339,7 @@ fn read_connection_once_with_deadline(id: u64, deadline: Instant) -> QnSlice {
 pub extern "C" fn __connection_write(connection_id: f64, data: *const u8, len: i64) {
     let id = connection_id as u64;
     let bytes = copy_bytes(data, len);
-    let Some(state) = CONNECTIONS.with(|connections| connections.borrow().get(&id).cloned()) else {
+    let Some(state) = with_worker(|worker| worker.connections.borrow().get(&id).cloned()) else {
         return;
     };
     let mut slot = state.stream.borrow_mut();
@@ -416,7 +414,7 @@ fn wait_for_in_flight(server: &ServerState, seconds: f64) {
     const TICK: Duration = Duration::from_millis(20);
     let identity = Rc::as_ptr(&server.in_flight) as usize;
     let calling_fiber_is_this_servers_own_handler = current_fiber_id().and_then(|fiber_id| {
-        HANDLER_FIBER_SERVER.with(|handlers| handlers.borrow().get(&fiber_id).copied())
+        with_worker(|worker| worker.handler_fiber_server.borrow().get(&fiber_id).copied())
     }) == Some(identity);
     let floor = usize::from(calling_fiber_is_this_servers_own_handler);
     let deadline = Instant::now() + bounded_duration(seconds);
@@ -433,7 +431,7 @@ fn wait_for_in_flight(server: &ServerState, seconds: f64) {
 #[unsafe(no_mangle)]
 pub extern "C" fn __server_kill(server_id: f64, seconds: f64) {
     let id = server_id as u64;
-    let Some(server) = SERVERS.with(|servers| servers.borrow_mut().remove(&id)) else {
+    let Some(server) = with_worker(|worker| worker.servers.borrow_mut().remove(&id)) else {
         return;
     };
     server.stopping.set(true);
@@ -445,7 +443,7 @@ pub extern "C" fn __server_kill(server_id: f64, seconds: f64) {
     }
     // SAFETY: `accept_loop` is the cell `launch` returned for this server's own accept
     // loop, still reachable through `server` (this function's only owner of it, since the
-    // handle was just removed from `SERVERS` above).
+    // handle was just removed from the worker's `servers` table above).
     unsafe {
         settle(server.accept_loop);
     }
@@ -454,7 +452,13 @@ pub extern "C" fn __server_kill(server_id: f64, seconds: f64) {
 /// `server_id`'s bound `SocketAddr`, or `None` on an already-killed or unknown handle.
 fn bound_address(server_id: f64) -> Option<SocketAddr> {
     let id = server_id as u64;
-    SERVERS.with(|servers| servers.borrow().get(&id).map(|server| server.local_addr))
+    with_worker(|worker| {
+        worker
+            .servers
+            .borrow()
+            .get(&id)
+            .map(|server| server.local_addr)
+    })
 }
 
 /// `Server.address()`'s `host` half, rendered bare (`Address.text()` adds brackets).
@@ -489,8 +493,9 @@ mod tests {
     /// table, standing in for the ephemeral port a test client needs (`Server` carries no
     /// `.port()` a Quilon program could read either).
     fn bound_addr(server_id: f64) -> SocketAddr {
-        SERVERS.with(|servers| {
-            servers
+        with_worker(|worker| {
+            worker
+                .servers
                 .borrow()
                 .get(&(server_id as u64))
                 .expect("server handle")
