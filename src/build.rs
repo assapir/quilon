@@ -300,11 +300,7 @@ fn runtime_lib_path() -> Result<PathBuf, String> {
 /// with no libgc installed. Apple's libSystem provides `dlopen` and friends, so
 /// there is no `-ldl` to ask for there (and asking is a hard error).
 ///
-/// On macOS, TLS's `Checked` certificate verification reads the OS trust store through
-/// `rustls-native-certs`' `security-framework` backend, which calls into the system's
-/// CoreFoundation and Security frameworks — both are part of every macOS install (they
-/// ship with the OS, not with a developer toolchain), so this asks nothing extra of the
-/// machine `quilon build`'s output runs on, the same way `-lpthread`/`-lm` already don't.
+/// `rustls-native-certs` reads the OS trust store through these OS frameworks.
 #[cfg(target_os = "macos")]
 pub const SYSTEM_LIBS: &[&str] = &[
     "-lpthread",
