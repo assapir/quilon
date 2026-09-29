@@ -16,26 +16,15 @@ use crate::deferred::{QnResult, launch_deferred_result};
 use std::io;
 
 /// The most bytes `@tcpRequest` buffers for one response. A close-delimited read has no length
-/// header, so without a bound a peer that never closes (or streams without end) would grow the
-/// buffer until memory ran out; past this cap the read fails and the exchange yields `NotOk`
-/// rather than exhausting memory. 16 MiB comfortably holds an HTTP response the one-shot client
-/// is meant for. `pub(super)`: [`super::tls`]'s response cap is the same cap, for the same
-/// reason.
+/// header, so without a bound a peer that never closes would grow the buffer until memory ran
+/// out. `pub(super)`: [`super::tls`] shares this cap.
 pub(super) const MAX_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
 
-/// `@tcpRequest(address, requestBytes)`: launch a one-shot TCP request exchange on a background
-/// fiber and return the deferred `Result` immediately (the calling fiber does not park here). A
-/// THIN wrapper over the generic deferral core, with a socket request-exchange producer: connect
-/// to `address`, write the request bytes, read the response until the peer closes (close-delimited
-/// — the model the one-connection-per-request HTTP client uses), and hand back all the response
-/// bytes. The result is a deferred `Result` — `Ok(responseBytes)` on success, `NotOk(message)` on
-/// any failure; the code generator forces it where a strict use reads it.
-///
-/// The address and request bytes are copied into owned buffers here, before the producer is
-/// spawned, so the producer fiber owns its inputs and never reads a `Text` that a later
-/// collection might reclaim. The deferred `Result` is written into `out` rather than returned:
-/// a `Result` is 24 bytes, which the C ABI returns via a hidden pointer, so an out-pointer keeps
-/// the FFI boundary free of an aggregate return (see [`crate::deferred::__force_result`]).
+/// `@tcpRequest(address, requestBytes)` and its `ConnectOptions` overload: launch a one-shot TCP
+/// request exchange on a background fiber, returning the deferred `Result` immediately. `tls`/
+/// `unchecked_certificates` (each `0`/`1`, the flattened `Transport`/`Certificates` discriminants
+/// — see `generate_at_primitive`'s `"tcpRequest"` arm) pick the plain exchange below or
+/// [`super::tls::tls_request`]; the two-argument call site passes `0, 0`.
 ///
 /// # Safety contract (upheld by the compiler)
 /// `out` points to writable storage for one [`QnResult`]; `address_data`/`request_data` are null,
@@ -49,10 +38,23 @@ pub extern "C" fn __tcp_request_launch(
     address_len: i64,
     request_data: *const u8,
     request_len: i64,
+    tls: i64,
+    unchecked_certificates: i64,
 ) {
     let address = bytes_to_string(address_data, address_len);
     let request = copy_bytes(request_data, request_len);
-    let deferred = launch_deferred_result(move || tcp_request(&address, &request));
+    let tls = tls != 0;
+    let unchecked = unchecked_certificates != 0;
+    let deferred = launch_deferred_result(move || {
+        if tls {
+            match super::tls::tls_request(&address, &request, unchecked) {
+                Ok(response) => QnResult::ok(&response),
+                Err(message) => QnResult::not_ok(&message),
+            }
+        } else {
+            tcp_request(&address, &request)
+        }
+    });
     // SAFETY: `out` is writable storage for one `QnResult` (the code generator's alloca).
     unsafe { *out = deferred };
 }
@@ -79,15 +81,15 @@ fn tcp_request(address: &str, request: &[u8]) -> QnResult {
     }
 }
 
-/// Read from `stream` until the peer closes the connection, returning every byte received — the
-/// close-delimited read the one-connection-per-request exchange relies on: each partial read
-/// parks the fiber on socket readiness, and `Ok(0)` (EOF) ends the loop. Errors once the response
-/// would exceed [`MAX_RESPONSE_BYTES`], so an unbounded peer cannot exhaust memory.
-fn read_to_close(stream: &mut TcpStream) -> io::Result<Vec<u8>> {
+/// Read from `reader` until it hits EOF, returning every byte received — the close-delimited
+/// read the one-connection-per-request exchange relies on. Generic over `io::Read` so both the
+/// plain path (`TcpStream`, whose `Ok(0)` means EOF) and [`super::tls`]'s (a `StreamOwned`, where
+/// a peer closing without `close_notify` surfaces as `UnexpectedEof` instead) share it.
+pub(super) fn read_to_close<R: io::Read>(reader: &mut R) -> io::Result<Vec<u8>> {
     let mut response = Vec::new();
     let mut chunk = [0u8; 4096];
     loop {
-        match stream.read(&mut chunk) {
+        match reader.read(&mut chunk) {
             Ok(0) => return Ok(response),
             Ok(count) => {
                 response.extend_from_slice(&chunk[..count]);
@@ -97,6 +99,7 @@ fn read_to_close(stream: &mut TcpStream) -> io::Result<Vec<u8>> {
                     )));
                 }
             }
+            Err(ref error) if error.kind() == io::ErrorKind::UnexpectedEof => return Ok(response),
             Err(error) => return Err(error),
         }
     }
@@ -108,51 +111,10 @@ fn request_error(address: &str, stage: &str, error: &io::Error) -> QnResult {
     QnResult::not_ok(&request_error_text(address, stage, error))
 }
 
-/// [`request_error`]'s message, as plain text — shared with [`super::tls`], whose own
-/// non-certificate stage failures (a resolve, connect, write, or read that has nothing to
-/// do with the certificate) read exactly like the plain path's.
+/// [`request_error`]'s message, as plain text — shared with [`super::tls`]'s non-handshake
+/// stages (resolve, connect, post-handshake write/read).
 pub(super) fn request_error_text(address: &str, stage: &str, error: &io::Error) -> String {
     format!("core.net.@tcpRequest to {address} failed at {stage}: {error}")
-}
-
-/// `@tcpRequest(address, requestBytes, options :: ConnectOptions)`: like
-/// [`__tcp_request_launch`], but `tls`/`unchecked_certificates` (each `0` or `1`, the
-/// flattened `Transport`/`Certificates` discriminants the code generator reads out of
-/// `options` at the call site — see `generate_at_primitive`'s `"tcpRequest"` arm) select
-/// the connection's transport and certificate checking. `tls == 0` runs the exact same
-/// plain-TCP exchange [`__tcp_request_launch`] does; `tls != 0` hands the exchange to
-/// `super::tls::tls_request` instead, which parks the calling fiber for the handshake (on
-/// the blocking-call pool) and again while the request/response bytes cross the wire.
-///
-/// # Safety contract (upheld by the compiler)
-/// Same as [`__tcp_request_launch`].
-#[allow(clippy::not_unsafe_ptr_arg_deref)]
-#[unsafe(no_mangle)]
-pub extern "C" fn __tcp_request_secure_launch(
-    out: *mut QnResult,
-    address_data: *const u8,
-    address_len: i64,
-    request_data: *const u8,
-    request_len: i64,
-    tls: i64,
-    unchecked_certificates: i64,
-) {
-    let address = bytes_to_string(address_data, address_len);
-    let request = copy_bytes(request_data, request_len);
-    let tls = tls != 0;
-    let unchecked = unchecked_certificates != 0;
-    let deferred = launch_deferred_result(move || {
-        if tls {
-            match super::tls::tls_request(&address, &request, unchecked) {
-                Ok(response) => QnResult::ok(&response),
-                Err(message) => QnResult::not_ok(&message),
-            }
-        } else {
-            tcp_request(&address, &request)
-        }
-    });
-    // SAFETY: `out` is writable storage for one `QnResult` (the code generator's alloca).
-    unsafe { *out = deferred };
 }
 
 #[cfg(test)]
@@ -211,6 +173,8 @@ mod tests {
                     address_len,
                     request_ptr as *const u8,
                     request_len,
+                    0,
+                    0,
                 );
                 let deferred_ptr = deferred.slot.data;
                 spawn(move || {

@@ -80,9 +80,8 @@ linkedGreeting = "linked " + "again"
     : true
   assert(reached, equals(true))
 
-  ~ __tcp_request_secure_launch (net.@tcpRequest's ConnectOptions overload) — same guard,
-  ~ same reasoning: codegen emits the call so the link/JIT gate sees the symbol, but it
-  ~ never runs.
+  ~ The `ConnectOptions` overload lowers to the same `__tcp_request_launch`, but exercises
+  ~ the options-flag codegen; same guard.
   reachedSecure = args.size > 1000000
     ? net.@tcpRequest("127.0.0.1:1", "", net.ConnectOptions { transport = net.Tls, certificates = net.Unchecked })
       ? | Ok(_) => true | NotOk(_) => true

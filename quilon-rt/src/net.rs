@@ -35,7 +35,7 @@ pub mod client;
 pub mod server;
 mod tls;
 
-pub use client::{__tcp_request_launch, __tcp_request_secure_launch};
+pub use client::__tcp_request_launch;
 pub use server::{
     __connection_close, __connection_read_launch, __connection_read_with_timeout_launch,
     __connection_write, __server_address_host, __server_address_port, __server_kill,
@@ -186,21 +186,29 @@ impl TcpStream {
         let token = register_readiness(&mut inner, Interest::READABLE)?;
         Ok(TcpStream { inner, token })
     }
-
-    /// Wrap an already-connected, already non-blocking socket as a reactor-registered
-    /// stream — [`tls`]'s counterpart to [`Self::from_accepted`], for a TLS connection
-    /// whose TCP connect and handshake both already ran, synchronously, on the
-    /// blocking-call pool: by the time it reaches here there is no handshake of its own
-    /// left to wait out, only record I/O.
-    pub(super) fn from_connected(mut inner: mio::net::TcpStream) -> io::Result<TcpStream> {
-        let token = register_readiness(&mut inner, Interest::READABLE)?;
-        Ok(TcpStream { inner, token })
-    }
 }
 
 impl Drop for TcpStream {
     fn drop(&mut self) {
         deregister_readiness(&mut self.inner);
+    }
+}
+
+// So `rustls::StreamOwned` can own a `TcpStream` directly and drive record I/O through its
+// park-on-readiness `read`/`write` — no separate non-blocking-socket adapter needed.
+impl io::Read for TcpStream {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        TcpStream::read(self, buf)
+    }
+}
+
+impl io::Write for TcpStream {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        TcpStream::write(self, buf)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
     }
 }
 

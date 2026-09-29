@@ -248,22 +248,13 @@ impl<'ctx> CodeGenerator<'ctx> {
             // (`{ promise, -1 }`) immediately. `site` is the call's own location, which a
             // read fault is reported at.
             "__read_launch" => self.ptr_len_struct_type().fn_type(&[ptr.into()], false),
-            // void __tcp_request_launch({i8,{ptr,i64}}* out, i8* addr,i64, i8* request,i64) — the
-            // internal `@tcpRequest` leaf IO primitive: launch a background TCP request exchange
-            // (connect, write the request, read until the peer closes) and write a DEFERRED
-            // `Result` into `out` — `Ok(responseBytes)` on success, `NotOk(message)` on any network
-            // failure. A `Result` (24 bytes) crosses the FFI via an out-pointer, not an aggregate
-            // return. Backs the HTTP client; not user-facing.
+            // void __tcp_request_launch({i8,{ptr,i64}}* out, i8* addr,i64, i8* request,i64,
+            // i64 tls, i64 uncheckedCertificates) — the internal `@tcpRequest` leaf IO
+            // primitive; a `Result` (24 bytes) crosses the FFI via the out-pointer, not an
+            // aggregate return. `tls`/`uncheckedCertificates` are the flattened
+            // `Transport`/`Certificates` discriminants (`0`/`1`); the two-argument call
+            // passes `0, 0`.
             "__tcp_request_launch" => ctx.void_type().fn_type(
-                &[ptr.into(), ptr.into(), i64t.into(), ptr.into(), i64t.into()],
-                false,
-            ),
-            // void __tcp_request_secure_launch({i8,{ptr,i64}}* out, i8* addr,i64, i8* request,i64,
-            // i64 tls, i64 uncheckedCertificates) — `@tcpRequest`'s `options :: ConnectOptions`
-            // overload: the same launch as `__tcp_request_launch`, plus the flattened
-            // `Transport`/`Certificates` discriminants (`0`/`1`) the call site reads out of
-            // `options` — see `generate_at_primitive`'s `"tcpRequest"` arm.
-            "__tcp_request_secure_launch" => ctx.void_type().fn_type(
                 &[
                     ptr.into(),
                     ptr.into(),

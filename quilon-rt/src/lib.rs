@@ -81,7 +81,7 @@ pub use mem::{
 pub use net::{
     __connection_close, __connection_read_launch, __connection_read_with_timeout_launch,
     __connection_write, __server_address_host, __server_address_port, __server_kill,
-    __tcp_request_launch, __tcp_request_secure_launch, __tcp_serve_launch,
+    __tcp_request_launch, __tcp_serve_launch,
 };
 pub use process::{__argv_to_text_array, __envp_to_map, __exit};
 pub use report::{
@@ -199,8 +199,7 @@ intrinsic_registry! {
     __sleep: extern "C" fn(f64),
     __now: extern "C" fn() -> f64,
     __read_launch: extern "C" fn(*const QnSite) -> QnSlice,
-    __tcp_request_launch: extern "C" fn(*mut QnResult, *const u8, i64, *const u8, i64),
-    __tcp_request_secure_launch:
+    __tcp_request_launch:
         extern "C" fn(*mut QnResult, *const u8, i64, *const u8, i64, i64, i64),
     __tcp_serve_launch:
         extern "C" fn(*const u8, i64, *const c_void, *mut c_void, *const QnSite) -> f64,

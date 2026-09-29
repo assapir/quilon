@@ -1,17 +1,12 @@
 // SPDX-License-Identifier: GPL-2.0-only WITH Classpath-exception-2.0
 
-//! `net.@tcpRequest`'s `Tls` transport: the same one-shot request/response exchange
-//! [`super::client`] performs over plain TCP, but connecting over TLS.
+//! `net.@tcpRequest`'s `Tls` transport.
 //!
-//! The process-wide [`ClientConfig`]s are built once, lazily, the first time either is
-//! needed ([`client_config`]) — loading the OS trust store costs milliseconds, so paying
-//! it once rather than per connection is the whole point. The handshake itself runs on
-//! the runtime's blocking-call pool ([`run_blocking`]), parking only the calling fiber,
-//! exactly as DNS resolution does ([`super::resolve_hostname`]); record encryption and
-//! decryption run inline on the reactor once the handshake completes — the split matters
-//! because a handshake's ECDSA/RSA work can cost single-digit milliseconds, and the
-//! reactor thread is shared by every fiber in the process, while a record's AES-GCM cost
-//! is close to free.
+//! The connect and the handshake's record I/O run on the reactor, exactly like the plain
+//! path; only `process_new_packets()` — the CPU-bound step (signature verification, key
+//! exchange) — goes to the blocking-call pool ([`run_blocking`]), so a slow or silent peer
+//! parks the calling fiber, not a pool thread, and record encryption/decryption afterward
+//! runs inline on the reactor.
 
 use super::TcpStream;
 use crate::blocking::run_blocking;
@@ -23,161 +18,73 @@ use rustls::{
     RootCertStore, SignatureScheme,
 };
 use std::io;
-use std::net::{SocketAddr, TcpStream as StdTcpStream};
 use std::sync::{Arc, OnceLock};
 
-/// Perform the whole TLS request exchange against `address`: split the host out for
-/// SNI/verification, resolve and connect, hand the handshake to the blocking-call pool,
-/// then write `request` and read the response until the peer closes — on the reactor,
-/// through `stream`'s own park-on-readiness `read`/`write`. Mirrors
-/// [`super::client::tcp_request`]'s shape and its `NotOk` text for anything before the
-/// handshake; a handshake or record failure is curated by [`curated_message`].
 pub(super) fn tls_request(
     address: &str,
     request: &[u8],
     unchecked: bool,
 ) -> Result<Vec<u8>, String> {
-    let host = match host_of(address) {
-        Ok(host) => host,
-        Err(error) => {
-            return Err(super::client::request_error_text(
-                address, "resolve", &error,
-            ));
-        }
-    };
-    let target = match super::resolve(address) {
-        Ok(target) => target,
-        Err(error) => {
-            return Err(super::client::request_error_text(
-                address, "resolve", &error,
-            ));
-        }
-    };
-    let server_name = match ServerName::try_from(host.clone()) {
-        Ok(name) => name,
-        Err(_) => {
-            return Err(handshake_error_text(
-                address,
-                "the host name is not valid for TLS",
-            ));
-        }
-    };
+    let host = host_of(address)
+        .map_err(|error| super::client::request_error_text(address, "resolve", &error))?;
+    let target = super::resolve(address)
+        .map_err(|error| super::client::request_error_text(address, "resolve", &error))?;
+    let server_name = ServerName::try_from(host.clone())
+        .map_err(|_| handshake_error_text(address, "the host name is not valid for TLS"))?;
+    let mut stream = TcpStream::connect(target)
+        .map_err(|error| super::client::request_error_text(address, "connect", &error))?;
 
-    let owned_host = host.clone();
-    let handshake = run_blocking(move || connect_and_handshake(target, server_name, unchecked))
-        .unwrap_or_else(|pool_error| Err(HandshakeFailure::Io(pool_error)));
-    let (socket, conn) = match handshake {
-        Ok(pair) => pair,
-        Err(failure) => {
-            return Err(handshake_error_text(
-                address,
-                &curated_message(&failure, &owned_host),
-            ));
-        }
-    };
+    let conn = handshake(client_config(unchecked), server_name, &mut stream)
+        .map_err(|error| handshake_error_text(address, &curated_message(&error, &host)))?;
 
-    if let Err(error) = socket.set_nonblocking(true) {
-        return Err(super::client::request_error_text(
-            address, "connect", &error,
-        ));
-    }
-    let mut stream = match TcpStream::from_connected(mio::net::TcpStream::from_std(socket)) {
-        Ok(stream) => stream,
-        Err(error) => {
-            return Err(super::client::request_error_text(
-                address, "connect", &error,
-            ));
-        }
-    };
-
-    let mut tls = rustls::StreamOwned::new(conn, TcpStreamIo(&mut stream));
-    if let Err(error) = io::Write::write_all(&mut tls, request) {
-        return Err(record_error_text(address, "write", &error, &owned_host));
-    }
-    match read_to_close(&mut tls) {
-        Ok(response) => Ok(response),
-        Err(error) => Err(record_error_text(address, "read", &error, &owned_host)),
-    }
+    let mut tls = rustls::StreamOwned::new(conn, stream);
+    io::Write::write_all(&mut tls, request)
+        .map_err(|error| super::client::request_error_text(address, "write", &error))?;
+    super::client::read_to_close(&mut tls)
+        .map_err(|error| super::client::request_error_text(address, "read", &error))
 }
 
-/// A thin `Read`/`Write` adapter over `&mut TcpStream`, so [`rustls::StreamOwned`] can
-/// drive record I/O through the reactor-parked `read`/`write` methods `TcpStream` already
-/// has, without `TcpStream` itself needing to implement the standard traits (which would
-/// make it, misleadingly, look like an ordinary blocking socket everywhere else it's
-/// used).
-struct TcpStreamIo<'a>(&'a mut TcpStream);
-
-impl io::Read for TcpStreamIo<'_> {
-    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        self.0.read(buf)
-    }
-}
-
-impl io::Write for TcpStreamIo<'_> {
-    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        self.0.write(buf)
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        Ok(())
-    }
-}
-
-/// Read plaintext from `tls` until the peer closes — [`super::client::read_to_close`]'s
-/// counterpart over a TLS stream, with the same response cap.
-fn read_to_close(
-    tls: &mut rustls::StreamOwned<ClientConnection, TcpStreamIo<'_>>,
-) -> io::Result<Vec<u8>> {
-    let mut response = Vec::new();
-    let mut chunk = [0u8; 4096];
-    loop {
-        match io::Read::read(tls, &mut chunk) {
-            Ok(0) => return Ok(response),
-            Ok(count) => {
-                response.extend_from_slice(&chunk[..count]);
-                if response.len() > super::client::MAX_RESPONSE_BYTES {
-                    return Err(io::Error::other(format!(
-                        "response exceeded the {}-byte cap",
-                        super::client::MAX_RESPONSE_BYTES
-                    )));
-                }
-            }
-            // A close_notify short of a clean shutdown (a peer that just drops the TCP
-            // connection) surfaces here rather than as `Ok(0)`; the one-shot exchange
-            // treats it the same way the plain path treats EOF.
-            Err(ref error) if error.kind() == io::ErrorKind::UnexpectedEof => return Ok(response),
-            Err(error) => return Err(error),
-        }
-    }
-}
-
-/// The blocking-pool job: connect to `target` and drive the TLS handshake to completion,
-/// entirely with ordinary blocking I/O on this worker thread — the CPU-bound half of a
-/// connection (signature verification, key exchange), kept off the reactor.
-fn connect_and_handshake(
-    target: SocketAddr,
+/// Build the `ClientConnection` and drive it to completion. `write_tls`/`read_tls` move raw
+/// bytes over `stream`'s own park-on-readiness `read`/`write`; `process_new_packets` — the
+/// only step that isn't I/O — runs on the blocking-call pool, the `ClientConnection` moved
+/// into the closure and back so nothing here blocks the reactor.
+fn handshake(
+    config: Arc<ClientConfig>,
     server_name: ServerName<'static>,
-    unchecked: bool,
-) -> Result<(StdTcpStream, ClientConnection), HandshakeFailure> {
-    let mut socket = StdTcpStream::connect(target).map_err(HandshakeFailure::Connect)?;
-    let mut conn = ClientConnection::new(client_config(unchecked), server_name)
-        .map_err(HandshakeFailure::Tls)?;
-    conn.complete_io(&mut socket)
-        .map_err(HandshakeFailure::Io)?;
-    Ok((socket, conn))
+    stream: &mut TcpStream,
+) -> io::Result<ClientConnection> {
+    let mut conn = ClientConnection::new(config, server_name).map_err(tls_io_error)?;
+    while conn.is_handshaking() {
+        while conn.wants_write() {
+            if conn.write_tls(stream)? == 0 {
+                break;
+            }
+        }
+        if !conn.wants_read() {
+            continue;
+        }
+        if conn.read_tls(stream)? == 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "connection closed during the TLS handshake",
+            ));
+        }
+        let (returned, outcome) = run_blocking(move || {
+            let outcome = conn.process_new_packets();
+            (conn, outcome)
+        })?;
+        conn = returned;
+        outcome.map_err(tls_io_error)?;
+    }
+    Ok(conn)
 }
 
-/// Why [`connect_and_handshake`] didn't produce a connection.
-enum HandshakeFailure {
-    Connect(io::Error),
-    Tls(TlsError),
-    Io(io::Error),
+fn tls_io_error(error: TlsError) -> io::Error {
+    io::Error::new(io::ErrorKind::InvalidData, error)
 }
 
-/// The host portion of a `host:port`/`[ipv6]:port` address — [`ServerName`]'s and the
-/// curated error text's own view of who this connection is with, kept apart from the
-/// resolved [`SocketAddr`] so a hostname's own text (not its resolved IP) is what SNI and
-/// certificate-name checks see.
+/// The host portion of a `host:port`/`[ipv6]:port` address — kept apart from the resolved
+/// `SocketAddr` so SNI and certificate-name checks see the hostname, never a resolved IP.
 fn host_of(address: &str) -> io::Result<String> {
     if let Some(rest) = address.strip_prefix('[')
         && let Some((host, _)) = rest.split_once(']')
@@ -194,28 +101,12 @@ fn handshake_error_text(address: &str, reason: &str) -> String {
     format!("tls handshake with {address} failed: {reason}")
 }
 
-/// A failed post-handshake record read/write: curated the same way a handshake failure
-/// is when rustls itself is the cause (a session ticket or post-handshake message can
-/// still fail a certificate-adjacent check), else the plain `NotOk` shape the non-TLS
-/// stages already use.
-fn record_error_text(address: &str, stage: &str, error: &io::Error, host: &str) -> String {
+/// Curate a handshake `io::Error` into the plain-English reason for the common certificate
+/// problems; anything else falls back to rustls's/`io::Error`'s own text.
+fn curated_message(error: &io::Error, host: &str) -> String {
     match downcast_tls_error(error) {
-        Some(tls_error) => handshake_error_text(address, &curated_tls_message(tls_error, host)),
-        None => super::client::request_error_text(address, stage, error),
-    }
-}
-
-/// Curate a [`HandshakeFailure`] into the plain-English reason `net.@tcpRequest`'s `NotOk`
-/// carries, for the handful of common certificate problems the design calls out by name;
-/// anything else falls back to rustls's/`io::Error`'s own text.
-fn curated_message(failure: &HandshakeFailure, host: &str) -> String {
-    match failure {
-        HandshakeFailure::Connect(error) => error.to_string(),
-        HandshakeFailure::Tls(error) => curated_tls_message(error, host),
-        HandshakeFailure::Io(error) => match downcast_tls_error(error) {
-            Some(tls_error) => curated_tls_message(tls_error, host),
-            None => error.to_string(),
-        },
+        Some(tls_error) => curated_tls_message(tls_error, host),
+        None => error.to_string(),
     }
 }
 
@@ -250,18 +141,16 @@ fn curated_tls_message(error: &TlsError, host: &str) -> String {
     }
 }
 
-/// A `NotValidForNameContext::presented` entry as the curated message shows it: rustls-webpki
-/// hands each one over as a `Debug`-formatted `GeneralName` (`DnsName("wrong.example.invalid")`,
-/// `IpAddress("127.0.0.1")`) — this strips the variant wrapper down to the name itself.
+/// rustls-webpki hands `NotValidForNameContext::presented` over `Debug`-formatted
+/// (`DnsName("wrong.example.invalid")`); this strips the wrapper down to the name itself.
 fn presented_name(name: &str) -> &str {
     name.strip_suffix("\")")
         .and_then(|rest| rest.split_once("(\""))
         .map_or(name, |(_, inner)| inner)
 }
 
-/// `time` as `YYYY-MM-DD` — the one date a curated error ever formats (a certificate's
-/// `notAfter`), so a whole date-handling dependency buys nothing a dozen lines of
-/// civil-calendar arithmetic don't already cover.
+/// `time` as `YYYY-MM-DD` — the one date a curated error ever formats, so a date-handling
+/// dependency buys nothing a dozen lines of civil-calendar arithmetic don't already cover.
 fn format_date(time: UnixTime) -> String {
     let (year, month, day) = civil_from_days((time.as_secs() / 86_400) as i64);
     format!("{year:04}-{month:02}-{day:02}")
@@ -288,10 +177,9 @@ fn civil_from_days(days_since_epoch: i64) -> (i64, u32, u32) {
     (if month <= 2 { year + 1 } else { year }, month, day)
 }
 
-/// The process-wide `ClientConfig`, built once per verification mode the first time it is
-/// needed. Two singletons (checked/unchecked), not one parameterized per call — building
-/// either loads the OS trust store or installs the accept-any verifier, and neither should
-/// repeat per connection.
+/// One `ClientConfig` per verification mode, built the first time either is needed —
+/// loading the OS trust store costs milliseconds, so once per process rather than once
+/// per connection.
 fn client_config(unchecked: bool) -> Arc<ClientConfig> {
     static CHECKED: OnceLock<Arc<ClientConfig>> = OnceLock::new();
     static UNCHECKED: OnceLock<Arc<ClientConfig>> = OnceLock::new();
@@ -316,9 +204,8 @@ fn build_client_config(unchecked: bool) -> ClientConfig {
     }
 }
 
-/// The OS trust store via `rustls-native-certs` — which honours `SSL_CERT_FILE`/
-/// `SSL_CERT_DIR` itself — falling back to the compiled-in Mozilla list
-/// (`webpki-roots`) when the OS store yields no roots at all.
+/// The OS trust store via `rustls-native-certs` (honours `SSL_CERT_FILE`/`SSL_CERT_DIR`),
+/// falling back to the compiled-in Mozilla list (`webpki-roots`) when it yields none.
 fn root_store() -> RootCertStore {
     let mut roots = RootCertStore::empty();
     for cert in rustls_native_certs::load_native_certs().certs {
@@ -330,10 +217,8 @@ fn root_store() -> RootCertStore {
     roots
 }
 
-/// `Certificates::Unchecked`'s verifier: accepts every certificate chain and name, while
-/// still checking the handshake SIGNATURE (that the peer holds the certificate's private
-/// key) — skipping trust and name checks, never signature checks, is the standard shape
-/// for an intentionally-insecure verifier (rustls's own examples build the same thing).
+/// `Certificates::Unchecked`'s verifier: skips trust and name checks but still verifies the
+/// handshake signature, the standard shape for an intentionally-insecure verifier.
 #[derive(Debug)]
 struct AcceptAnyCertificate {
     provider: Arc<CryptoProvider>,

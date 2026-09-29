@@ -47,12 +47,6 @@ const READ_PRIMITIVE: &str = "readStdin";
 /// (`Ok(responseBytes)` / `NotOk(message)`), read once forced.
 const TCP_REQUEST_PRIMITIVE: &str = "tcpRequest";
 
-/// The argument count `@tcpRequest` takes: `address`, `requestBytes`, and the optional
-/// trailing `options :: net.ConnectOptions` (`Transport`/`Certificates`) the `Tls`
-/// transport overload adds.
-const TCP_REQUEST_ARITY: usize = 2;
-const TCP_REQUEST_WITH_OPTIONS_ARITY: usize = 3;
-
 /// The bare name of `Connection`'s deferred read primitive, reached through a value —
 /// `connection.@read()` — rather than a module binding; fused the same way
 /// `@readStdin`/`@tcpRequest` are.
@@ -512,8 +506,7 @@ fn is_read_call(function: &Expression, arguments: &[Expression]) -> bool {
 fn is_tcp_request_call(function: &Expression, arguments: &[Expression]) -> bool {
     matches!(function, Expression::Identifier { name, .. }
         if at_primitive_name(name) == Some(TCP_REQUEST_PRIMITIVE))
-        && (arguments.len() == TCP_REQUEST_ARITY
-            || arguments.len() == TCP_REQUEST_WITH_OPTIONS_ARITY)
+        && matches!(arguments.len(), 2 | 3)
 }
 
 /// Whether `function`/`arguments` is a call to `Connection`'s `@read` primitive — the
