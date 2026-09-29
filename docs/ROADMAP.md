@@ -25,7 +25,7 @@ evergreen — the durable record that survives across contributors and AI-agent 
 | **M3** | Closures & functional core | ✅ Complete |
 | **M4** | Codegen infra — authoritative types in codegen, static methods; monomorphization/defunctionalization deprioritized | ✅ Complete (monomorphization 💤) |
 | **M5** | ~~Implicit parallelism (CPU) — parallel array methods from inferred purity~~ | 💤 Deprioritized |
-| **M6** | **Concurrency runtime — colorless implicit futures ([#120]) — THE core deliverable.** Stage 1: single-threaded fibers + reactor; Stage 2: M:N work-stealing + cross-thread GC | 🔨 In progress (Stage 1 ✅) — **core** |
+| **M6** | **Concurrency runtime — colorless implicit futures ([#120]) — THE core deliverable.** Stage 1: single-threaded fibers + reactor; Stage 2: M:N workers + cross-thread GC + atomic types | 🔨 In progress (Stage 1 ✅, Stage 2 workers ✅) — **core** |
 | **M7** | Polish — formatter/linter, corelib, debug info | 🔨 In progress |
 | **M8** | **Web — a native HTTP server built on the M6 runtime** | ✅ Complete |
 
@@ -121,7 +121,7 @@ and specified in full in [#120]. Built smallest-first:
 | Item | Status |
 |------|--------|
 | **Stage 1** — single-threaded stackful fibers (`corosensei`) + IO reactor; `@` primitives (`@sleep`, `@readStdin`, `@tcpRequest`), deferred values, force-at-strict-op; a `< >` block joins every launch it made directly before returning (`allSettled`), every fault reported in launch order naming its launch site; the atomic binding syntax `@name := …`, whose reassignment's right side never waits on a deferred value; a deferred value stored in a top-level `:=` binding stays deferred there and forces on read ([#445]); hostname lookups run on the runtime's blocking-call pool ([#434]) | ✅ |
-| **Stage 2** — required for 1.0: work-stealing M:N scheduler running one worker per CPU, Boehm GC across threads, atomic types (`T = @{ … }`); the fiber-sharing check has shipped ([#458]), enforced for `net.@tcpServe` and `http.@serve` handlers — the first code paths where user code runs on more than one fiber ([#120]) | ⬜ |
+| **Stage 2** — required for 1.0: M:N scheduler running one worker per CPU, Boehm GC across threads, atomic types (`T = @{ … }`); the fiber-sharing check has shipped ([#458]), enforced for `net.@tcpServe` and `http.@serve` handlers — the first code paths where user code runs on more than one fiber ([#120]). Workers, placement, and the cross-thread GC scanning scheme have shipped — one worker OS thread per CPU, fibers pinned to the one that created them, a new launch or accepted connection placed on the worker with the shortest run queue ([`concurrency/runtime.md`](concurrency/runtime.md)); atomic types and work-stealing a not-yet-started launch remain | 🔨 |
 | Trace / explain mode | 💤 (deferred past 1.0) |
 
 ### M7 — Polish 🔨

@@ -882,9 +882,9 @@ fn run_helper(index: usize, registry: Arc<placement::Registry>, barrier: Arc<Bar
 }
 
 /// Run the program: one worker per CPU (`QUILON_WORKERS` overrides the count — see
-/// [`resolve_worker_count`]), `main` seeded on worker 0. A helper worker runs on its own OS
-/// thread ([`run_helper`]); worker 0 runs right here, on the calling thread
-/// ([`run_leader`]), and its own loop deciding the program is done is what ends this call —
+/// `resolve_worker_count`), `main` seeded on worker 0. A helper worker runs on its own OS
+/// thread (`run_helper`); worker 0 runs right here, on the calling thread
+/// (`run_leader`), and its own loop deciding the program is done is what ends this call —
 /// every other worker is then asked to stop and joined before returning. A single-worker
 /// program (`QUILON_WORKERS=1`, or a machine `available_parallelism` reports as one) spawns
 /// no helper thread at all and behaves exactly as a single-threaded scheduler always has.

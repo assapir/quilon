@@ -8,20 +8,20 @@
 //! `generate_at_primitive` and its `close`/`kill` interception ahead of ordinary method
 //! dispatch).
 //!
-//! **Ownership across workers.** A `Connection` handle's [`ConnectionState`] — the live
+//! **Ownership across workers.** A `Connection` handle's `ConnectionState` — the live
 //! `TcpStream`, registered with ITS OWN worker's reactor — is only ever touched from the
 //! worker that accepted it: that connection's own handler fiber (placed there once, at
-//! accept time — see [`place_connection`]), or the runtime's own auto-close once that
+//! accept time — see `place_connection`), or the runtime's own auto-close once that
 //! fiber returns. It lives in that worker's own `crate::worker::Worker::connections` table,
 //! reached only by that worker's own thread. `Server.kill`, which may run on any worker
 //! (a handler answering by calling `server.kill()` on its own server is the deliverable's
 //! own pattern), never reaches into another worker's table for this: it force-closes a
-//! still-open connection through [`ServerState::open_connections`] instead, an
+//! still-open connection through `ServerState::open_connections` instead, an
 //! `Arc<Mutex<..>>` map of every open connection's id to its raw descriptor alone —
 //! `shutdown(2)` needs no more than that, and acts on the descriptor directly rather than
-//! the worker-owned `RefCell`-guarded stream (see [`force_shutdown_connection`]).
+//! the worker-owned `RefCell`-guarded stream (see `force_shutdown_connection`).
 //!
-//! A `Server` handle's [`ServerState`] is reachable from any worker the same way: its
+//! A `Server` handle's `ServerState` is reachable from any worker the same way: its
 //! `stopping`/`in_flight`/`open_connections` are `Arc`/atomic, and the table mapping every
 //! live server's id to its `ServerState` is `crate::placement::Registry::servers` — shared
 //! by every worker of this run, not owned by whichever one called `net.@tcpServe`.
@@ -55,10 +55,10 @@ use std::time::{Duration, Instant};
 /// A connection's own state — see the module doc's ownership-rule paragraph. The accepted
 /// stream (taken on close, so a further read/write after that reads as "closed" rather than
 /// reusing a dropped socket) belongs to this worker alone; the shared open-connections map
-/// (id to raw descriptor, populated before this state even exists — see [`place_connection`])
+/// (id to raw descriptor, populated before this state even exists — see `place_connection`)
 /// is both how closing tells `Server.kill` this id is gone and how `Server.kill` itself
 /// force-closes a still-open one without ever touching this `RefCell` (see
-/// [`force_shutdown_connection`]).
+/// `force_shutdown_connection`).
 pub(crate) struct ConnectionState {
     stream: RefCell<Option<TcpStream>>,
     open_connections: Arc<Mutex<HashMap<u64, RawFd>>>,
@@ -73,7 +73,7 @@ pub(crate) struct ServerState {
     /// Every currently open connection this server accepted, id to raw descriptor —
     /// deliberately NOT the worker-owned `ConnectionState` table: `Server.kill` may run on
     /// a different worker than any given connection's own, and this is all it needs to
-    /// force-close one (see [`force_shutdown_connection`]).
+    /// force-close one (see `force_shutdown_connection`).
     open_connections: Arc<Mutex<HashMap<u64, RawFd>>>,
     /// The accept loop's own deferred cell, from the `deferred::launch_here` call that
     /// started it — never exposed to Quilon; `Server.kill` [`settle`]s it so the enclosing

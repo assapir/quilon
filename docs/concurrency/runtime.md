@@ -1,21 +1,57 @@
 ---
-title: "Concurrency runtime: deferred socket I/O"
+title: "Concurrency runtime: workers and deferred socket I/O"
 sidebar:
   label: "Runtime"
 ---
 
-# Concurrency runtime: deferred socket I/O
+# Concurrency runtime: workers and deferred socket I/O
 
-How one non-blocking socket op suspends and resumes on the single-threaded fiber
-scheduler. The runtime pieces live in `quilon-rt/src/`: the socket types in
-`net.rs`, the scheduler + readiness plumbing in `scheduler.rs`, the `mio` poll
-wrapper in `reactor.rs`, the fiber-stack GC integration in `gc.rs`, and the
-blocking-call pool (for a call with no non-blocking form at all) in `blocking.rs`.
-The scheduler's run queue and reactor, and every other piece of state scoped to one thread
-(not one fiber, not the whole process), are fields of one `Worker` value (`worker.rs`),
-reached through a single accessor. Exactly one worker exists, on the one thread `run()` uses.
+How the runtime's scheduler runs on more than one OS thread, and how one non-blocking
+socket op suspends and resumes on it. The runtime pieces live in `quilon-rt/src/`: the
+socket types in `net.rs`, the scheduler + readiness plumbing in `scheduler.rs`, the `mio`
+poll wrapper in `reactor.rs`, the fiber-stack GC integration in `gc.rs`, the blocking-call
+pool (for a call with no non-blocking form at all) in `blocking.rs`, and cross-worker
+placement in `placement.rs`. The scheduler's run queue and reactor, and every other piece
+of per-thread state, are fields of one `Worker` value (`worker.rs`), reached through a
+single accessor — one per OS thread.
 
-The trace below follows a single `TcpStream::read` that has to wait for data.
+## Workers
+
+`scheduler::run` starts N workers, one per CPU as `std::thread::available_parallelism`
+reports it — `QUILON_WORKERS=<n>` overrides the count, read once at startup; invalid or `0`
+falls back to the CPU count. This is a debugging aid for chasing a scheduling bug, not for
+production use, and is documented nowhere else. Worker 0 (the "leader") runs on the thread
+that called `run`, and runs `^`; every other worker (a "helper") gets its own OS thread. Each
+worker has its own run queue and its own `mio` reactor — a socket registers with the reactor
+of the worker that owns its fiber, for that fiber's whole life.
+
+A fiber runs on the worker that created it and never moves. `^`'s own block joining a launch
+it made, even one placed on another worker's queue, and a strict force of a deferred value
+resolved on another worker, both park the calling fiber on its OWN worker's reactor and wake
+through the same `ReactorWaker` mechanism a blocking call's completion already uses — a
+cross-worker wait costs no more than that. This is also why the leader alone decides when a
+program is done: by the time its own ready queue and parked state are both empty, every
+launch its call tree made — wherever it ran — has already settled, so nothing is left
+running elsewhere either. A helper's own idle queue means only that IT has nothing to do; it
+waits for more placed work instead of stopping.
+
+**Placement.** A new launch (every freestanding value-returning `@` primitive the deferral
+pass registers a launch scope around — `@readStdin`, `@tcpRequest`) and an accepted
+`net.@tcpServe`/`http.@serve` connection each go to the worker with the shortest run queue
+at that moment: one atomic length counter per worker, read all N, pick the minimum, ties to
+the lowest index. `net.@tcpServe`'s own accept loop is not placed this way — one listening
+socket and one accept loop per server, on the worker that called `net.@tcpServe` — only the
+handler fiber for each connection it accepts is. A `Connection`'s own reads
+(`Connection.@read`) stay on its handler's worker too, since its socket is already
+registered with that worker's reactor.
+
+**The switch guard.** Every fiber switch, on every worker, holds the collector off for its
+own brief span (`GC_disable`/`GC_enable`, paired per switch) so a concurrent collection can
+never observe a fiber's stack mid-switch — see `gc.rs`'s own module doc for the full
+reasoning; the cost is about half a microsecond per switch and nothing on allocation.
+
+The trace below follows a single `TcpStream::read` that has to wait for data, on one
+worker — every worker runs this same loop independently.
 
 ```mermaid
 sequenceDiagram

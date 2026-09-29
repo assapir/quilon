@@ -30,9 +30,9 @@
 //! ## Running fibers on more than one OS thread
 //!
 //! Two changes make (a) and (b) hold when several OS threads each drive their own
-//! [`crate::worker::Worker`] concurrently, fibers pinned to whichever thread spawned them:
+//! `crate::worker::Worker` concurrently, fibers pinned to whichever thread spawned them:
 //!
-//! **Switch ordering.** [`enter_fiber`]/[`leave_fiber`] run from the FIBER's own code
+//! **Switch ordering.** `enter_fiber`/`leave_fiber` (below) run from the FIBER's own code
 //! (`crate::scheduler::new_fiber`'s entry, and `suspend_on` around every park), not from
 //! the resumer's side wrapping an opaque `coroutine.resume()` call — the resumer cannot
 //! observe "has the jump landed yet", only the fiber's own code, running after the jump,
@@ -47,13 +47,13 @@
 //! while it is in flight, so `GC_set_stackbottom`'s target and the true stack pointer are
 //! briefly for two different stacks, and a collection landing exactly then can walk one
 //! of them as a real, largely-unmapped range depending on where the allocator happened to
-//! place it relative to the other — [`switch_disable`]/[`switch_enable`], below, close
+//! place it relative to the other — `switch_disable`/`switch_enable`, below, close
 //! that remaining instant.
 //!
 //! **Per-thread scan state.** What would otherwise be one global, lock-guarded registry
-//! is one immutable [`ThreadState`] snapshot per thread, held behind a plain `AtomicPtr`
-//! in a fixed-size [`REGISTRY`] slot the owning thread alone ever swaps ([`publish`]) —
-//! one pointer write per state change, no lock. [`push_fiber_roots`] (Boehm's
+//! is one immutable `ThreadState` snapshot per thread, held behind a plain `AtomicPtr`
+//! in a fixed-size `REGISTRY` slot the owning thread alone ever swaps (`publish`) —
+//! one pointer write per state change, no lock. `push_fiber_roots` (Boehm's
 //! world-stopped callback, running on whichever thread is driving a collection) walks
 //! every registered slot without ever taking a lock a thread it just stopped could be
 //! holding: the collector's stop-the-world guarantees every OTHER registered thread is
@@ -75,7 +75,7 @@
 //! from the parked scan" and "the automatic scan is actually pointed at this fiber" — but
 //! not the raw stack-pointer switch inside `corosensei`'s `resume`/`suspend` itself, during
 //! which `GC_set_stackbottom`'s recorded target and the true SP are briefly for two
-//! different stacks (see above). [`switch_disable`]/[`switch_enable`] bracket every
+//! different stacks (see above). `switch_disable`/`switch_enable` bracket every
 //! switch, in both directions, with `GC_disable`/`GC_enable`, so no collection — not this
 //! thread's, not any other thread's, since `GC_dont_gc` is a single global counter
 //! bdwgc's own docs say "overrides explicit `GC_gcollect()` calls as well" — can run while
@@ -95,7 +95,7 @@
 //! microsecond per switch, nothing on allocation, every `runtime_speed` corpus within
 //! noise (none of them switch fibers at all).
 //!
-//! [`SWITCH_DEPTH`] is a per-thread counter, incremented by `switch_disable` and
+//! `SWITCH_DEPTH` is a per-thread counter, incremented by `switch_disable` and
 //! decremented by `switch_enable`, asserted in debug builds to be exactly `0` immediately
 //! before every `switch_disable()` (proving the previous switch's `switch_enable()`
 //! already ran) and exactly `1` immediately before every `switch_enable()` (proving
