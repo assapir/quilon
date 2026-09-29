@@ -93,9 +93,6 @@ type FiberYielder = Yielder<(), Park>;
 
 struct Fiber {
     coroutine: FiberCoroutine,
-    /// The fiber's stack base (top of its GC-scannable range); set as Boehm's stack
-    /// bottom while this fiber runs. The full range is mirrored in the GC registry.
-    stack_high: usize,
     /// This fiber's guard page, `[guard_low, guard_high)` — the one page a stack
     /// overflow faults on. Recorded so [`stack_overflow`] can tell such a fault from
     /// any other while this fiber is the one running.
@@ -192,15 +189,47 @@ fn current_yielder(name: &str) -> *const FiberYielder {
     yielder
 }
 
-/// Suspend `yielder` with `park`, then restore the worker's current-yielder cell to it:
-/// sibling fibers run between the suspend and its resume and clobber the shared cell (see
-/// `crate::worker::Worker::current_yielder`'s own doc), so later code on this fiber needs it
-/// put back.
+/// Suspend `yielder` with `park` — first holding off collection for the jump away
+/// (`gc::switch_disable`, see `crate::gc`'s module doc's switch-guard section) once GC's
+/// parked-fiber scan already covers this fiber's stack (`gc::leave_fiber`, the last
+/// fiber-side bookkeeping before the actual jump away; this must run from the fiber's own
+/// code rather than wrapping the resumer's opaque `coroutine.resume()`, since only fiber
+/// code can say the jump has not happened yet) — then, once resumed, restore the worker's
+/// current-yielder cell to it (sibling fibers run between the suspend and its resume and
+/// clobber the shared cell — see `crate::worker::Worker::current_yielder`'s own doc), hand
+/// this fiber's stack back to the automatic scan before excluding it from the parked one
+/// again (`gc::enter_fiber`), and only then let collection resume (`gc::switch_enable`) —
+/// matching the `gc::switch_disable` [`resume_fiber`] made just before the `resume()` call
+/// that landed here.
 fn suspend_on(yielder: *const FiberYielder, park: Park) {
+    let id = current_fiber_id().expect("suspend_on runs only from within a fiber");
+    gc::switch_disable();
+    gc::leave_fiber();
     // SAFETY: `yielder` points at the live `Yielder` for this fiber, valid for the whole
     // fiber body (it is a parameter of the corosensei closure we are inside).
     unsafe { (*yielder).suspend(park) };
     set_current_yielder(yielder);
+    gc::enter_fiber(id);
+    gc::switch_enable();
+}
+
+/// Suspend `yielder` with `park` and never return — the one-way trip
+/// [`abort_current_case`]/[`abort_current_trap`] take, whose coroutine its guard loop
+/// force-resets rather than resuming again. Still runs [`gc::switch_disable`]/
+/// [`gc::leave_fiber`] first, for the same reason [`suspend_on`] does: this fiber's stack
+/// must stay parked-scan-covered and collection held off across the jump away, and only
+/// fiber-side code can say the jump has not happened yet. No matching `switch_enable` here
+/// — [`resume_fiber`]'s own, once its `coroutine.resume()` call returns with this park, is
+/// the match.
+fn suspend_final(yielder: *const FiberYielder, park: Park) -> ! {
+    gc::switch_disable();
+    gc::leave_fiber();
+    // SAFETY: see `suspend_on`.
+    unsafe { (*yielder).suspend(park) };
+    unreachable!(
+        "run_case_guarded/run_fault_guarded force-reset this coroutine on the abort marker, \
+         so it is never resumed to reach here"
+    )
 }
 
 /// Set the worker's current-yielder cell, cast to the opaque `*const c_void` it stores (see
@@ -209,28 +238,41 @@ fn set_current_yielder(yielder: *const FiberYielder) {
     with_worker(|worker| worker.current_yielder.set(yielder as *const c_void));
 }
 
-/// Resume `coroutine` (fiber `id`, stack base `high`, guard page `[guard_low, guard_high)`)
-/// with Boehm's stack bottom pointed at it and its guard page recorded for
-/// [`stack_overflow`], both restored to whatever they covered before once the coroutine
-/// yields or returns. [`run`]'s ready-queue loop and [`run_case_guarded`]'s both resume
-/// this way — a fiber is a fiber to the collector and to stack-overflow reporting,
+/// Resume `coroutine` (fiber `id`, guard page `[guard_low, guard_high)`) with its guard
+/// page recorded for [`stack_overflow`] (restored to whatever it covered before once the
+/// coroutine yields or returns), `id` tracked in the worker's `running_fibers` for the
+/// whole call, and collection held off (`gc::switch_disable`) for the `resume()` call
+/// itself — matched by a `gc::switch_enable`, either the FIBER's own (landing on this same
+/// resume, see [`new_fiber`]/[`suspend_on`]) or, once `resume()` returns here, this
+/// function's own (the fiber parked or finished, so it is this thread's turn to run
+/// normally again). See `crate::gc`'s module doc's switch-guard section for why the
+/// pairing splits this way. [`run`]'s ready-queue loop and [`run_case_guarded`]'s both
+/// resume this way — a fiber is a fiber to stack-overflow reporting and to the collector,
 /// whichever loop is driving it.
+///
+/// The GC's own scan bookkeeping (`gc::enter_fiber`/`gc::leave_fiber`) does NOT wrap this
+/// call either, for the same reason: it runs from the fiber's own code instead
+/// (`new_fiber`'s entry, and around every `suspend_on`/`suspend_final`), because only code
+/// already running ON the fiber's stack can say the jump onto or off of it has actually
+/// happened. `running_fibers` is still pushed/popped here, caller-side, before/after the
+/// call: it is plain Rust bookkeeping (which id is innermost), not a raw stack-pointer
+/// race, and fiber-side code (`suspend_on`, `new_fiber`) reads it via [`current_fiber_id`]
+/// to know its own id.
 fn resume_fiber(
     id: usize,
-    high: usize,
     guard_low: usize,
     guard_high: usize,
     coroutine: &mut FiberCoroutine,
 ) -> CoroutineResult<Park, ()> {
-    gc::enter_fiber(id, high);
     with_worker(|worker| worker.running_fibers.borrow_mut().push(id));
     let previous_guard = stack_overflow::set_current_guard(guard_low, guard_high);
+    gc::switch_disable();
     let result = coroutine.resume(());
+    gc::switch_enable();
     stack_overflow::restore_guard(previous_guard);
     with_worker(|worker| {
         worker.running_fibers.borrow_mut().pop();
     });
-    gc::leave_fiber();
     result
 }
 
@@ -262,13 +304,28 @@ fn allocate_fiber_stack(stack_size: usize) -> FiberStackAllocation {
 }
 
 /// Build a coroutine on `stack` that installs its own `Yielder` into the worker's
-/// current-yielder cell as its first act, then runs `body` — the entry every fiber shares,
-/// whether driven by the ready queue ([`spawn_with_stack`]) or resumed directly by its own
-/// guard ([`run_case_guarded`]).
+/// current-yielder cell, then tells the GC this fiber has landed (`gc::enter_fiber` — see
+/// `crate::gc`'s module doc for why this must happen fiber-side, as the very first thing
+/// this fiber's own code does) and, bookkeeping now done, lets collection resume
+/// (`gc::switch_enable`, matching the `gc::switch_disable` [`resume_fiber`] made just
+/// before this very first `resume()` call landed here) — then runs `body`, then holds
+/// collection off again (`gc::switch_disable`) and tells the GC it is about to fall off
+/// the end (`gc::leave_fiber`, mirroring every `suspend_on` call `body` may have made
+/// along the way), leaving the matching `gc::switch_enable` to [`resume_fiber`] once this
+/// final jump away lands there — the entry every fiber shares, whether driven by the ready
+/// queue ([`spawn_with_stack`]) or resumed directly by its own guard
+/// ([`run_case_guarded`]). The worker's `running_fibers` (read by `gc::enter_fiber` via
+/// [`current_fiber_id`]) is already pushed by [`resume_fiber`] before this closure ever
+/// gets to run.
 fn new_fiber(stack: DefaultStack, body: impl FnOnce() + 'static) -> FiberCoroutine {
     Coroutine::with_stack(stack, move |yielder, ()| {
         set_current_yielder(yielder as *const FiberYielder);
+        let id = current_fiber_id().expect("a fiber's own body runs only while its id is pushed");
+        gc::enter_fiber(id);
+        gc::switch_enable();
         body();
+        gc::switch_disable();
+        gc::leave_fiber();
     })
 }
 
@@ -283,7 +340,6 @@ fn spawn_with_stack<F: FnOnce() + 'static>(stack_size: usize, f: F) {
         let id = scheduler.reserve_id();
         scheduler.fibers[id] = Some(Fiber {
             coroutine,
-            stack_high: high,
             guard_low,
             guard_high: low,
         });
@@ -323,7 +379,7 @@ pub(crate) fn run_case_guarded(
     gc::register(id, low, high);
 
     let aborted = loop {
-        match resume_fiber(id, high, guard_low, low, &mut coroutine) {
+        match resume_fiber(id, guard_low, low, &mut coroutine) {
             CoroutineResult::Yield(Park::CaseAborted) => break true,
             CoroutineResult::Yield(park) => suspend_on(outer_yielder, park),
             CoroutineResult::Return(()) => break false,
@@ -360,9 +416,7 @@ pub(crate) fn run_case_guarded(
 /// failing `expect` only ever reaches this from inside one — the type checker enforces it).
 pub(crate) fn abort_current_case() -> ! {
     let yielder = current_yielder("abort_current_case");
-    // SAFETY: `yielder` points at the live `Yielder` for this fiber (see `sleep`).
-    unsafe { (*yielder).suspend(Park::CaseAborted) };
-    unreachable!("run_case_guarded force-resets this coroutine on the abort marker")
+    suspend_final(yielder, Park::CaseAborted)
 }
 
 /// Whether an `aborts()` trap is currently in progress on this thread — checked by
@@ -416,7 +470,7 @@ pub(crate) fn run_fault_guarded<T: 'static>(
                 .abort_trap_depth
                 .set(worker.abort_trap_depth.get() + 1)
         });
-        let result = resume_fiber(id, high, guard_low, low, &mut coroutine);
+        let result = resume_fiber(id, guard_low, low, &mut coroutine);
         with_worker(|worker| {
             worker
                 .abort_trap_depth
@@ -471,9 +525,7 @@ pub(crate) fn run_abort_trap_guarded(
 /// [`abort_trap_active`] is true).
 pub(crate) fn abort_current_trap(report: String) -> ! {
     let yielder = current_yielder("abort_current_trap");
-    // SAFETY: `yielder` points at the live `Yielder` for this fiber (see `sleep`).
-    unsafe { (*yielder).suspend(Park::AbortTrapped(report)) };
-    unreachable!("run_fault_guarded force-resets this coroutine on the abort marker")
+    suspend_final(yielder, Park::AbortTrapped(report))
 }
 
 /// Park the current fiber until `duration` elapses, yielding to the scheduler. Must
@@ -604,13 +656,7 @@ pub fn run<F: FnOnce() + 'static>(main: F) {
                 .pop_front()
                 .map(|id| (id, scheduler.fibers[id].take().unwrap()))
         }) {
-            let result = resume_fiber(
-                id,
-                fiber.stack_high,
-                fiber.guard_low,
-                fiber.guard_high,
-                &mut fiber.coroutine,
-            );
+            let result = resume_fiber(id, fiber.guard_low, fiber.guard_high, &mut fiber.coroutine);
 
             match result {
                 CoroutineResult::Yield(Park::Sleep(deadline)) => with_scheduler(|scheduler| {
