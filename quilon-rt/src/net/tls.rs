@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only WITH Classpath-exception-2.0
 
-//! `net.@tcpRequest`'s `Tls` transport.
+//! `net.@tcpRequest`'s `TLS` transport.
 //!
 //! The connect and the handshake's record I/O run on the reactor, exactly like the plain
 //! path; only `process_new_packets()` — the CPU-bound step (signature verification, key
@@ -14,7 +14,7 @@ use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, Server
 use rustls::crypto::{CryptoProvider, verify_tls12_signature, verify_tls13_signature};
 use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
 use rustls::{
-    CertificateError, ClientConfig, ClientConnection, DigitallySignedStruct, Error as TlsError,
+    CertificateError, ClientConfig, ClientConnection, DigitallySignedStruct, Error as TLSError,
     RootCertStore, SignatureScheme,
 };
 use std::io;
@@ -79,7 +79,7 @@ fn handshake(
     Ok(conn)
 }
 
-fn tls_io_error(error: TlsError) -> io::Error {
+fn tls_io_error(error: TLSError) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, error)
 }
 
@@ -98,7 +98,7 @@ fn host_of(address: &str) -> io::Result<String> {
 }
 
 fn handshake_error_text(address: &str, reason: &str) -> String {
-    format!("tls handshake with {address} failed: {reason}")
+    format!("TLS handshake with {address} failed: {reason}")
 }
 
 /// Curate a handshake `io::Error` into the plain-English reason for the common certificate
@@ -110,27 +110,27 @@ fn curated_message(error: &io::Error, host: &str) -> String {
     }
 }
 
-fn downcast_tls_error(error: &io::Error) -> Option<&TlsError> {
+fn downcast_tls_error(error: &io::Error) -> Option<&TLSError> {
     error
         .get_ref()
-        .and_then(|inner| inner.downcast_ref::<TlsError>())
+        .and_then(|inner| inner.downcast_ref::<TLSError>())
 }
 
-fn curated_tls_message(error: &TlsError, host: &str) -> String {
+fn curated_tls_message(error: &TLSError, host: &str) -> String {
     match error {
-        TlsError::InvalidCertificate(CertificateError::UnknownIssuer) => {
+        TLSError::InvalidCertificate(CertificateError::UnknownIssuer) => {
             "the certificate is not trusted (issued by an unknown authority)".to_string()
         }
-        TlsError::InvalidCertificate(CertificateError::Expired) => {
+        TLSError::InvalidCertificate(CertificateError::Expired) => {
             "the certificate has expired".to_string()
         }
-        TlsError::InvalidCertificate(CertificateError::ExpiredContext { not_after, .. }) => {
+        TLSError::InvalidCertificate(CertificateError::ExpiredContext { not_after, .. }) => {
             format!("the certificate expired on {}", format_date(*not_after))
         }
-        TlsError::InvalidCertificate(CertificateError::NotValidForName) => {
+        TLSError::InvalidCertificate(CertificateError::NotValidForName) => {
             format!("the certificate is not valid for {host}")
         }
-        TlsError::InvalidCertificate(CertificateError::NotValidForNameContext {
+        TLSError::InvalidCertificate(CertificateError::NotValidForNameContext {
             presented,
             ..
         }) => {
@@ -232,7 +232,7 @@ impl ServerCertVerifier for AcceptAnyCertificate {
         _server_name: &ServerName<'_>,
         _ocsp_response: &[u8],
         _now: UnixTime,
-    ) -> Result<ServerCertVerified, TlsError> {
+    ) -> Result<ServerCertVerified, TLSError> {
         Ok(ServerCertVerified::assertion())
     }
 
@@ -241,7 +241,7 @@ impl ServerCertVerifier for AcceptAnyCertificate {
         message: &[u8],
         cert: &CertificateDer<'_>,
         dss: &DigitallySignedStruct,
-    ) -> Result<HandshakeSignatureValid, TlsError> {
+    ) -> Result<HandshakeSignatureValid, TLSError> {
         verify_tls12_signature(
             message,
             cert,
@@ -255,7 +255,7 @@ impl ServerCertVerifier for AcceptAnyCertificate {
         message: &[u8],
         cert: &CertificateDer<'_>,
         dss: &DigitallySignedStruct,
-    ) -> Result<HandshakeSignatureValid, TlsError> {
+    ) -> Result<HandshakeSignatureValid, TLSError> {
         verify_tls13_signature(
             message,
             cert,

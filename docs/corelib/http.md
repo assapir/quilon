@@ -160,7 +160,7 @@ that is never sent, so `send()` skips the framing check for it.
 ## TLS
 
 `send()` picks the transport from `options.transport` and the URL's scheme: `Plain` (the
-default) connects over TLS for an `https://` URL and plainly otherwise; `Tls` connects over
+default) connects over TLS for an `https://` URL and plainly otherwise; `TLS` connects over
 TLS regardless of scheme, even for `http://` or a scheme-less URL. The default port follows
 the transport it picked — 443 over TLS, 80 plain — unless the URL names one explicitly.
 `options.certificates` (`net.Checked`, the default, or `net.Unchecked`) carries straight

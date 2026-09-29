@@ -140,7 +140,7 @@ Values = {
 }
 
 ~ Per-request settings beyond method and URL: headers, and `transport`/`certificates`,
-~ which `send()` copies into a `net.ConnectOptions` (see `usesTls()`).
+~ which `send()` copies into a `net.ConnectOptions` (see `usesTLS()`).
 >> RequestOptions = {
   headers :: Headers,
   transport :: net.Transport,
@@ -313,7 +313,7 @@ firstLine = (text :: Text) -> Text => < text.slice(0, foundOrEnd(text, "\n")) >
 ~ Whether `head`'s request line names HTTP/1.0 — keep-alive is not that version's own
 ~ default, so `serveConnection`'s loop ends after one response rather than reading a
 ~ second request an HTTP/1.0 peer has no reason to expect it to look for.
-isHttp10Request = (head :: Text) -> Bool => < firstLine(head).contains("HTTP/1.0") >
+isHTTP10Request = (head :: Text) -> Bool => < firstLine(head).contains("HTTP/1.0") >
 
 ~ Everything in `text` after its first line, or `""` when `text` carries no second line at
 ~ all. Shared by `Response.headers()` and `Request.parse` — a status line and a request
@@ -768,11 +768,11 @@ statusReply = (status :: Status, body :: Text, headers :: Headers) -> Text => <
       | NotOk(_) => it.url
   >
 
-  ~ Whether `send()` connects over TLS: `Tls` forces it for any URL; `Plain` (the default)
+  ~ Whether `send()` connects over TLS: `TLS` forces it for any URL; `Plain` (the default)
   ~ follows the scheme.
-  usesTls = () -> Bool => <
+  usesTLS = () -> Bool => <
     it.options.transport ?
-      | net.Tls   => true
+      | net.TLS   => true
       | net.Plain => it.scheme() == "https"
   >
 
@@ -843,14 +843,14 @@ statusReply = (status :: Status, body :: Text, headers :: Headers) -> Text => <
   ~ line validates, and the body's framing (chunked or Content-Length) must be well-formed —
   ~ a HEAD reply's Content-Length, which describes a body that is never sent, is exempt. A
   ~ transport failure, an invalid status line, or malformed framing all arrive as the
-  ~ `NotOk(errorText)` reason, never as a crash. The default port follows `usesTls()` (443/80)
+  ~ `NotOk(errorText)` reason, never as a crash. The default port follows `usesTLS()` (443/80)
   ~ unless the URL names one.
   send = () -> Result => <
-    tls = it.usesTls()
+    tls = it.usesTLS()
     host = it.authority()
     address = host.contains(":") ? host : host + (tls ? ":443" : ":80")
     connectOptions = net.ConnectOptions {
-      transport = tls ? net.Tls : net.Plain,
+      transport = tls ? net.TLS : net.Plain,
       certificates = it.options.certificates
     }
     net.@tcpRequest(address, it.wire(), connectOptions) ?
@@ -1070,7 +1070,7 @@ serveRequests = (
     | Ok(accumulated) =>
         (Request.parse(accumulated.slice(0, blankLineIndex(accumulated)), "") ?
           | NotOk(_)    => connection.@write(closeWire(BadRequest))
-          | Ok(request) => handleParsedRequest(accumulated, isHttp10Request(accumulated), request))
+          | Ok(request) => handleParsedRequest(accumulated, isHTTP10Request(accumulated), request))
 >
 
 serveConnection = (
@@ -1625,24 +1625,24 @@ test.describe("picking the transport", () => <
     expect(Request.get("example.com/").scheme(), equals("")))
 
   test.it("an https:// URL uses TLS under the default Plain transport", () =>
-    expect(Request.get("https://example.com/").usesTls(), equals(true)))
+    expect(Request.get("https://example.com/").usesTLS(), equals(true)))
 
   test.it("an http:// URL stays plain under the default Plain transport", () =>
-    expect(Request.get("http://example.com/").usesTls(), equals(false)))
+    expect(Request.get("http://example.com/").usesTLS(), equals(false)))
 
   test.it("a scheme-less URL stays plain under the default Plain transport", () =>
-    expect(Request.get("example.com/").usesTls(), equals(false)))
+    expect(Request.get("example.com/").usesTLS(), equals(false)))
 
-  test.it("transport = Tls forces TLS even for an http:// URL", () => <
+  test.it("transport = TLS forces TLS even for an http:// URL", () => <
     options := RequestOptions.default()
-    options.transport := net.Tls
-    expect(Request.get("http://example.com/", options).usesTls(), equals(true))
+    options.transport := net.TLS
+    expect(Request.get("http://example.com/", options).usesTLS(), equals(true))
   >)
 
-  test.it("transport = Tls forces TLS even for a scheme-less URL", () => <
+  test.it("transport = TLS forces TLS even for a scheme-less URL", () => <
     options := RequestOptions.default()
-    options.transport := net.Tls
-    expect(Request.get("example.com/", options).usesTls(), equals(true))
+    options.transport := net.TLS
+    expect(Request.get("example.com/", options).usesTLS(), equals(true))
   >)
 >)
 
@@ -1922,12 +1922,12 @@ test.describe("blankLineEnd", () => <
   >)
 >)
 
-test.describe("isHttp10Request", () => <
+test.describe("isHTTP10Request", () => <
   test.it("recognizes an HTTP/1.0 request line", () =>
-    expect(isHttp10Request("GET / HTTP/1.0\r\nHost: x\r\n\r\n"), equals(true)))
+    expect(isHTTP10Request("GET / HTTP/1.0\r\nHost: x\r\n\r\n"), equals(true)))
 
   test.it("does not mistake an HTTP/1.1 request line for HTTP/1.0", () =>
-    expect(isHttp10Request("GET / HTTP/1.1\r\nHost: x\r\n\r\n"), equals(false)))
+    expect(isHTTP10Request("GET / HTTP/1.1\r\nHost: x\r\n\r\n"), equals(false)))
 >)
 
 test.describe("leftoverAfterHead", () => <

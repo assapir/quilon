@@ -15,7 +15,7 @@ Import with `<< core.net`. See the [corelib index](README.md).
 |----------|--------|
 | `net.@tcpRequest(address :: Text, requestBytes :: Text) -> Result` | One-shot request exchange: connect to `address` (`host:port`), write `requestBytes`, read the response until the peer closes (close-delimited). Yields `Ok(responseBytes)` with the whole response as a `Text` on success, or `NotOk(errorMessage)` on ANY network failure (DNS resolution, connect, write, or read) — a failure is a value to match. A value-returning [leaf IO primitive](../concurrency/README.md): the call launches the exchange and hands back a **deferred** `Result`, forced when a strict operation first reads it. |
 | `net.@tcpRequest(address :: Address, requestBytes :: Text) -> Result` | As above, given the `Address` a `server.address()` reported. |
-| `net.@tcpRequest(address :: Text, requestBytes :: Text, options :: ConnectOptions) -> Result` | As the two-argument form, with `options.transport = Tls` running the exchange over TLS first (`options.certificates` deciding whether the peer's certificate is checked) before writing `requestBytes`. `options.transport = Plain` is identical to the two-argument form. |
+| `net.@tcpRequest(address :: Text, requestBytes :: Text, options :: ConnectOptions) -> Result` | As the two-argument form, with `options.transport = TLS` running the exchange over TLS first (`options.certificates` deciding whether the peer's certificate is checked) before writing `requestBytes`. `options.transport = Plain` is identical to the two-argument form. |
 | `net.@tcpRequest(address :: Address, requestBytes :: Text, options :: ConnectOptions) -> Result` | As above, given an `Address`. |
 
 The response is capped at **16 MiB**; a larger one yields `NotOk`.
@@ -27,15 +27,15 @@ sizing.
 
 ## TLS
 
-`ConnectOptions`, the `Tls`-overload settings:
+`ConnectOptions`, the `TLS`-overload settings:
 
 | Member | Effect |
 |--------|--------|
-| `options.transport :: Transport` | `Plain` or `Tls`. |
+| `options.transport :: Transport` | `Plain` or `TLS`. |
 | `options.certificates :: Certificates` | `Checked` or `Unchecked`. |
 | `ConnectOptions.default() -> ConnectOptions` | `{ transport = Plain, certificates = Checked }`. |
 
-`Transport = Plain / Tls`. Over `Tls`, the handshake's server name (for SNI, and for the
+`Transport = Plain / TLS`. Over `TLS`, the handshake's server name (for SNI, and for the
 certificate's name check) is `address`'s host: an IP-literal host uses rustls's IP form of
 the server name; a hostname uses its DNS form.
 
@@ -49,9 +49,9 @@ A handshake or certificate failure yields `NotOk`, naming the address and a reas
 plain English for the common cases, rustls's own text otherwise:
 
 ```
-NotOk("tls handshake with api.example.com:443 failed: the certificate is not trusted (issued by an unknown authority)")
-NotOk("tls handshake with api.example.com:443 failed: the certificate expired on 2026-01-04")
-NotOk("tls handshake with api.example.com:443 failed: the certificate is for *.example.org, not api.example.com")
+NotOk("TLS handshake with api.example.com:443 failed: the certificate is not trusted (issued by an unknown authority)")
+NotOk("TLS handshake with api.example.com:443 failed: the certificate expired on 2026-01-04")
+NotOk("TLS handshake with api.example.com:443 failed: the certificate is for *.example.org, not api.example.com")
 ```
 
 ```quilon
@@ -61,7 +61,7 @@ NotOk("tls handshake with api.example.com:443 failed: the certificate is for *.e
 ^ = () -> $ => <
   net.@tcpRequest(
     "example.com:443", "GET / HTTP/1.0\r\n\r\n",
-    net.ConnectOptions { transport = net.Tls, certificates = net.Checked }
+    net.ConnectOptions { transport = net.TLS, certificates = net.Checked }
   ) ?
     | Ok(response)  => assert(response.size > 0, equals(true))
     | NotOk(error)  => test.failAt(error)

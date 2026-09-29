@@ -83,7 +83,7 @@ linkedGreeting = "linked " + "again"
   ~ The `ConnectOptions` overload lowers to the same `__tcp_request_launch`, but exercises
   ~ the options-flag codegen; same guard.
   reachedSecure = args.size > 1000000
-    ? net.@tcpRequest("127.0.0.1:1", "", net.ConnectOptions { transport = net.Tls, certificates = net.Unchecked })
+    ? net.@tcpRequest("127.0.0.1:1", "", net.ConnectOptions { transport = net.TLS, certificates = net.Unchecked })
       ? | Ok(_) => true | NotOk(_) => true
     : true
   assert(reachedSecure, equals(true))

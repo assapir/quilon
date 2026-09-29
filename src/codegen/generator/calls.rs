@@ -620,7 +620,7 @@ impl<'ctx> CodeGenerator<'ctx> {
 
     /// Whether `options.<field>` — a two-variant, no-payload sum — IS `variant`, as the `i64`
     /// flag `__tcp_request_launch` takes instead of the sum itself. `variant` is the sum's
-    /// fully-qualified name (e.g. `core.net.Tls`): `core.net`'s own canonical name, not the
+    /// fully-qualified name (e.g. `core.net.TLS`): `core.net`'s own canonical name, not the
     /// `net` alias an importer binds it to.
     fn tcp_request_option_flag(
         &mut self,
@@ -679,7 +679,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                 // where it is forced. Nothing here dereferences it.
                 Self::call_result_to_basic(call)
             }
-            // `net.@tcpRequest(address, requestBytes)` or, the `Tls` transport overload,
+            // `net.@tcpRequest(address, requestBytes)` or, the `TLS` transport overload,
             // `net.@tcpRequest(address, requestBytes, options :: net.ConnectOptions)` — both
             // arities, and both the `Text` and `Address` forms of `address`
             // ([`Self::address_text_fields`]), are compiler-lowered here, onto one intrinsic.
@@ -699,7 +699,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                 let (tls_flag, unchecked_flag) = match arguments.get(2) {
                     None => (zero, zero),
                     Some(options) => (
-                        self.tcp_request_option_flag(options, "transport", "core.net.Tls")?,
+                        self.tcp_request_option_flag(options, "transport", "core.net.TLS")?,
                         self.tcp_request_option_flag(
                             options,
                             "certificates",

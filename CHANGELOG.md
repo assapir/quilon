@@ -8,10 +8,10 @@ All notable changes to Quilon are documented here.
 
 - **A TLS client, over `net.@tcpRequest` and `core.http`.** `net.ConnectOptions { transport
   :: Transport, certificates :: Certificates }` and the `net.@tcpRequest(address,
-  requestBytes, options)` overload — `Transport = Plain / Tls`, `Certificates = Checked /
+  requestBytes, options)` overload — `Transport = Plain / TLS`, `Certificates = Checked /
   Unchecked`. `core.http`'s `RequestOptions` gains `transport`/`certificates` fields
   (default `Plain`/`Checked`): an `https://` URL connects over TLS (default port 443);
-  `http://` and a scheme-less URL stay plain (default port 80); `transport = Tls` forces
+  `http://` and a scheme-less URL stay plain (default port 80); `transport = TLS` forces
   TLS for any URL, scheme included. Built on `rustls` 0.23 with the `ring` crypto provider,
   trusting the OS certificate store (`rustls-native-certs`, which honours
   `SSL_CERT_FILE`/`SSL_CERT_DIR`) or, absent one, the compiled-in Mozilla list

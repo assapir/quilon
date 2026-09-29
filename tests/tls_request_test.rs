@@ -1,5 +1,5 @@
-//! End-to-end proof of `net.@tcpRequest`'s `Tls` transport overload and `core.http`'s
-//! `https://`/forced-`Tls` sending, against a REAL TLS peer — a `rustls::ServerConnection`
+//! End-to-end proof of `net.@tcpRequest`'s `TLS` transport overload and `core.http`'s
+//! `https://`/forced-`TLS` sending, against a REAL TLS peer — a `rustls::ServerConnection`
 //! on a background thread, serving the committed fixture certificates under
 //! `tests/fixtures/tls/` (a test CA, a `localhost` leaf, an expired leaf, and a
 //! wrong-host leaf; see that directory's own certs for how they were made).
@@ -117,7 +117,7 @@ fn tls_program(port: u16, certificates: &str, expected: &str) -> String {
 ^ = () -> Num => <
   net.@tcpRequest(
     "localhost:{port}", "PING\n",
-    net.ConnectOptions {{ transport = net.Tls, certificates = {certificates} }}
+    net.ConnectOptions {{ transport = net.TLS, certificates = {certificates} }}
   ) ?
     | Ok(response) => assert(response, equals("{expected}"))
     | NotOk(error) => test.failAt(error)
@@ -138,7 +138,7 @@ fn tls_failure_program(port: u16, certificates: &str, expected_reason: &str) -> 
 ^ = () -> Num => <
   net.@tcpRequest(
     "localhost:{port}", "PING\n",
-    net.ConnectOptions {{ transport = net.Tls, certificates = {certificates} }}
+    net.ConnectOptions {{ transport = net.TLS, certificates = {certificates} }}
   ) ?
     | Ok(_)        => test.failAt("expected a TLS failure")
     | NotOk(error) => assert(error, contains("{expected_reason}"))
@@ -165,7 +165,7 @@ fn https_program(url: &str, expected_body: &str) -> String {
     )
 }
 
-/// Like [`https_program`], but with `RequestOptions.transport = Tls` forcing TLS on a
+/// Like [`https_program`], but with `RequestOptions.transport = TLS` forcing TLS on a
 /// URL that names no scheme at all.
 fn forced_tls_program(scheme_less_url: &str, expected_body: &str) -> String {
     format!(
@@ -176,7 +176,7 @@ fn forced_tls_program(scheme_less_url: &str, expected_body: &str) -> String {
 
 ^ = () -> Num => <
   options = http.RequestOptions {{
-    headers = http.Headers.empty(), transport = net.Tls, certificates = net.Checked
+    headers = http.Headers.empty(), transport = net.TLS, certificates = net.Checked
   }}
   http.Request.get("{scheme_less_url}", options).send() ?
     | Ok(response) => assert(response.body(), equals("{expected_body}"))
@@ -295,7 +295,7 @@ fn forced_tls_transport_sends_a_scheme_less_url_over_tls() {
     assert_eq!(
         jit_run(file.path(), true),
         Some(0),
-        "RequestOptions.transport = Tls should force TLS even for a scheme-less URL"
+        "RequestOptions.transport = TLS should force TLS even for a scheme-less URL"
     );
     server.join().expect("server thread");
 }

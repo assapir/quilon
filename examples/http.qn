@@ -1,5 +1,5 @@
 ~ A live walkthrough of the `core.http` client: a GET matched to a Response, a transport
-~ failure, an https:// request and a forced-Tls scheme-less one, request options, headers,
+~ failure, an https:// request and a forced-TLS scheme-less one, request options, headers,
 ~ params, every request constructor (both overloads), and Method's own methods. On success
 ~ the program exits 0.
 ~ NOTE: this makes LIVE network calls to example.com:80 and :443 when run.
@@ -29,10 +29,10 @@
     | NotOk(_) => http.Response { raw = "" }
   assert(secureResponse.status().code(), equals(200))
 
-  ~ RequestOptions.transport = Tls forces TLS for a URL that names no scheme at all —
+  ~ RequestOptions.transport = TLS forces TLS for a URL that names no scheme at all —
   ~ the same reply as the https:// request above.
   tlsOptions := http.RequestOptions.default()
-  tlsOptions.transport := net.Tls
+  tlsOptions.transport := net.TLS
   assert(http.Request.get("example.com/", tlsOptions).send(), isOk())
 
   ~ Build options with headers added one at a time, then a whole map at once.
