@@ -1235,14 +1235,12 @@ pub struct SumVariant {
     pub fields: Vec<Type>,
 }
 
-/// A short, user-facing label for a type (`Num`, `Text`, `[]Text`, a user type's name,
-/// or `{ name :: Type, ... }` for an anonymous record). Shared by every place a type
-/// reaches diagnostic or hover text — the type checker's errors and overload
-/// diagnostics, codegen's entry-point signature diagnostic, and the language server —
-/// so all of them render a type in Quilon syntax rather than its Rust `Debug` form. A
-/// not-yet-concrete `Generic` (an unresolved sum payload such as the `T` in `Ok(T)`)
-/// renders as `<unknown>`. The match is exhaustive on purpose: a new `Type` variant
-/// must pick a rendering here rather than falling back to `Debug`.
+/// A short, user-facing label for a type (`Num`, `Text`, `[]Text`, a user type's name).
+/// Shared by the type checker's overload diagnostics and codegen's entry-point
+/// signature diagnostic, so both render types the same way. A not-yet-concrete
+/// `Generic` (an unresolved sum payload such as the `T` in `Ok(T)`) renders as
+/// `<unknown>`. The match is exhaustive so a new `Type` variant must pick a rendering
+/// here rather than falling back to `Debug`.
 pub fn type_label(ty: &Type) -> String {
     match ty {
         Type::Num => NUM_TYPE_NAME.to_string(),
