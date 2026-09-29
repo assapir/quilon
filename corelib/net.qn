@@ -2,14 +2,12 @@
 ~ the `net` binding, `net.@tcpRequest(address, requestBytes)`. The HTTP client sits on this,
 ~ and user code may use the raw request-exchange primitive directly.
 
-~ The connection's transport: `Plain` TCP, or `Tls` — a handshake against the OS trust
-~ store (or `SSL_CERT_FILE`/`SSL_CERT_DIR`; see docs/corelib/net.md) before any bytes of
-~ `requestBytes` cross the wire.
+~ `@tcpRequest`'s transport: `Plain` TCP, or `Tls` (a handshake against the OS trust store,
+~ or `SSL_CERT_FILE`/`SSL_CERT_DIR` — see docs/corelib/net.md).
 >> Transport = Plain / Tls
 
-~ Whether `@tcpRequest`'s `Tls` transport checks the peer's certificate. `Checked` (the
-~ default) verifies the chain and that the certificate is valid for the address's host;
-~ `Unchecked` accepts any certificate, trusted or not.
+~ Whether `Tls` checks the peer's certificate: `Checked` (the default), or `Unchecked` —
+~ any certificate, trusted or not.
 >> Certificates = Checked / Unchecked
 
 ~ `@tcpRequest`'s `Tls`-overload settings.
@@ -41,11 +39,9 @@
   address == "" ? Ok("") : NotOk("")
 >
 
-~ `@tcpRequest`, given a `ConnectOptions` — `options.transport = Tls` runs the exchange over
-~ TLS first, with `options.certificates` deciding whether the peer's certificate is checked.
-~ A `Tls` failure (handshake or certificate) yields `NotOk` naming the address and a
-~ plain-English reason for the common cases — see docs/corelib/net.md. Same deferral and
-~ compiler lowering as the two-argument form.
+~ `@tcpRequest`, given a `ConnectOptions`. A `Tls` failure (handshake or certificate)
+~ yields `NotOk` naming the address and a plain-English reason for the common cases —
+~ see docs/corelib/net.md.
 >> @tcpRequest = (address :: Text, requestBytes :: Text, options :: ConnectOptions) -> Result => <
   address == "" ? Ok("") : NotOk("")
 >

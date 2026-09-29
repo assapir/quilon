@@ -139,10 +139,8 @@ Values = {
   >
 }
 
-~ Per-request settings beyond method and URL: headers, and the two fields `send()` copies
-~ into a `net.ConnectOptions` — `transport` (`Plain`, the default, lets the URL's scheme
-~ decide; `Tls` forces TLS even for an `http://` URL) and `certificates` (`Checked`, the
-~ default, or `Unchecked`).
+~ Per-request settings beyond method and URL: headers, and `transport`/`certificates`,
+~ which `send()` copies into a `net.ConnectOptions` (see `usesTls()`).
 >> RequestOptions = {
   headers :: Headers,
   transport :: net.Transport,
@@ -770,9 +768,8 @@ statusReply = (status :: Status, body :: Text, headers :: Headers) -> Text => <
       | NotOk(_) => it.url
   >
 
-  ~ Whether `send()` connects over TLS: `options.transport = Tls` forces it for any URL,
-  ~ even `http://`; `Plain` (the default) lets the URL's own scheme decide —
-  ~ `https://` is TLS, `http://` and a scheme-less URL are plain.
+  ~ Whether `send()` connects over TLS: `Tls` forces it for any URL; `Plain` (the default)
+  ~ follows the scheme.
   usesTls = () -> Bool => <
     it.options.transport ?
       | net.Tls   => true
@@ -845,10 +842,9 @@ statusReply = (status :: Status, body :: Text, headers :: Headers) -> Text => <
   ~ Perform the request over core.net and read the reply into `Ok(Response)`: the status
   ~ line validates, and the body's framing (chunked or Content-Length) must be well-formed —
   ~ a HEAD reply's Content-Length, which describes a body that is never sent, is exempt. A
-  ~ transport failure (including a TLS handshake or certificate failure), an invalid status
-  ~ line, or malformed framing all arrive as the `NotOk(errorText)` reason, never as a
-  ~ crash. `usesTls()` decides the transport and the default port (443 over TLS, 80 plain);
-  ~ an explicit port in the URL is always kept as written.
+  ~ transport failure, an invalid status line, or malformed framing all arrive as the
+  ~ `NotOk(errorText)` reason, never as a crash. The default port follows `usesTls()` (443/80)
+  ~ unless the URL names one.
   send = () -> Result => <
     tls = it.usesTls()
     host = it.authority()
