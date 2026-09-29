@@ -34,6 +34,12 @@ impl<'a> Parser<'a> {
             return Ok(crate::ast::Type::Unit);
         }
 
+        // `{ … }` — an anonymous record type: named (`{ count :: Num, label :: Text }`)
+        // or positional (`{ Num, Num }`, read back with `.0`, `.1`, …).
+        if token.kind == TokenKind::BraceOpen {
+            return self.parse_anonymous_record_type();
+        }
+
         // A pipe fence `[| … |]` (a `[` immediately followed by `|`) opens a Map or Set
         // type: `[|K => V|]` is `Map(K, V)`, `[|T|]` is `Set(T)`. Checked BEFORE the plain
         // `[]T` array type, which also begins with `[`.
@@ -156,5 +162,80 @@ impl<'a> Parser<'a> {
     pub(super) fn expect_fence_close(&mut self) -> Result<(), ParseError> {
         self.expect(&TokenKind::Pipe)?;
         self.expect(&TokenKind::BracketClose)
+    }
+
+    /// Parse an anonymous record type, cursor at the opening `{`: named
+    /// (`{ count :: Num, label :: Text }`) or positional (`{ Num, Num }`). A field reads
+    /// as named when it starts with a name immediately followed by `::` — never by the
+    /// record's own capitalization, which this grammar has no notion of — anything else
+    /// is a bare type, a positional element. Mixing the two is `Code::MixedRecordFields`,
+    /// the same rule (and code) a record LITERAL enforces (`parse_record_literal_fields`).
+    fn parse_anonymous_record_type(&mut self) -> Result<crate::ast::Type, ParseError> {
+        let start = self.current_span();
+        self.expect(&TokenKind::BraceOpen)?;
+
+        enum Entry {
+            Named(String, crate::ast::Type),
+            Positional(crate::ast::Type),
+        }
+
+        let entries = self.parse_comma_separated(&TokenKind::BraceClose, |parser| {
+            if parser.check(&TokenKind::Ident)
+                && parser.peek_ahead(1).kind == TokenKind::TypeAnnotation
+            {
+                let name = parser.expect_definition_name()?;
+                parser.expect(&TokenKind::TypeAnnotation)?;
+                Ok(Entry::Named(name, parser.parse_type()?))
+            } else {
+                Ok(Entry::Positional(parser.parse_type()?))
+            }
+        })?;
+        self.expect(&TokenKind::BraceClose)?;
+        let span = self.span(start.start, self.previous_span().end);
+
+        if entries.is_empty() {
+            return Err(ParseError::new(
+                Code::UnexpectedToken,
+                span,
+                "a record type names at least one field".to_string(),
+            ));
+        }
+
+        let positional_count = entries
+            .iter()
+            .filter(|entry| matches!(entry, Entry::Positional(_)))
+            .count();
+        if positional_count > 0 && positional_count < entries.len() {
+            return Err(ParseError::new(
+                Code::MixedRecordFields,
+                span,
+                "a record type is all named fields or all positional — not both".to_string(),
+            )
+            .help(
+                "write every field as `name :: Type`, or drop the names for a positional \
+                 type: `{ T1, T2 }`",
+            ));
+        }
+
+        let fields = if positional_count > 0 {
+            entries
+                .into_iter()
+                .enumerate()
+                .map(|(index, entry)| match entry {
+                    Entry::Positional(ty) => (crate::ast::positional_field_name(index), ty),
+                    Entry::Named(..) => unreachable!("checked above: no named entries"),
+                })
+                .collect()
+        } else {
+            entries
+                .into_iter()
+                .map(|entry| match entry {
+                    Entry::Named(name, ty) => (name, ty),
+                    Entry::Positional(..) => unreachable!("checked above: no positional entries"),
+                })
+                .collect()
+        };
+
+        Ok(crate::ast::Type::Record(fields))
     }
 }

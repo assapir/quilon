@@ -6,6 +6,22 @@ All notable changes to Quilon are documented here.
 
 ### Added
 
+- **Anonymous record types in annotations, and positional records.** A record type may
+  now be written directly wherever a type is written — a parameter, a return type, a
+  binding, a named record's own field type, an array/map element type — with no name
+  declared first: `{ name :: Text, age :: Num }`. Two anonymous types with the same
+  fields are the same type; a NAMED record type still never converts to or from an
+  anonymous one implicitly, in either direction (`User {<-anon}` remains the explicit
+  conversion one way, rebuilding field by field the other). A record's fields may also
+  be POSITIONAL — `{ Num, Num }` as a type, `{ 6, 7 }` as a value, read back with `.0`,
+  `.1`, … (a one-field `{ Num }` is allowed too); mixing named and positional fields in
+  one type or literal is `QN118`. `.0` on a named record is `QN359`, and a position past
+  a record's last field is `QN360`. `p.0.1` is two field accesses on a nested positional
+  record — the lexer reads `.0.1` as `.` then the single number token `0.1` regardless
+  of what precedes it, so the parser splits that token back into `.0` then `.1`, never
+  the number `0.1`. See `docs/types/records.md#anonymous-record-types-in-annotations`
+  and `#positional-records`, and `examples/records.qn`. Step 1 of #490.
+
 - **The signal trap (`!>`) — a top-level item, one per program, in the file that defines
   `^`, matching signals via a new `core.process` module.** `!>` followed by one or more
   `| Pattern => expression` arms over `process.Signal` — `Hangup` / `Interrupt` / `Quit` /

@@ -12,9 +12,9 @@ use std::process::Command;
 
 mod common;
 use common::{
-    JIT_LOCK, assert_exit, assert_exit_linked, assert_exit_linked_from, assert_type_error,
-    assert_type_error_code, build_and_run_native, build_and_run_native_with_stderr,
-    ensure_runtime_lib, run_program, tool_available,
+    JIT_LOCK, assert_exit, assert_exit_linked, assert_exit_linked_from, assert_parse_error,
+    assert_type_error, assert_type_error_code, build_and_run_native,
+    build_and_run_native_with_stderr, ensure_runtime_lib, run_program, tool_available,
 };
 
 #[test]
@@ -175,6 +175,133 @@ fn run_record_size_field_not_shadowed() {
         "^ = () -> Num => <\n  r = { size = 7, other = 9 }\n  r.size\n>",
         7,
     );
+}
+
+// --- Positional records: `{ Num, Num }` types, `{ 6, 7 }` literals, `.0`/`.1` access ---
+
+#[test]
+fn run_positional_record_literal_and_field_access() {
+    assert_exit(
+        "^ = () -> Num => <\n  pair = { 6, 7 }\n  pair.0 + pair.1\n>",
+        13,
+    );
+}
+
+#[test]
+fn run_one_field_positional_record() {
+    assert_exit("^ = () -> Num => <\n  solo = { 42 }\n  solo.0\n>", 42);
+}
+
+#[test]
+fn run_chained_positional_field_access_p_0_1_is_two_field_accesses() {
+    // The lexer reads `.0.1` as `.`, then the single NUMBER token `0.1` — this only
+    // passes if the parser splits that token back into two field accesses on the
+    // nested positional record, rather than reading it as the number `0.1`.
+    assert_exit(
+        "^ = () -> Num => <\n  nested = { { 1, 2 }, 3 }\n  nested.0.1\n>",
+        2,
+    );
+}
+
+#[test]
+fn run_positional_record_as_parameter_and_return_type() {
+    // Also the regression coverage for `boundary_type`: an anonymous record crossing a
+    // function boundary must keep its by-pointer ABI (the same as a NAMED record),
+    // never the bare-struct layout `type_to_llvm` uses for sizing.
+    assert_exit(
+        "area = (p :: { Num, Num }) -> Num => < p.0 * p.1 >\n\
+         makePoint = (x :: Num, y :: Num) -> { Num, Num } => < { x, y } >\n\
+         ^ = () -> Num => <\n  \
+           p = makePoint(6, 7)\n  \
+           area(p)\n\
+         >",
+        42,
+    );
+}
+
+#[test]
+fn run_array_of_positional_records_element_access() {
+    assert_exit(
+        "^ = () -> Num => <\n  \
+           points :: []{ Num, Num } = [{ 1, 2 }, { 3, 4 }]\n  \
+           points[0].0 + points[1].1\n\
+         >",
+        5,
+    );
+}
+
+#[test]
+fn run_anonymous_named_record_type_annotation_accepts_its_shape() {
+    assert_exit(
+        "greet = (p :: { name :: Text, age :: Num }) -> Num => < p.age >\n\
+         ^ = () -> Num => < greet({ name = \"Wu\", age = 41 }) >",
+        41,
+    );
+}
+
+#[test]
+fn run_named_type_rebuilt_field_by_field_still_passes_to_an_anonymous_parameter() {
+    assert_exit(
+        "User = { name :: Text, age :: Num }\n\
+         greet = (p :: { name :: Text, age :: Num }) -> Num => < p.age >\n\
+         ^ = () -> Num => <\n  \
+           u = User { name = \"Wu\", age = 41 }\n  \
+           greet({ name = u.name, age = u.age })\n\
+         >",
+        41,
+    );
+}
+
+#[test]
+fn run_positional_record_field_write_mutates_in_place() {
+    assert_exit(
+        "^ = () -> Num => <\n  \
+           p := { 1, 2 }\n  \
+           p.0 := 9\n  \
+           p.0 + p.1\n\
+         >",
+        11,
+    );
+}
+
+#[test]
+fn run_named_record_type_does_not_implicitly_convert_to_an_anonymous_parameter() {
+    assert_type_error_code(
+        "User = { name :: Text, age :: Num }\n\
+         greet = (p :: { name :: Text, age :: Num }) -> Num => < p.age >\n\
+         ^ = () -> Num => <\n  \
+           u = User { name = \"Wu\", age = 41 }\n  \
+           greet(u)\n\
+         >",
+        Code::TypeMismatch,
+    );
+}
+
+#[test]
+fn run_dot_zero_on_a_declared_named_type_is_rejected() {
+    assert_type_error_code(
+        "User = { name :: Text, age :: Num }\n\
+         ^ = () -> Num => <\n  \
+           u = User { name = \"Alice\", age = 30 }\n  \
+           u.0\n\
+         >",
+        Code::PositionalAccessOnNamedRecord,
+    );
+}
+
+#[test]
+fn run_positional_record_position_out_of_range_is_rejected() {
+    assert_type_error_code(
+        "^ = () -> Num => <\n  pair = { 6, 7 }\n  pair.2\n>",
+        Code::RecordPositionOutOfRange,
+    );
+}
+
+#[test]
+fn run_mixed_named_and_positional_record_literal_is_rejected() {
+    // Mixing is a parser-level error (syntactic) — the record's shape is settled
+    // before type checking ever runs.
+    assert_parse_error("^ = () -> Num => <\n  bad = { 1, label = \"x\" }\n  0\n>");
 }
 
 // --- IO: write / print over `<< core.io` ---

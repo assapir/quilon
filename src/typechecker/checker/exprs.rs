@@ -288,6 +288,22 @@ impl TypeChecker {
 
                 match expression_type {
                     Type::Record(fields) => {
+                        if crate::ast::is_positional_field(field) {
+                            if !crate::ast::record_fields_are_positional(&fields) {
+                                return Err(TypeError::PositionalAccessOnNamedRecord {
+                                    field: field.clone(),
+                                    span: span.clone(),
+                                });
+                            }
+                            let position: usize = field.parse().unwrap_or(usize::MAX);
+                            return fields.get(position).map(|(_, t)| t.clone()).ok_or_else(|| {
+                                TypeError::RecordPositionOutOfRange {
+                                    position: field.clone(),
+                                    size: fields.len(),
+                                    span: span.clone(),
+                                }
+                            });
+                        }
                         for (f, t) in fields {
                             if f == *field {
                                 return Ok(t);
@@ -299,6 +315,12 @@ impl TypeChecker {
                         })
                     }
                     Type::Named { .. } => {
+                        if crate::ast::is_positional_field(field) {
+                            return Err(TypeError::PositionalAccessOnNamedRecord {
+                                field: field.clone(),
+                                span: span.clone(),
+                            });
+                        }
                         // A field's own type may still be a frozen self-reference placeholder; resolve both ends.
                         let Type::Named { fields, .. } =
                             self.resolve_payload_type(&expression_type)

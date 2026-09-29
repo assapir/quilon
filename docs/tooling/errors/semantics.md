@@ -806,3 +806,34 @@ Two arms of the same trap name the same `process.Signal` variant.
 ```
 
 A trap has at most one arm per signal — remove or merge the duplicate.
+
+### QN359 — positional access on a named record
+
+`.0`/`.1`/… reads a position, which only a POSITIONAL record (`{ Num, Num }`) has. A
+named record — anonymous (`{ name :: Text }`) or a declared type (`User`) — reads its
+fields by name.
+
+```quilon ignore
+User = { name :: Text, age :: Num }
+^ = () -> Num => <
+  u = User { name = "Alice", age = 30 }
+  u.0
+>
+```
+
+Read the field by name (`u.name`), or declare the record positional if that's what was
+meant.
+
+### QN360 — record position out of range
+
+A positional record access named a position past the record's last field.
+
+```quilon ignore
+^ = () -> Num => <
+  pair = { 6, 7 }
+  pair.2
+>
+```
+
+`pair` has positions `0` and `1` — use one of those, or add another field to the
+record's type.

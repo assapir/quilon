@@ -373,6 +373,20 @@ pub enum TypeError {
         name: String,
         span: Span,
     },
+    /// `.0`/`.1`/… reached a record with no positions at all — a NAMED record (anonymous
+    /// or a declared type like `User`), whose fields are read by name. `field` is the
+    /// position that was written.
+    PositionalAccessOnNamedRecord {
+        field: String,
+        span: Span,
+    },
+    /// A positional record access whose position is past the record's last field.
+    /// `position` is what was written, `size` the record's field count.
+    RecordPositionOutOfRange {
+        position: String,
+        size: usize,
+        span: Span,
+    },
     /// A sum-type variant payload outside the accepted set.
     InvalidPayloadType {
         variant: String,

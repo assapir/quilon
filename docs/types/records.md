@@ -91,6 +91,65 @@ Request = {
 (See `examples/methods.qn`, which also exercises a value-receiver method sharing a
 field's name.)
 
+## Anonymous record types in annotations
+A record type may be written directly in an annotation — a parameter, a return type, a
+binding, a named record's own field type, or an array/map element type — without first
+declaring it a name. Written with field names, it is the same shape a record LITERAL
+builds:
+```quilon
+greet = (guest :: { name :: Text, age :: Num }) -> Text => < "Hi, " + guest.name >
+
+^ = () -> Num => <
+  greet({ name = "Wu", age = 41 })
+  0
+>
+```
+Two anonymous record types with the same fields (same names, same types, same order) are
+the same type — there is nothing further to declare for them to match. A NAMED record
+type (`User = { name :: Text, age :: Num }`) never converts to or from an anonymous one
+implicitly, in either direction — a `User` and `{ name :: Text, age :: Num }` are
+distinct types even though their fields line up:
+```quilon
+User = { name :: Text, age :: Num }
+greet = (guest :: { name :: Text, age :: Num }) -> Text => < "Hi, " + guest.name >
+
+^ = () -> Num => <
+  u = User { name = "Wu", age = 41 }
+  greet({ name = u.name, age = u.age })  ~ rebuild it field by field
+  0
+>
+```
+```quilon ignore
+greet(u)   ~ error: expected { name :: Text, age :: Num }, got User
+```
+Going the other way, an anonymous record built to a named type's exact shape converts
+explicitly with the spread constructor: `User {<-guest}` (see
+[Spread](../expressions/README.md) and the functional-update form above).
+
+## Positional records
+A record's fields may be positional instead of named — written as a bare list of types
+(`{ Num, Num }`) or values (`{ 6, 7 }`), read back by position: `.0`, `.1`, and so on. A
+record is all named or all positional; `{ Num, label :: Text }` and `{ 1, label = "x" }`
+each mix the two and are a compile error.
+```quilon
+loot = { 12, 3 }        ~ a positional record — no names, read back by position
+coins = loot.0
+gems = loot.1
+```
+A one-field positional record (`{ Num }`) is allowed, read with `.0` — useful when a
+type starts with one value and may grow a second later without renaming anything. `.0`
+on a NAMED record (anonymous or declared) is a compile error, and a position past a
+record's last field is too:
+```quilon ignore
+loot.5          ~ error: loot has 2 field(s), positions 0..1
+```
+A position is only ever digits directly after a `.` — `pair.0.1` is two field accesses
+(`.0` then `.1`) on a nested positional record, never the number `0.1`:
+```quilon
+grid = { { 1, 2 }, { 3, 4 } }
+^ = () -> Num => < grid.0.1 + grid.1.0 >   ~ 2 + 3
+```
+
 ### Static methods
 A method whose body never reads `it` is **static**: it may be called on the type name
 itself — the natural spelling for a constructor.

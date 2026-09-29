@@ -299,3 +299,18 @@ every signal at its OS default already — write at least one arm, or remove the
 
 ^ = () -> Num => < 0 >
 ```
+
+### QN118 — mixed named and positional record fields
+
+A record type or literal is all named fields or all positional — never both. A named
+field is `name :: Type` (in a type) or `name = value` (in a literal); a positional one is
+a bare type or a bare value, read back later by position (`.0`, `.1`, …).
+
+```quilon ignore
+half = (shape :: { Num, label :: Text }) -> Num => < shape.0 / 2 >
+```
+
+Write every field named (`{ size :: Num, label :: Text }`), or drop the names and write
+every field positional (`{ Num, Text }`). The same rule applies to a record literal:
+`{ 1, label = "x" }` is the same error — write `{ size = 1, label = "x" }` or
+`{ 1, "x" }`.
