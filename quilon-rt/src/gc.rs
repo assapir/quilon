@@ -109,8 +109,8 @@ use crate::stack_overflow;
 use std::cell::Cell;
 use std::os::raw::c_void;
 use std::ptr;
-use std::sync::OnceLock;
 use std::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
+use std::sync::{Mutex, OnceLock};
 
 #[repr(C)]
 struct GcStackBase {
@@ -219,10 +219,21 @@ static REGISTRY: [AtomicPtr<ThreadState>; MAX_THREADS] = {
     [NULL; MAX_THREADS]
 };
 
-/// How many slots in [`REGISTRY`] are in use (an upper bound on valid indices — a slot at
-/// or past this count is guaranteed unclaimed; one already claimed but not yet published
-/// is `null`, handled by [`push_fiber_roots`]).
+/// How many slots in [`REGISTRY`] have EVER been claimed (an upper bound on valid indices —
+/// a slot at or past this count has never been claimed at all; one already claimed but not
+/// yet published, or released back to [`FREE_SLOTS`], is `null`, handled by
+/// [`push_fiber_roots`] the same way either way: skipped).
 static NEXT_SLOT: AtomicUsize = AtomicUsize::new(0);
+
+/// Slot indices [`end_thread`] has released, available for [`my_slot`] to reuse before it
+/// grows [`NEXT_SLOT`] — a helper worker thread is genuinely one-shot (spawned and joined
+/// within a single `scheduler::run` call), so without reuse a long process that calls `run`
+/// many times (this crate's own test suite; a host embedding the JIT repeatedly) would
+/// exhaust [`MAX_THREADS`] permanently. A plain `Mutex`, not lock-free: only touched at a
+/// thread's start and end, never by [`push_fiber_roots`] itself (which reads [`REGISTRY`]
+/// directly), so a thread the collector stops while holding this lock can never block a
+/// collection.
+static FREE_SLOTS: Mutex<Vec<usize>> = Mutex::new(Vec::new());
 
 thread_local! {
     /// This thread's own registry slot, assigned once on first use.
@@ -243,22 +254,55 @@ thread_local! {
 /// reachable at all — long before any collection could possibly read it.
 static PREVIOUS_CALLBACK: OnceLock<Option<GcPushOtherRootsProc>> = OnceLock::new();
 
-/// This thread's slot index in [`REGISTRY`], claiming and initializing one on first call.
+/// This thread's slot index in [`REGISTRY`], claiming and initializing one on first call — a
+/// released slot from [`FREE_SLOTS`] if one is waiting, otherwise a fresh one from
+/// [`NEXT_SLOT`].
 fn my_slot() -> usize {
     MY_SLOT.with(|cell| {
         if let Some(slot) = cell.get() {
             return slot;
         }
-        let slot = NEXT_SLOT.fetch_add(1, Ordering::Relaxed);
-        assert!(
-            slot < MAX_THREADS,
-            "more threads registered with the GC fiber scanner than MAX_THREADS"
-        );
+        let reused = FREE_SLOTS
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .pop();
+        let slot = reused.unwrap_or_else(|| {
+            let slot = NEXT_SLOT.fetch_add(1, Ordering::Relaxed);
+            assert!(
+                slot < MAX_THREADS,
+                "more threads registered with the GC fiber scanner than MAX_THREADS"
+            );
+            slot
+        });
         let initial = Box::new(ThreadState::fresh(0));
         REGISTRY[slot].store(Box::into_raw(initial), Ordering::Release);
         cell.set(Some(slot));
         slot
     })
+}
+
+/// Release this thread's own registry slot for a later thread's [`my_slot`] to reuse. Call
+/// once this thread is done running fibers for good — a worker thread whose `run`/its own
+/// helper loop has ended, not a fiber-driving thread that stays alive to run `run` again
+/// (the leader OS thread of a repeated `scheduler::run` call, e.g. this crate's own
+/// persistent test-harness worker, keeps its slot across calls instead — nothing wrong with
+/// that, just no need to churn it). A no-op if this thread never claimed one.
+pub(crate) fn end_thread() {
+    MY_SLOT.with(|cell| {
+        let Some(slot) = cell.take() else { return };
+        let old_ptr = REGISTRY[slot].swap(ptr::null_mut(), Ordering::AcqRel);
+        if !old_ptr.is_null() {
+            // SAFETY: this thread's own most recent publish; nulling the slot first means a
+            // concurrent `push_fiber_roots` either already read the live pointer (this
+            // thread not yet stopped) or sees `null` and skips the slot (freed already) —
+            // never a stale read of memory this drops next.
+            unsafe { drop(Box::from_raw(old_ptr)) };
+        }
+        FREE_SLOTS
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .push(slot);
+    });
 }
 
 /// Read this thread's current snapshot. Only ever called by the thread that owns the

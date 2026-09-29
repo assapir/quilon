@@ -15,14 +15,20 @@
 //! blocks access to a sibling field's.
 //!
 use crate::launch_scope::LaunchScope;
-use crate::net::server::{ConnectionState, ServerState};
+use crate::net::server::ConnectionState;
+use crate::placement::Registry;
 use crate::reactor::Reactor;
 use crate::scheduler::{FiberYielder, Scheduler};
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
+use std::sync::Arc;
 
 pub(crate) struct Worker {
+    /// This worker's own index into `registry` — `0` is always the leader.
+    pub(crate) index: usize,
+    /// Every worker of this `scheduler::run` call, for cross-worker placement.
+    pub(crate) registry: Arc<Registry>,
     /// The run queue, timers, and readiness/address waiters. See `scheduler::Scheduler`.
     pub(crate) scheduler: RefCell<Scheduler>,
     /// This worker's `mio` poll wrapper.
@@ -37,19 +43,19 @@ pub(crate) struct Worker {
     pub(crate) launch_scopes: RefCell<HashMap<Option<usize>, Vec<LaunchScope>>>,
     /// The withheld report from this worker's most recent aborted `aborts()` trap.
     pub(crate) last_abort_report: RefCell<String>,
-    /// The next `Connection`/`Server` handle id this worker hands out. See `net::server`.
-    pub(crate) next_handle: Cell<u64>,
-    /// `net.@tcpServe`'s open connections, by handle id.
+    /// This worker's own open connections, by handle id — only ever touched by the worker
+    /// that accepted them (see `net::server`'s ownership-rule comment); a `Server` handle,
+    /// killable from any worker, lives in `registry.servers()` instead.
     pub(crate) connections: RefCell<HashMap<u64, Rc<ConnectionState>>>,
-    /// `net.@tcpServe`'s live servers, by handle id.
-    pub(crate) servers: RefCell<HashMap<u64, Rc<ServerState>>>,
     /// Which server's `in_flight` count each currently-running handler fiber counts against.
     pub(crate) handler_fiber_server: RefCell<HashMap<usize, usize>>,
 }
 
 impl Worker {
-    fn new(reactor: Reactor) -> Self {
+    fn new(index: usize, registry: Arc<Registry>, reactor: Reactor) -> Self {
         Worker {
+            index,
+            registry,
             scheduler: RefCell::new(Scheduler::new()),
             reactor: RefCell::new(reactor),
             current_yielder: Cell::new(std::ptr::null()),
@@ -57,11 +63,17 @@ impl Worker {
             running_fibers: RefCell::new(Vec::new()),
             launch_scopes: RefCell::new(HashMap::new()),
             last_abort_report: RefCell::new(String::new()),
-            next_handle: Cell::new(1),
             connections: RefCell::new(HashMap::new()),
-            servers: RefCell::new(HashMap::new()),
             handler_fiber_server: RefCell::new(HashMap::new()),
         }
+    }
+
+    /// Publish this worker's current run-queue length to the registry, for another
+    /// worker's shortest-queue placement decision to read. Called by `scheduler` every
+    /// time its ready queue's length changes.
+    pub(crate) fn sync_ready_len(&self) {
+        let len = self.scheduler.borrow().ready_len();
+        self.registry.set_ready_len(self.index, len);
     }
 }
 
@@ -69,14 +81,14 @@ thread_local! {
     static WORKER: RefCell<Option<Worker>> = const { RefCell::new(None) };
 }
 
-/// Install this thread's worker, built around `reactor`. Panics if one is already installed —
-/// `scheduler::run`'s own "not re-entrant" rule, now enforced here since installing the
-/// worker is what `run` calls first.
-pub(crate) fn install(reactor: Reactor) {
+/// Install this thread's worker at `index` in `registry`, built around `reactor`. Panics if
+/// one is already installed — `scheduler::run`'s own "not re-entrant" rule, now enforced
+/// here since installing the worker is what a worker thread's own startup calls first.
+pub(crate) fn install(index: usize, registry: Arc<Registry>, reactor: Reactor) {
     WORKER.with(|worker| {
         let mut slot = worker.borrow_mut();
         assert!(slot.is_none(), "run() is not re-entrant");
-        *slot = Some(Worker::new(reactor));
+        *slot = Some(Worker::new(index, registry, reactor));
     });
 }
 
