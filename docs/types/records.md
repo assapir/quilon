@@ -127,10 +127,10 @@ explicitly with the spread constructor: `User {<-guest}` (see
 [Spread](../expressions/README.md) and the functional-update form above).
 
 ## Positional records
-A record's fields may be positional instead of named — written as a bare list of types
-(`{ Num, Num }`) or values (`{ 6, 7 }`), read back by position: `.0`, `.1`, and so on. A
-record is all named or all positional; `{ Num, label :: Text }` and `{ 1, label = "x" }`
-each mix the two and are a compile error.
+A record's fields may be positional — written as a bare list of types (`{ Num, Num }`)
+or values (`{ 6, 7 }`), read back by position: `.0`, `.1`, and so on. A record is all
+named or all positional; `{ Num, label :: Text }` and `{ 1, label = "x" }` each mix the
+two and are a compile error.
 ```quilon
 loot = { 12, 3 }        ~ a positional record — no names, read back by position
 coins = loot.0
