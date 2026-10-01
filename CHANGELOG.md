@@ -376,6 +376,9 @@ All notable changes to Quilon are documented here.
   keeps reading its own value everywhere in its own arm regardless of what a nested match
   inside it binds. See `docs/expressions/pattern-matching.md` and
   `examples/nested_match.qn`. Closes #467.
+- **Diagnostics now print an anonymous record type in Quilon syntax**, `{ name :: Text,
+  age :: Num }`, instead of the compiler's internal `Record([("name", Text), ("age",
+  Num)])` debug form.
 
 ## 0.11.0 "Rackham" — 2026-09-08
 
