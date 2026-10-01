@@ -2,6 +2,22 @@
 ~ the `net` binding, `net.@tcpRequest(address, requestBytes)`. The HTTP client sits on this,
 ~ and user code may use the raw request-exchange primitive directly.
 
+~ `@tcpRequest`'s transport: `Plain` TCP, or `TLS` (a handshake against the OS trust store,
+~ or `SSL_CERT_FILE`/`SSL_CERT_DIR` — see docs/corelib/net.md).
+>> Transport = Plain / TLS
+
+~ Whether `TLS` checks the peer's certificate: `Checked` (the default), or `Unchecked` —
+~ any certificate, trusted or not.
+>> Certificates = Checked / Unchecked
+
+~ `@tcpRequest`'s `TLS`-overload settings.
+>> ConnectOptions = {
+  transport :: Transport,
+  certificates :: Certificates,
+
+  default = () -> ConnectOptions => < ConnectOptions { transport = Plain, certificates = Checked } >
+}
+
 ~ Perform a one-shot TCP request exchange: connect to `address` (`host:port`), write
 ~ `requestBytes`, then read the response until the peer closes the connection
 ~ (close-delimited).
@@ -20,6 +36,13 @@
 ~ inert placeholder — the call is compiler-lowered — but it pins BOTH payloads to `Text`, so a
 ~ caller's `Ok(bytes)` / `NotOk(error)` binding sees the concrete `Text`, not a generic payload.
 >> @tcpRequest = (address :: Text, requestBytes :: Text) -> Result => <
+  address == "" ? Ok("") : NotOk("")
+>
+
+~ `@tcpRequest`, given a `ConnectOptions`. A `TLS` failure (handshake or certificate)
+~ yields `NotOk` naming the address and a plain-English reason for the common cases —
+~ see docs/corelib/net.md.
+>> @tcpRequest = (address :: Text, requestBytes :: Text, options :: ConnectOptions) -> Result => <
   address == "" ? Ok("") : NotOk("")
 >
 
@@ -65,6 +88,11 @@
 ~ `@tcpRequest`, given the `Address` a `Server.address()` reported instead of `host:port` text.
 >> @tcpRequest = (address :: Address, requestBytes :: Text) -> Result => <
   @tcpRequest(address.text(), requestBytes)
+>
+
+~ The `ConnectOptions` overload, given an `Address` instead of `host:port` text.
+>> @tcpRequest = (address :: Address, requestBytes :: Text, options :: ConnectOptions) -> Result => <
+  @tcpRequest(address.text(), requestBytes, options)
 >
 
 ~ A server `net.@tcpServe` started, returned the moment it begins listening.

@@ -41,6 +41,8 @@ monomorphization line and all of M5 are **deprioritized** and off the critical p
 served an auto-data-parallelism goal the project no longer pursues.
 
 [#120]: https://github.com/assapir/quilon/issues/120
+[#339]: https://github.com/assapir/quilon/issues/339
+[#486]: https://github.com/assapir/quilon/issues/486
 [#60]: https://github.com/assapir/quilon/issues/60
 [#49]: https://github.com/assapir/quilon/issues/49
 [#434]: https://github.com/assapir/quilon/issues/434
@@ -151,3 +153,4 @@ on-ramps:
 | Fiber-sharing check — an unmarked `:=` value reachable from more than one fiber is a compile error naming `@name := …` ([#120]) | ✅ ([#458]; enforced for `net.@tcpServe` and `http.@serve` handlers, and for a signal trap's arms) |
 | Native HTTP server on the runtime ([#435]) | ✅ (raw layer — `net.@tcpServe`, `Connection`, `Server.kill` ([#451]); HTTP layer — `http.@serve`, `Request.parse`, `Status` (one variant per registered code), `Response.reply` ([#457]); request bodies per Content-Length or chunked framing with a per-server cap ([#466]); keep-alive with an idle timeout ([#471]); `Server.address()`/`net.Address` reporting the bound host/port, with an `Address` overload on `@tcpServe`/`@tcpRequest`/`http.@serve` ([#473])) |
 | Signal trap for graceful shutdown ([#453]) | ✅ (`!>` over `core.process`'s `Signal`, one per program in the file that defines `^`; each arm its own fiber, a self-pipe/reactor dispatch installing `sigaction` only for the signals written) |
+| TLS ([#339], design in [#486]) | 🔨 (client half — `net.ConnectOptions`, the `net.@tcpRequest(address, requestBytes, options)` overload, `https://`/`RequestOptions.transport` in `core.http`; rustls with the `ring` provider, the OS trust store or `SSL_CERT_FILE`/`SSL_CERT_DIR`, the handshake on the blocking-call pool; server half — `Listener`, an identity, `@serve`/`@tcpServe` listener lists — is a later PR) |

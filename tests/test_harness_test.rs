@@ -554,8 +554,11 @@ fn importing_core_http_contributes_exactly_this_surface() {
         "core.test.runCase",
         "core.test.it",
         "core.test.reportSummary",
-        // core.net, and the client itself. `@tcpRequest`/`@tcpServe` each have a Text
-        // overload and an Address overload: one item each.
+        // core.net, and the client itself. `@tcpRequest` has a Text and an Address form,
+        // each with a two-argument and a three-argument (`ConnectOptions`) overload: four
+        // items. `@tcpServe` has a Text overload and an Address overload: one item each.
+        "core.net.@tcpRequest",
+        "core.net.@tcpRequest",
         "core.net.@tcpRequest",
         "core.net.@tcpRequest",
         "core.net.@tcpServe",
@@ -563,6 +566,10 @@ fn importing_core_http_contributes_exactly_this_surface() {
         "core.net.Connection",
         "core.net.Server",
         "core.net.Address",
+        // `@tcpRequest`'s `ConnectOptions` overload settings.
+        "core.net.Transport",
+        "core.net.Certificates",
+        "core.net.ConnectOptions",
         "core.http.Body",
         "core.http.Method",
         "core.http.Status",
@@ -594,7 +601,7 @@ fn importing_core_http_contributes_exactly_this_surface() {
         "core.http.blankLineIndex",
         "core.http.blankLineEnd",
         "core.http.firstLine",
-        "core.http.isHttp10Request",
+        "core.http.isHTTP10Request",
         "core.http.foundOrEnd",
         "core.http.linesAfterFirst",
         "core.http.statusReply",
@@ -1596,13 +1603,14 @@ fn the_corelib_http_suite_passes_when_the_module_is_the_file_named() {
         "Request.params",
         "Request's static constructors",
         "reading a URL apart",
+        "picking the transport",
         "serialising a request",
         "a round trip",
         "Status",
         "Response's server-side constructors",
         "Request.parse",
         "blankLineEnd",
-        "isHttp10Request",
+        "isHTTP10Request",
         "leftoverAfterHead",
         "shouldCloseAfter",
         "insertConnectionHeader",
@@ -1616,7 +1624,7 @@ fn the_corelib_http_suite_passes_when_the_module_is_the_file_named() {
         );
     }
     assert!(
-        out.stdout.contains("155 passed, 0 failed"),
+        out.stdout.contains("162 passed, 0 failed"),
         "unexpected summary:\n{}",
         out.stdout
     );

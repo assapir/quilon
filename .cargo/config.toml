@@ -1,0 +1,4 @@
+# ring's cc-built assembly must target the same macOS as the rest of the build; 11.0
+# matches build_support/deployment_target.rs's fallback.
+[env]
+MACOSX_DEPLOYMENT_TARGET = "11.0"

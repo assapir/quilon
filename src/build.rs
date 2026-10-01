@@ -299,8 +299,17 @@ fn runtime_lib_path() -> Result<PathBuf, String> {
 /// runtime archive — which is what makes a produced binary runnable on a machine
 /// with no libgc installed. Apple's libSystem provides `dlopen` and friends, so
 /// there is no `-ldl` to ask for there (and asking is a hard error).
+///
+/// `rustls-native-certs` reads the OS trust store through these OS frameworks.
 #[cfg(target_os = "macos")]
-pub const SYSTEM_LIBS: &[&str] = &["-lpthread", "-lm"];
+pub const SYSTEM_LIBS: &[&str] = &[
+    "-lpthread",
+    "-lm",
+    "-framework",
+    "CoreFoundation",
+    "-framework",
+    "Security",
+];
 #[cfg(not(target_os = "macos"))]
 pub const SYSTEM_LIBS: &[&str] = &["-lpthread", "-ldl", "-lm"];
 

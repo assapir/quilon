@@ -29,6 +29,15 @@ libc = "0.2"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 
+# TLS for `net.@tcpRequest`'s `TLS` transport. `ring` (not `aws-lc-rs`): faster builds on
+# the Pi and CI, smaller binaries; no post-quantum key exchange is the accepted cost.
+# `rustls-native-certs` reads the OS trust store (honouring `SSL_CERT_FILE`/`SSL_CERT_DIR`);
+# `webpki-roots` is the compiled-in Mozilla list this falls back to when the OS store is
+# empty. Everything links statically, so a built binary needs nothing installed.
+rustls = { workspace = true }
+rustls-native-certs = "0.8"
+webpki-roots = "1"
+
 [lints]
 workspace = true
 

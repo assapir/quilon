@@ -9,10 +9,12 @@ sidebar:
 Import with `<< core.http`. See the [corelib index](README.md).
 
 An HTTP client and server written in Quilon over [`core.net`](net.md)'s `net.@tcpRequest`
-and `net.@tcpServe`. The scheme is **plain HTTP** — URLs are `http://host[:port]/path`
-(scheme optional, default port 80). The client sends `Connection: close` on every request,
-over HTTP/1.1, and opens one connection per request; the server keeps a connection open
-across requests by default — see [Keep-alive](#keep-alive).
+and `net.@tcpServe`. URLs are `scheme://host[:port]/path`, `http://` or `https://`; a
+scheme-less URL is plain HTTP, default port 80. An `https://` URL connects over TLS,
+default port 443 — see [TLS](#tls) below for `RequestOptions`' own way to force it. The
+client sends `Connection: close` on every request, over HTTP/1.1, and opens one connection
+per request; the server keeps a connection open across requests by default — see
+[Keep-alive](#keep-alive).
 
 ```quilon
 << core.http
@@ -44,7 +46,7 @@ asks for it.
 | `Status` | One variant per standard HTTP status code, plus `Other(Num)` — see [`Status`](#status) below. |
 | `Headers` | A multi-value, case-insensitive name/value store, one name added through `add`, read through `get`/`all`/`has`/`names`. |
 | `Params` | A multi-value, case-sensitive name/value store, the same surface as `Headers` without the case-folding. |
-| `RequestOptions` | `{ headers :: Headers }` — settings a request carries beyond its method and URL. |
+| `RequestOptions` | `{ headers :: Headers, transport :: net.Transport, certificates :: net.Certificates }` — settings a request carries beyond its method and URL. |
 | `Request` | `{ method :: Method, url :: Text, options :: RequestOptions }` |
 | `Response` | `{ raw :: Text }` |
 
@@ -110,7 +112,10 @@ Params have no percent-encoding on the way out and no percent-decoding on the wa
 
 | Method | Result |
 |--------|--------|
-| `default() -> RequestOptions` | Empty headers (static). |
+| `default() -> RequestOptions` | Empty headers, `transport = net.Plain`, `certificates = net.Checked` (static). |
+
+`transport` and `certificates` copy straight into a `net.ConnectOptions` when `send()`
+connects — see [TLS](#tls).
 
 ## `Request`
 
@@ -151,6 +156,28 @@ size, a missing terminator, or data ending early; `"malformed Content-Length"` f
 non-numeric value; `"truncated body: expected N bytes, got M"` for a `Content-Length` the
 reply's bytes fall short of. A `Head` request's reply carries a `Content-Length` for a body
 that is never sent, so `send()` skips the framing check for it.
+
+## TLS
+
+`send()` picks the transport from `options.transport` and the URL's scheme: `Plain` (the
+default) connects over TLS for an `https://` URL and plainly otherwise; `TLS` connects over
+TLS regardless of scheme, even for `http://` or a scheme-less URL. The default port follows
+the transport it picked — 443 over TLS, 80 plain — unless the URL names one explicitly.
+`options.certificates` (`net.Checked`, the default, or `net.Unchecked`) carries straight
+through to the `net.ConnectOptions` `send()` builds; see [`core.net`'s TLS
+section](net.md#tls) for what each checks, the curated `NotOk` reasons, and trusting a
+private CA.
+
+```quilon
+<< core.http
+
+^ = () -> $ => <
+  page = http.Request.get("https://example.com/").send() ?
+    | Ok(response) => response
+    | NotOk(_)     => http.Response { raw = "" }
+  assert(page.status().code(), equals(200))
+>
+```
 
 ## `Response`
 

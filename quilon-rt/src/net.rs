@@ -33,6 +33,7 @@ use std::time::Instant;
 
 pub mod client;
 pub mod server;
+mod tls;
 
 pub use client::__tcp_request_launch;
 pub use server::{
@@ -190,6 +191,24 @@ impl TcpStream {
 impl Drop for TcpStream {
     fn drop(&mut self) {
         deregister_readiness(&mut self.inner);
+    }
+}
+
+// So `rustls::StreamOwned` can own a `TcpStream` directly and drive record I/O through its
+// park-on-readiness `read`/`write` — no separate non-blocking-socket adapter needed.
+impl io::Read for TcpStream {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        TcpStream::read(self, buf)
+    }
+}
+
+impl io::Write for TcpStream {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        TcpStream::write(self, buf)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
     }
 }
 
