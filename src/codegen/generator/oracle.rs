@@ -93,11 +93,7 @@ impl<'ctx> CodeGenerator<'ctx> {
     /// single place.
     pub(super) fn boundary_type(&self, ty: &Type) -> Result<BasicTypeEnum<'ctx>, String> {
         match ty {
-            // `type_to_llvm`'s OWN `Record` case lowers the field list to a bare struct
-            // (the layout `record_struct_type` reconstructs elsewhere) rather than the
-            // pointer a record VALUE actually is — fine for sizing, wrong for a value
-            // crossing a boundary, which is why this doc already claimed the by-pointer
-            // ABI before anonymous record types could ever reach a signature to prove it.
+            // A record value crosses a boundary as a pointer.
             Type::Array(_) | Type::Record(_) => self.value_repr_type(ty),
             _ => self.type_to_llvm(ty),
         }

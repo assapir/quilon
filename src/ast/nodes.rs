@@ -1172,12 +1172,8 @@ pub enum Type {
     // `Map(key, value)` = `[|K => V|]`; `Set(elem)` = `[|T|]`.
     Map(Box<Type>, Box<Type>),
     Set(Box<Type>),
-    // For anonymous records: named (`{ count :: Num, label :: Text }`) or positional
-    // (`{ Num, Num }`, read back with `.0`, `.1`, …). A record's fields are all one kind
-    // or all the other (the parser rejects mixing) — see `is_positional_field` and
-    // `record_fields_are_positional`, the ONE test every consumer shares rather than
-    // carrying a separate tag: an identifier can never be all digits, so a positional
-    // field's stored name (`"0"`, `"1"`, …) is unambiguous against a written one.
+    // Anonymous record (named or positional); a positional field is stored under its
+    // decimal position ("0", "1", …).
     Record(Vec<(String, Type)>),
     /// A user-declared record type. Its `fields` and `methods` are behind an `Rc` because
     /// a `Type` is cloned once per expression that has this type — into the type table, out
@@ -1241,27 +1237,20 @@ pub struct SumVariant {
     pub fields: Vec<Type>,
 }
 
-/// Whether `field` names a POSITION (`.0`, `.1`, …) rather than a field name — a
-/// nonempty run of ASCII digits. An identifier can never be all-digits (the lexer
-/// requires a non-digit lead — see `token.rs`'s `Ident` rule), so this cleanly tells a
-/// positional access from a named one with no separate tag to keep in sync.
+/// An identifier can never be all-digits, so this is unambiguous against a written name.
 pub fn is_positional_field(field: &str) -> bool {
     !field.is_empty() && field.bytes().all(|byte| byte.is_ascii_digit())
 }
 
-/// Whether an anonymous record's fields are positional (`{ Num, Num }`) rather than
-/// named (`{ count :: Num }`) — true when the FIRST field's stored name is a position.
-/// A record is never a mix of the two (the parser rejects it), so the first field
-/// always speaks for the rest.
+/// True when the record is positional — a record is never a mix of the two, so the
+/// first field speaks for the rest.
 pub fn record_fields_are_positional(fields: &[(String, Type)]) -> bool {
     fields
         .first()
         .is_some_and(|(name, _)| is_positional_field(name))
 }
 
-/// The field name a positional record's `index`'th slot is stored under — `Type::Record`
-/// and `Expression::Record` carry positional fields as their decimal position, so a
-/// literal's elements and a type's element types line up by this same name.
+/// The field name a positional record's `index`'th slot is stored under.
 pub fn positional_field_name(index: usize) -> String {
     index.to_string()
 }
@@ -1271,10 +1260,7 @@ pub fn positional_field_name(index: usize) -> String {
 /// signature diagnostic, so both render types the same way. A not-yet-concrete
 /// `Generic` (an unresolved sum payload such as the `T` in `Ok(T)`) renders as
 /// `<unknown>`. The match is exhaustive so a new `Type` variant must pick a rendering
-/// here rather than falling back to `Debug`. An anonymous record — named or positional
-/// — renders in Quilon syntax (`{ name :: Text, age :: Num }` / `{ Num, Num }`), the
-/// same shape it would be written in, so a diagnostic quoting a record type reads like
-/// the source that produced it.
+/// here rather than falling back to `Debug`.
 pub fn type_label(ty: &Type) -> String {
     match ty {
         Type::Num => NUM_TYPE_NAME.to_string(),

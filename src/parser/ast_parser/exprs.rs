@@ -241,11 +241,9 @@ impl<'a> Parser<'a> {
             if self.check(&TokenKind::Dot) {
                 self.advance();
 
-                // A positional field access (`.0`, `.1`, …). The lexer has no notion of
-                // "right after a `.`", so it reads `p.0.1` as `p`, `.`, then the single
-                // NUMBER token `0.1` (nothing about the leading `.` changes how a number
-                // lexes) — split back into the field chain it actually reads as here,
-                // where the parser DOES know it followed a `.`.
+                // A positional field access (`.0`, `.1`, …). The lexer reads `0.1` as one
+                // number regardless of what precedes it; split it back into the field
+                // chain here.
                 if matches!(self.peek().kind, TokenKind::Number(_)) {
                     expression = self.chain_positional_field_accesses(expression)?;
                     continue;
@@ -328,12 +326,8 @@ impl<'a> Parser<'a> {
         Ok(expression)
     }
 
-    /// `.0`, `.1`, … immediately after an already-consumed `.`, with the cursor at the
-    /// NUMBER token the lexer produced. That token's raw text is split on `.` — so `p.0.1`
-    /// (one `.`, then the number `0.1`) becomes the two field accesses `p.0` then `.1`,
-    /// exactly as it reads; a plain `.0`/`.12` (no `.` in the token) is the one access its
-    /// text already names. Each part keeps its own slice of the token's span, so a
-    /// diagnostic on either half still underlines just that digit run.
+    /// Cursor at the NUMBER token after an already-consumed `.`; splits its text on `.`
+    /// into the field-access chain it reads as (`0.1` -> `.0` then `.1`).
     fn chain_positional_field_accesses(
         &mut self,
         base: Expression,
@@ -777,15 +771,10 @@ impl<'a> Parser<'a> {
         Ok(fields)
     }
 
-    /// The bare `{ … }` record literal's field list — a superset of
-    /// [`Self::parse_record_fields`] (which stays named-only for a constructor's fields):
-    /// a `name = value` entry, a `<-source` spread, or — since a constructor always names
-    /// its type and a bare literal need not — a POSITIONAL entry, a plain expression with
-    /// no name at all (`{ 6, 7 }`). An entry reads as named when it starts with a name
-    /// immediately followed by `=`; anything else, spread aside, is positional. Mixing
-    /// named/spread entries with positional ones is `Code::MixedRecordFields` — a spread
-    /// fills fields by NAME, so it cannot coexist with nameless elements either. Assumes
-    /// the opening brace is already consumed and consumes the closing one.
+    /// The bare `{ … }` record literal's field list — like [`Self::parse_record_fields`]
+    /// (named-only, for a constructor), plus a positional entry: a plain expression with
+    /// no name (`{ 6, 7 }`). Mixing named/spread entries with positional ones is
+    /// `Code::MixedRecordFields`.
     fn parse_record_literal_fields(&mut self) -> Result<Vec<(String, Expression)>, ParseError> {
         let start = self.current_span();
 

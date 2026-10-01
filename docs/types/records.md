@@ -94,7 +94,7 @@ field's name.)
 ## Anonymous record types in annotations
 A record type may be written directly in an annotation — a parameter, a return type, a
 binding, a named record's own field type, or an array/map element type — without first
-declaring it a name. Written with field names, it is the same shape a record LITERAL
+declaring it a name. Written with field names, it is the same shape a record literal
 builds:
 ```quilon
 greet = (guest :: { name :: Text, age :: Num }) -> Text => < "Hi, " + guest.name >
@@ -105,7 +105,7 @@ greet = (guest :: { name :: Text, age :: Num }) -> Text => < "Hi, " + guest.name
 >
 ```
 Two anonymous record types with the same fields (same names, same types, same order) are
-the same type — there is nothing further to declare for them to match. A NAMED record
+the same type — there is nothing further to declare for them to match. A named record
 type (`User = { name :: Text, age :: Num }`) never converts to or from an anonymous one
 implicitly, in either direction — a `User` and `{ name :: Text, age :: Num }` are
 distinct types even though their fields line up:
@@ -138,13 +138,13 @@ gems = loot.1
 ```
 A one-field positional record (`{ Num }`) is allowed, read with `.0` — useful when a
 type starts with one value and may grow a second later without renaming anything. `.0`
-on a NAMED record (anonymous or declared) is a compile error, and a position past a
+on a named record (anonymous or declared) is a compile error, and a position past a
 record's last field is too:
 ```quilon ignore
 loot.5          ~ error: loot has 2 field(s), positions 0..1
 ```
-A position is only ever digits directly after a `.` — `pair.0.1` is two field accesses
-(`.0` then `.1`) on a nested positional record, never the number `0.1`:
+A position is digits directly after a `.` — `pair.0.1` is two field accesses, `.0` then
+`.1`, on a nested positional record:
 ```quilon
 grid = { { 1, 2 }, { 3, 4 } }
 ^ = () -> Num => < grid.0.1 + grid.1.0 >   ~ 2 + 3

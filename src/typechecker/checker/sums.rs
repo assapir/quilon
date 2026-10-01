@@ -251,8 +251,7 @@ impl TypeChecker {
                 Box::new(self.resolve_type(value)),
             ),
             Type::Set(elem) => Type::Set(Box::new(self.resolve_type(elem))),
-            // An anonymous record annotation (`{ home :: Address }`) carries its field
-            // types unresolved too — same reason, one level deeper.
+            // A record annotation's field types need resolving too.
             Type::Record(fields) => Type::Record(
                 fields
                     .iter()

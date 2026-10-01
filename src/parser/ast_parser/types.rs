@@ -34,8 +34,7 @@ impl<'a> Parser<'a> {
             return Ok(crate::ast::Type::Unit);
         }
 
-        // `{ … }` — an anonymous record type: named (`{ count :: Num, label :: Text }`)
-        // or positional (`{ Num, Num }`, read back with `.0`, `.1`, …).
+        // `{ … }` — an anonymous record type, named or positional.
         if token.kind == TokenKind::BraceOpen {
             return self.parse_anonymous_record_type();
         }
@@ -164,12 +163,8 @@ impl<'a> Parser<'a> {
         self.expect(&TokenKind::BracketClose)
     }
 
-    /// Parse an anonymous record type, cursor at the opening `{`: named
-    /// (`{ count :: Num, label :: Text }`) or positional (`{ Num, Num }`). A field reads
-    /// as named when it starts with a name immediately followed by `::` — never by the
-    /// record's own capitalization, which this grammar has no notion of — anything else
-    /// is a bare type, a positional element. Mixing the two is `Code::MixedRecordFields`,
-    /// the same rule (and code) a record LITERAL enforces (`parse_record_literal_fields`).
+    /// Cursor at the opening `{`. A field reads as named when it starts with a name
+    /// immediately followed by `::`; anything else is a positional element.
     fn parse_anonymous_record_type(&mut self) -> Result<crate::ast::Type, ParseError> {
         let start = self.current_span();
         self.expect(&TokenKind::BraceOpen)?;
