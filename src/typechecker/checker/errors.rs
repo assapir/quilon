@@ -59,6 +59,8 @@ impl TypeError {
             TypeError::UnknownConstructorField { .. } => Code::UnknownConstructorField,
             TypeError::ReservedName { .. } => Code::ReservedName,
             TypeError::FunctionTypedField { .. } => Code::FunctionTypedField,
+            TypeError::PositionalAccessOnNamedRecord { .. } => Code::PositionalAccessOnNamedRecord,
+            TypeError::RecordPositionOutOfRange { .. } => Code::RecordPositionOutOfRange,
             TypeError::InvalidPayloadType { .. } => Code::InvalidPayloadType,
             TypeError::AtomicBindingNotMutable { .. } => Code::AtomicBindingNotMutable,
             TypeError::AtomicBindingUsedBare { .. } => Code::AtomicBindingUsedBare,
@@ -199,6 +201,14 @@ impl TypeError {
             TypeError::FunctionTypedField { name, .. } => diagnostic.help(format!(
                 "write `{name}` as a method instead: `{name} = (…) -> R => < … >`"
             )),
+            TypeError::PositionalAccessOnNamedRecord { .. } => diagnostic.help(
+                "`.0`/`.1`/… reads a POSITIONAL record's fields — one written `{ T1, T2 }`, \
+                 never a named one"
+                    .to_string(),
+            ),
+            TypeError::RecordPositionOutOfRange { .. } => {
+                diagnostic.help("use a position this record actually has")
+            }
             TypeError::InvalidPayloadType { .. } => diagnostic.help(
                 "a payload is Num, Text, Bool, $, a declared record, a declared sum, or an \
                  array/map of one of those"
@@ -293,6 +303,8 @@ impl TypeError {
             | TypeError::UnknownConstructorField { span, .. }
             | TypeError::ReservedName { span, .. }
             | TypeError::FunctionTypedField { span, .. }
+            | TypeError::PositionalAccessOnNamedRecord { span, .. }
+            | TypeError::RecordPositionOutOfRange { span, .. }
             | TypeError::InvalidPayloadType { span, .. }
             | TypeError::AtomicBindingNotMutable { span, .. }
             | TypeError::AtomicBindingUsedBare { span, .. }
@@ -770,6 +782,21 @@ impl std::fmt::Display for TypeError {
                     f,
                     "field `{name}` cannot have a function type; a function member of a \
                      record is a method"
+                )
+            }
+            TypeError::PositionalAccessOnNamedRecord { field, .. } => {
+                write!(
+                    f,
+                    "`.{field}` reads a position, and this record's fields are named — \
+                     read a named field with `.name` instead"
+                )
+            }
+            TypeError::RecordPositionOutOfRange { position, size, .. } => {
+                write!(
+                    f,
+                    "`.{position}` is out of range: this record has {size} field(s), \
+                     positions 0..{}",
+                    size.saturating_sub(1)
                 )
             }
             TypeError::InvalidPayloadType {

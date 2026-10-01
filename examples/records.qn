@@ -3,8 +3,27 @@
 ~ `<< core.test` verifies the field reads; on success the program exits 0.
 << core.test
 
+~ An anonymous record type may be written straight into an annotation — no declared
+~ name needed. Two anonymous types with the same fields are the same type, so a value
+~ built from a plain literal passes right in.
+areaOf = (shape :: { width :: Num, height :: Num }) -> Num => < shape.width * shape.height >
+
+~ A record's fields may be positional instead of named — a bare list of types
+~ (`{ Num, Num }`) or values (`{ 6, 7 }`), read back by position: `.0`, `.1`, …
+haul = (loot :: { Num, Num }) -> Num => < loot.0 + loot.1 >
+
 ^ = () -> $ => <
   rect = { width = 4, height = 7 }
   area = rect.width * rect.height
   assert(area, equals(28))
+  assert(areaOf(rect), equals(28))
+
+  goblinLoot = { 12, 3 }         ~ coins, gems — no names, read back by position
+  assert(goblinLoot.0, equals(12))
+  assert(goblinLoot.1, equals(3))
+  assert(haul(goblinLoot), equals(15))
+
+  ~ `.0.1` is two field accesses on a nested positional record, never the number `0.1`.
+  grid = { { 1, 2 }, { 3, 4 } }
+  assert(grid.0.1 + grid.1.0, equals(5))
 >

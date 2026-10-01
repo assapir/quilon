@@ -251,6 +251,13 @@ impl TypeChecker {
                 Box::new(self.resolve_type(value)),
             ),
             Type::Set(elem) => Type::Set(Box::new(self.resolve_type(elem))),
+            // A record annotation's field types need resolving too.
+            Type::Record(fields) => Type::Record(
+                fields
+                    .iter()
+                    .map(|(name, field_type)| (name.clone(), self.resolve_type(field_type)))
+                    .collect(),
+            ),
             _ => ty.clone(),
         }
     }

@@ -373,6 +373,17 @@ pub enum TypeError {
         name: String,
         span: Span,
     },
+    /// `.0`/`.1`/… reached a NAMED record, whose fields are read by name.
+    PositionalAccessOnNamedRecord {
+        field: String,
+        span: Span,
+    },
+    /// A positional record access past the record's last field.
+    RecordPositionOutOfRange {
+        position: String,
+        size: usize,
+        span: Span,
+    },
     /// A sum-type variant payload outside the accepted set.
     InvalidPayloadType {
         variant: String,

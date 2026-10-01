@@ -6,6 +6,12 @@ All notable changes to Quilon are documented here.
 
 ### Added
 
+- **Anonymous record types in annotations, and positional records.** A record type may
+  now be written directly in an annotation, named (`{ name :: Text, age :: Num }`) or
+  positional (`{ Num, Num }`, values `{ 6, 7 }`, read with `.0`/`.1`). Mixing named and
+  positional fields is `QN118`; `.0` on a named record is `QN359`; an out-of-range
+  position is `QN360`. See `docs/types/records.md`. Step 1 of #490.
+
 - **The signal trap (`!>`) — a top-level item, one per program, in the file that defines
   `^`, matching signals via a new `core.process` module.** `!>` followed by one or more
   `| Pattern => expression` arms over `process.Signal` — `Hangup` / `Interrupt` / `Quit` /

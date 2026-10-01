@@ -1172,7 +1172,9 @@ pub enum Type {
     // `Map(key, value)` = `[|K => V|]`; `Set(elem)` = `[|T|]`.
     Map(Box<Type>, Box<Type>),
     Set(Box<Type>),
-    Record(Vec<(String, Type)>), // For anonymous records
+    // Anonymous record (named or positional); a positional field is stored under its
+    // decimal position ("0", "1", …).
+    Record(Vec<(String, Type)>),
     /// A user-declared record type. Its `fields` and `methods` are behind an `Rc` because
     /// a `Type` is cloned once per expression that has this type — into the type table, out
     /// of it in codegen, through every inference step — and the declaration itself never
@@ -1235,6 +1237,24 @@ pub struct SumVariant {
     pub fields: Vec<Type>,
 }
 
+/// An identifier can never be all-digits, so this is unambiguous against a written name.
+pub fn is_positional_field(field: &str) -> bool {
+    !field.is_empty() && field.bytes().all(|byte| byte.is_ascii_digit())
+}
+
+/// True when the record is positional — a record is never a mix of the two, so the
+/// first field speaks for the rest.
+pub fn record_fields_are_positional(fields: &[(String, Type)]) -> bool {
+    fields
+        .first()
+        .is_some_and(|(name, _)| is_positional_field(name))
+}
+
+/// The field name a positional record's `index`'th slot is stored under.
+pub fn positional_field_name(index: usize) -> String {
+    index.to_string()
+}
+
 /// A short, user-facing label for a type (`Num`, `Text`, `[]Text`, a user type's name).
 /// Shared by the type checker's overload diagnostics and codegen's entry-point
 /// signature diagnostic, so both render types the same way. A not-yet-concrete
@@ -1250,13 +1270,15 @@ pub fn type_label(ty: &Type) -> String {
         Type::Array(elem) => format!("[]{}", type_label(elem)),
         Type::Map(k, v) => format!("[|{} => {}|]", type_label(k), type_label(v)),
         Type::Set(elem) => format!("[|{}|]", type_label(elem)),
+        Type::Record(fields) if fields.is_empty() => "{}".to_string(),
+        Type::Record(fields) if record_fields_are_positional(fields) => {
+            let rendered: Vec<String> = fields.iter().map(|(_, t)| type_label(t)).collect();
+            format!("{{ {} }}", rendered.join(", "))
+        }
         Type::Record(fields) => {
-            if fields.is_empty() {
-                return "{}".to_string();
-            }
             let rendered: Vec<String> = fields
                 .iter()
-                .map(|(name, field_type)| format!("{} :: {}", name, type_label(field_type)))
+                .map(|(name, t)| format!("{name} :: {}", type_label(t)))
                 .collect();
             format!("{{ {} }}", rendered.join(", "))
         }

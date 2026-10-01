@@ -93,7 +93,8 @@ impl<'ctx> CodeGenerator<'ctx> {
     /// single place.
     pub(super) fn boundary_type(&self, ty: &Type) -> Result<BasicTypeEnum<'ctx>, String> {
         match ty {
-            Type::Array(_) => self.value_repr_type(ty),
+            // A record value crosses a boundary as a pointer.
+            Type::Array(_) | Type::Record(_) => self.value_repr_type(ty),
             _ => self.type_to_llvm(ty),
         }
     }

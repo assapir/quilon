@@ -380,6 +380,125 @@ fn test_parse_empty_record() {
 }
 
 #[test]
+fn test_parse_positional_record_literal() {
+    let tokens = Lexer::tokenize("pair = { 6, 7 }").unwrap();
+    let program = parse(&tokens).unwrap();
+    let Item::VariableDeclaration(declaration) = &program.items[0] else {
+        panic!("expected a variable declaration");
+    };
+    let Expression::Record { fields, .. } = &declaration.value else {
+        panic!("expected a Record expression");
+    };
+    assert_eq!(
+        fields
+            .iter()
+            .map(|(name, _)| name.as_str())
+            .collect::<Vec<_>>(),
+        ["0", "1"]
+    );
+}
+
+#[test]
+fn test_parse_positional_record_type_annotation() {
+    let tokens = Lexer::tokenize("f = (p :: { Num, Num }) -> Num => < p.0 >").unwrap();
+    let program = parse(&tokens).unwrap();
+    let Item::FunctionDeclaration(declaration) = &program.items[0] else {
+        panic!("expected a function declaration");
+    };
+    let Some(Type::Record(fields)) = &declaration.parameters[0].type_annotation else {
+        panic!(
+            "expected a positional Record type, got {:?}",
+            declaration.parameters[0].type_annotation
+        );
+    };
+    assert_eq!(
+        fields,
+        &[("0".to_string(), Type::Num), ("1".to_string(), Type::Num)]
+    );
+}
+
+#[test]
+fn test_parse_named_record_type_annotation() {
+    let tokens =
+        Lexer::tokenize("f = (p :: { name :: Text, age :: Num }) -> Text => < p.name >").unwrap();
+    let program = parse(&tokens).unwrap();
+    let Item::FunctionDeclaration(declaration) = &program.items[0] else {
+        panic!("expected a function declaration");
+    };
+    let Some(Type::Record(fields)) = &declaration.parameters[0].type_annotation else {
+        panic!("expected a Record type");
+    };
+    assert_eq!(
+        fields,
+        &[
+            ("name".to_string(), Type::Text),
+            ("age".to_string(), Type::Num)
+        ]
+    );
+}
+
+#[test]
+fn test_parse_mixed_record_type_is_rejected() {
+    let tokens = Lexer::tokenize("f = (p :: { Num, label :: Text }) -> Num => < p.0 >").unwrap();
+    let Err(err) = parse(&tokens) else {
+        panic!("expected a mixed record type to be a parse error");
+    };
+    assert_eq!(err.code, Code::MixedRecordFields);
+}
+
+#[test]
+fn test_parse_mixed_record_literal_is_rejected() {
+    let tokens = Lexer::tokenize("bad = { 1, label = \"x\" }").unwrap();
+    let Err(err) = parse(&tokens) else {
+        panic!("expected a mixed record literal to be a parse error");
+    };
+    assert_eq!(err.code, Code::MixedRecordFields);
+}
+
+#[test]
+fn test_parse_one_field_positional_record_type() {
+    let tokens = Lexer::tokenize("f = (p :: { Num }) -> Num => < p.0 >").unwrap();
+    let result = parse(&tokens);
+    assert!(result.is_ok());
+}
+
+/// `p.0.1` — the lexer reads `.0.1` as `.`, then the single NUMBER token `0.1` (a leading
+/// `.` never changes how a number lexes); the parser must still split that token back into
+/// two field accesses, `.0` then `.1`, never read it as the number `0.1`.
+#[test]
+fn test_parse_chained_positional_field_access_splits_the_dotted_number() {
+    let tokens = Lexer::tokenize("^ = () -> Num => < p.0.1 >").unwrap();
+    let program = parse(&tokens).unwrap();
+    let Item::FunctionDeclaration(declaration) = &program.items[0] else {
+        panic!("expected a function declaration");
+    };
+    let Expression::Block { statements, .. } = &declaration.body else {
+        panic!("expected a block body");
+    };
+    let Some(Statement::Expression(Expression::FieldAccess {
+        expression: outer_expression,
+        field: outer_field,
+        ..
+    })) = statements.last()
+    else {
+        panic!("expected the block's last statement to be a field access");
+    };
+    assert_eq!(outer_field, "1");
+    let Expression::FieldAccess {
+        expression: inner_expression,
+        field: inner_field,
+        ..
+    } = outer_expression.as_ref()
+    else {
+        panic!("expected the outer field access's receiver to itself be a field access");
+    };
+    assert_eq!(inner_field, "0");
+    assert!(
+        matches!(inner_expression.as_ref(), Expression::Identifier { name, .. } if name == "p")
+    );
+}
+
+#[test]
 fn test_parse_constructor() {
     let tokens = Lexer::tokenize("user = User { name = \"Alice\", age = 30 }").unwrap();
     let result = parse(&tokens);
