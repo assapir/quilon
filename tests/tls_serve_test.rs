@@ -5,7 +5,7 @@
 //! Every TLS listener here serves `tests/fixtures/tls/valid.crt`/`valid.key` (a
 //! `localhost` leaf, issued by `tests/fixtures/tls/ca.crt` — see that directory's own
 //! README for how they were made), reached either as `Files` (the two paths) or `Base64`
-//! (the same two files' content, base64'd with the real `base64 -w0` CLI the docs name, so
+//! (the same two files' content, base64'd with the real `base64` CLI the docs name, so
 //! the fixture for `Files` and the fixture for `Base64` are provably the same bytes).
 
 mod common;
@@ -25,22 +25,30 @@ fn fixture(name: &str) -> PathBuf {
         .join(name)
 }
 
-/// The base64 `core.net.Identity::Base64` takes — the real `base64 -w0` CLI the docs
-/// point readers at, over `fixture(name)`'s own bytes, not a hand-rolled encoder standing
-/// in for it.
-/// No single-line flag here: GNU `base64` spells it `-w0`, BSD/macOS `-b 0` — rather than
-/// pick one, this runs plain `base64 <path>` (wraps at 76 characters on both) and strips
-/// the wrapping itself, into one line, the way a Quilon `Text` literal needs it (an
-/// embedded newline is not valid inside `"..."`) — the same whitespace
-/// `core.net.Identity::Base64`'s own decoder would have stripped regardless (see
-/// `base64_decode_accepts_unpadded_input_and_embedded_newlines` in
-/// `quilon-rt/src/net/tls.rs`), done here instead since this base64 is embedded in
-/// generated SOURCE, not read back by that decoder directly.
+/// The base64 `core.net.Identity::Base64` takes — the real `base64` CLI the docs point
+/// readers at, over `fixture(name)`'s own bytes, not a hand-rolled encoder standing in
+/// for it. Piped through stdin rather than named as a file argument: GNU `base64` takes a
+/// path positionally, BSD/macOS wants `-i path` — reading stdin (`cmd | base64`) is the
+/// one invocation both accept. Neither a single-line flag either (GNU `-w0`, BSD `-b 0`):
+/// both wrap at 76 characters by default, joined into one line here instead, the way a
+/// Quilon `Text` literal needs it (an embedded newline is not valid inside `"..."`) — the
+/// same whitespace `core.net.Identity::Base64`'s own decoder would have stripped
+/// regardless (see `base64_decode_accepts_unpadded_input_and_embedded_newlines` in
+/// `quilon-rt/src/net/tls.rs`).
 fn base64_of_fixture(name: &str) -> String {
-    let output = Command::new("base64")
-        .arg(fixture(name))
-        .output()
-        .expect("run base64");
+    let bytes = std::fs::read(fixture(name)).expect("read the fixture file");
+    let mut child = Command::new("base64")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .expect("spawn base64");
+    child
+        .stdin
+        .take()
+        .expect("base64's stdin")
+        .write_all(&bytes)
+        .expect("write the fixture bytes to base64");
+    let output = child.wait_with_output().expect("run base64");
     assert!(output.status.success(), "base64 {name} failed");
     String::from_utf8(output.stdout)
         .expect("base64 output is ASCII")
