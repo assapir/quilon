@@ -249,50 +249,7 @@ impl<'a> Parser<'a> {
                     continue;
                 }
 
-                // A leaf IO primitive reached through a value (`connection.@read()`): `@`
-                // fuses with the following identifier exactly as it does at a module
-                // chain (`io.@readStdin`) or a primitive's own declaration.
-                let field = if self.check(&TokenKind::At) {
-                    self.advance();
-                    format!("@{}", self.expect_ident()?)
-                } else {
-                    self.expect_ident()?
-                };
-
-                // A same-line `(` makes this a method call: obj.method(args). A
-                // line-first `(` leaves `.field` a plain field access and the `(...)`
-                // begins the next statement.
-                if self.check_same_line(&TokenKind::ParenOpen) {
-                    // Method call: desugar obj.method(a, b) to method(obj, a, b)
-                    self.advance(); // consume '('
-
-                    // Parse arguments
-                    let mut arguments = vec![expression]; // receiver is first argument
-                    arguments.extend(
-                        self.parse_comma_separated(&TokenKind::ParenClose, Self::parse_expression)?,
-                    );
-
-                    self.expect(&TokenKind::ParenClose)?;
-                    let span = self.span(arguments[0].span().start, self.previous_span().end);
-
-                    expression = Expression::Call {
-                        function: Box::new(Expression::Identifier {
-                            name: field,
-                            span: span.clone(),
-                        }),
-                        arguments,
-                        member_call: true,
-                        span,
-                    };
-                } else {
-                    // Regular field access
-                    let span = self.span(expression.span().start, self.previous_span().end);
-                    expression = Expression::FieldAccess {
-                        expression: Box::new(expression),
-                        field,
-                        span,
-                    };
-                }
+                expression = self.parse_after_dot(expression)?;
             } else if self.check_same_line(&TokenKind::BracketOpen) {
                 // Array indexing
                 self.advance();
@@ -351,7 +308,63 @@ impl<'a> Parser<'a> {
                 span,
             };
         }
+        // The number regex also allows a trailing `.` with no digit after it (`0.`), so a
+        // position immediately followed by a name (`p.0.size`) still lexes as one NUMBER
+        // token with no `.` token of its own left for the postfix loop to see. Finish
+        // reading it the same way that loop would have.
+        if token.text.ends_with('.') {
+            expression = self.parse_after_dot(expression)?;
+        }
         Ok(expression)
+    }
+
+    /// What follows an already-consumed `.` that is not a positional numeric access: a
+    /// name (or `@name`), then either a method call (`.method(args)`) or a plain field
+    /// access. Shared by the ordinary postfix loop and
+    /// [`Self::chain_positional_field_accesses`]'s trailing-dot case.
+    fn parse_after_dot(&mut self, expression: Expression) -> Result<Expression, ParseError> {
+        // A leaf IO primitive reached through a value (`connection.@read()`): `@`
+        // fuses with the following identifier exactly as it does at a module
+        // chain (`io.@readStdin`) or a primitive's own declaration.
+        let field = if self.check(&TokenKind::At) {
+            self.advance();
+            format!("@{}", self.expect_ident()?)
+        } else {
+            self.expect_ident()?
+        };
+
+        // A same-line `(` makes this a method call: obj.method(args). A
+        // line-first `(` leaves `.field` a plain field access and the `(...)`
+        // begins the next statement.
+        if self.check_same_line(&TokenKind::ParenOpen) {
+            // Method call: desugar obj.method(a, b) to method(obj, a, b)
+            self.advance(); // consume '('
+
+            let mut arguments = vec![expression]; // receiver is first argument
+            arguments.extend(
+                self.parse_comma_separated(&TokenKind::ParenClose, Self::parse_expression)?,
+            );
+
+            self.expect(&TokenKind::ParenClose)?;
+            let span = self.span(arguments[0].span().start, self.previous_span().end);
+
+            Ok(Expression::Call {
+                function: Box::new(Expression::Identifier {
+                    name: field,
+                    span: span.clone(),
+                }),
+                arguments,
+                member_call: true,
+                span,
+            })
+        } else {
+            let span = self.span(expression.span().start, self.previous_span().end);
+            Ok(Expression::FieldAccess {
+                expression: Box::new(expression),
+                field,
+                span,
+            })
+        }
     }
 
     // Match helper functions

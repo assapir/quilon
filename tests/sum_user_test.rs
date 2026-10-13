@@ -29,15 +29,15 @@ fn nullary_enum_matched_exhaustively() {
 
 #[test]
 fn payload_sum_constructed_and_matched() {
-    // `Shape` with payload variants; match extracts the payloads. A Rect(3, 4)
+    // `Shape` with payload variants; match extracts the payloads. A Rect({3, 4})
     // contributes 3 + 4 = 7. (`Circle` arm is also covered for exhaustiveness.)
     assert_exit(
-        "Shape = Circle(Num) / Rect(Num, Num)\n\
+        "Shape = Circle(Num) / Rect({ Num, Num })\n\
          ^ = () -> Num => <\n\
-           s = Rect(3, 4)\n\
+           s = Rect({ 3, 4 })\n\
            s ?\n\
              | Circle(r) => r\n\
-             | Rect(w, h) => w + h\n\
+             | Rect(p)   => p.0 + p.1\n\
          >",
         7,
     );
@@ -47,12 +47,12 @@ fn payload_sum_constructed_and_matched() {
 fn payload_sum_single_field_extracted() {
     // Single-payload variant: Circle(9) -> 9.
     assert_exit(
-        "Shape = Circle(Num) / Rect(Num, Num)\n\
+        "Shape = Circle(Num) / Rect({ Num, Num })\n\
          ^ = () -> Num => <\n\
            s = Circle(9)\n\
            s ?\n\
              | Circle(r) => r\n\
-             | Rect(w, h) => w + h\n\
+             | Rect(p)   => p.0 + p.1\n\
          >",
         9,
     );
@@ -62,15 +62,15 @@ fn payload_sum_single_field_extracted() {
 fn function_over_sum_type_param_and_match() {
     // A function takes a sum-type parameter (`s :: Shape`) and dispatches on it —
     // exercises lowering a sum-type annotation to its tagged-union struct and passing
-    // a constructed value as an argument. area(Rect(6, 7)) = 42.
+    // a constructed value as an argument. area(Rect({6, 7})) = 42.
     assert_exit(
-        "Shape = Circle(Num) / Rect(Num, Num)\n\
+        "Shape = Circle(Num) / Rect({ Num, Num })\n\
            area = (s :: Shape) -> Num => <\n\
              s ?\n\
-             | Circle(r)  => 3 * r * r\n\
-             | Rect(w, h) => w * h\n\
+             | Circle(r) => 3 * r * r\n\
+             | Rect(p)   => p.0 * p.1\n\
            >\n\
-           ^ = () -> Num => < area(Rect(6, 7)) >",
+           ^ = () -> Num => < area(Rect({ 6, 7 })) >",
         42,
     );
 }
@@ -209,10 +209,10 @@ fn a_direct_self_payload_of_pure_scalars_still_tracks_aliasing() {
     // still counts as a reference type: embedding an `=`-bound value into a
     // `:=`-bound constructor is rejected exactly as it is for any other sum.
     assert_type_error_code(
-        "Tree = Leaf(Num) / Node(Tree, Tree)\n\
+        "Tree = Leaf(Num) / Node({ Tree, Tree })\n\
          t = Leaf(1)\n\
          ^ = () -> Num => <\n\
-           w := Node(t, Leaf(2))\n\
+           w := Node({ t, Leaf(2) })\n\
            0\n\
          >",
         Code::MutableAliasOfImmutable,

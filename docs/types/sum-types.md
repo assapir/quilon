@@ -10,20 +10,23 @@ A sum type (tagged union / enum) is a set of named **variants**, declared with `
 as the separator. Variants may be **nullary** or carry a payload:
 ```quilon
 Color = Red / Green / Blue                 ~ three nullary variants
-Shape = Circle(Num) / Rect(Num, Num)       ~ variants with payloads
+Shape = Circle(Num) / Rect({ Num, Num })   ~ variants with payloads
 ```
 - **A payload is** `Num`, `Text`, `Bool`, `$` (Unit), a declared record, a declared sum —
-  the enclosing one included — or an array/map of one of those. A variant may take
-  several payload fields (e.g. `Rect(Num, Num)`). A `$` payload carries no value — the
-  variant's data is its identity (see `Ok($)` below).
+  the enclosing one included — an anonymous record (named or positional), or an
+  array/map of one of those. A `$` payload carries no value — the variant's data is its
+  identity (see `Ok($)` below).
+- **A variant carries at most one payload.** Several values travel together as one
+  record: `Rect({ Num, Num })` constructs as `Rect({ 6, 7 })` and reads back by
+  position, `p.0 * p.1`. `Rect(Num, Num)` — two payload types instead of one record —
+  is a compile error.
 - A **named record** payload lets a sum carry structured data — `Method = Get / Post(Body)`
   where `Body` is a record declared **above** the sum. A match arm binds it at its full
   type, so `Post(b) => b.payload` reads its fields and calls its methods. See
   `examples/nested_composites.qn` for composing sums with records.
-- **Each payload position stands on its own**: one variant's field there may be `Num`
-  while another's is `Text` in the same declaration — `Mixed = A(Num) / B(Text)` and
-  `C(Num, Text)`, sharing neither position with `A`/`B`, all compile. `$` costs nothing
-  extra at a shared position: `Done($) / Pending(Num)` compiles the same way.
+- **Two variants may carry different concrete types in their one payload**: `Mixed =
+  A(Num) / B(Text)` compiles, each variant reading its own slot through its own typed
+  view. `$` costs nothing extra there: `Done($) / Pending(Num)` compiles the same way.
 - **A sum may name itself as a payload**, directly (`Tree = Leaf / Node(Tree)`) or
   through an array/map (`Forest = Leaf(Num) / Branch([]Forest)`). A direct self-payload
   is a pointer to a GC cell holding the sum value; through an array or map it sits
@@ -43,8 +46,8 @@ Shape = Circle(Num) / Rect(Num, Num)       ~ variants with payloads
 ```quilon ignore
 area = (s :: Shape) -> Num => <
   s ?
-    | Circle(r)  => 3 * r * r
-    | Rect(w, h) => w * h          ~ binds both payload fields
+    | Circle(r) => 3 * r * r
+    | Rect(p)   => p.0 * p.1        ~ binds the record payload, read by position
 >
 ```
 A match over a sum type **is exhaustive**: it covers every variant, or ends with a `_`
@@ -59,12 +62,12 @@ typically matches on it. A member is a named method, an
 — a sum has no fields, so a field-like entry there is a compile error, and its methods are
 always `=` (see [Mutation](../mutation.md)).
 ```quilon
-Shape = Circle(Num) / Rect(Num, Num) {
-  area = () -> Num => < it ? | Circle(r) => 3 * r * r | Rect(w, h) => w * h >
+Shape = Circle(Num) / Rect({ Num, Num }) {
+  area = () -> Num => < it ? | Circle(r) => 3 * r * r | Rect(p) => p.0 * p.1 >
   == = (other :: Shape) -> Bool => < it.area() == other.area() >  ~ operator member
-  ` = () -> Text => < it ? | Circle(r) => "Circle(`r`)" | Rect(w, h) => "Rect(`w`x`h`)" >
+  ` = () -> Text => < it ? | Circle(r) => "Circle(`r`)" | Rect(p) => "Rect(`p.0`x`p.1`)" >
 }
-Rect(6, 7).area()                ~ 42
+Rect({ 6, 7 }).area()            ~ 42
 ```
 (See `examples/sum_methods.qn`.)
 

@@ -250,19 +250,20 @@ impl TypeChecker {
                 field_spans,
                 ..
             } => {
-                // Anything `acceptable_payload_type` rejects is `InvalidPayloadType`, pointing at that field's own span.
+                // Anything `acceptable_payload_type` rejects is `InvalidPayloadType`, pointing
+                // at the payload's own span. The parser already rejected more than one
+                // payload type, so `variant.fields` holds at most one.
                 let mut resolved_variants = Vec::with_capacity(variants.len());
                 for (variant, spans) in variants.iter().zip(field_spans) {
                     let mut fields = Vec::with_capacity(variant.fields.len());
-                    for (position, field) in variant.fields.iter().enumerate() {
+                    if let Some(field) = variant.fields.first() {
                         let resolved = self.resolve_type(field);
                         if !self.acceptable_payload_type(&resolved) {
                             return Err(TypeError::InvalidPayloadType {
                                 variant: variant.name.clone(),
-                                position,
                                 got: resolved,
                                 span: spans
-                                    .get(position)
+                                    .first()
                                     .cloned()
                                     .unwrap_or_else(|| declaration.span.clone()),
                             });
@@ -373,7 +374,9 @@ impl TypeChecker {
         Ok(())
     }
 
-    /// A sum's accepted payload kinds: `Num`/`Text`/`Bool`/`$`, a declared record or sum (self included, via its `sum_types` placeholder), or an array/map of one.
+    /// A sum's accepted payload kinds: `Num`/`Text`/`Bool`/`$`, a declared record or sum
+    /// (self included, via its `sum_types` placeholder), an anonymous record (named or
+    /// positional) of one of those, or an array/map of one.
     fn acceptable_payload_type(&self, resolved: &Type) -> bool {
         match resolved {
             Type::Num | Type::Text | Type::Bool | Type::Unit => true,
@@ -383,6 +386,9 @@ impl TypeChecker {
             Type::Map(key, value) => {
                 self.acceptable_payload_type(key) && self.acceptable_payload_type(value)
             }
+            Type::Record(fields) => fields
+                .iter()
+                .all(|(_, field_type)| self.acceptable_payload_type(field_type)),
             _ => false,
         }
     }

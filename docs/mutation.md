@@ -162,7 +162,7 @@ nums[0] := 10                 ~ mutates `nums` in place
 ```
 
 ```quilon ignore
-Shape = Circle(Num) / Rect(Num, Num) {
+Shape = Circle(Num) / Rect({ Num, Num }) {
   area := () -> Num => < 0 >  ~ error: a sum's methods are `=`
 }
 

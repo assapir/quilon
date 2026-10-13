@@ -66,6 +66,7 @@ codes! {
     InterpolatedTextPattern = 116 => "text pattern with interpolation",
     EmptyTrap = 117 => "signal trap with no arms",
     MixedRecordFields = 118 => "mixed named and positional record fields",
+    VariantMultiplePayloads = 119 => "sum-type variant with more than one payload",
 
     // Family 2 — module resolution and linking
     AtDeclarationOutsideCorelib = 200 => "`@` primitive declared outside the corelib",

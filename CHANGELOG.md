@@ -12,6 +12,22 @@ All notable changes to Quilon are documented here.
   positional fields is `QN118`; `.0` on a named record is `QN359`; an out-of-range
   position is `QN360`. See `docs/types/records.md`. Step 1 of #490.
 
+- **Breaking: a sum variant carries at most one payload.** Several values travel
+  together as one record instead of a longer payload list:
+  ```quilon ignore
+  Shape = Circle(Num) / Rect(Num, Num)        ~ before: two payload types
+  Shape = Circle(Num) / Rect({ Num, Num })    ~ after: one record payload
+  ```
+  Construction and matching follow the same shape: `Rect(6, 7)` becomes `Rect({ 6, 7 })`,
+  and a match arm `Rect(w, h) => w * h` becomes `Rect(p) => p.0 * p.1`. Declaring a
+  variant with more than one payload type is `QN119`, whose hint names the record form;
+  constructing or matching with several arguments reuses the existing arity mismatch,
+  `QN303`. A payload may now also be an anonymous record (named or positional), on top of
+  the types already accepted. A self-referential sum through a record payload works the
+  same as a direct one — a record is always heap-allocated, so the reference needs no
+  boxing of its own (`Tree = Leaf / Node({ Tree, Num, Tree })`). See
+  `docs/types/sum-types.md`. Step 2 of #490.
+
 - **The signal trap (`!>`) — a top-level item, one per program, in the file that defines
   `^`, matching signals via a new `core.process` module.** `!>` followed by one or more
   `| Pattern => expression` arms over `process.Signal` — `Hangup` / `Interrupt` / `Quit` /

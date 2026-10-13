@@ -110,6 +110,7 @@ its name relative to the first block (`` ```quilon title="lib/util.qn" ``).
 | [QN116](syntax.md#qn116--text-pattern-with-interpolation) | text pattern with interpolation |
 | [QN117](syntax.md#qn117--signal-trap-with-no-arms) | signal trap with no arms |
 | [QN118](syntax.md#qn118--mixed-named-and-positional-record-fields) | mixed named and positional record fields |
+| [QN119](syntax.md#qn119--sum-type-variant-with-more-than-one-payload) | sum-type variant with more than one payload |
 | [QN200](modules.md#qn200---primitive-declared-outside-the-corelib) | `@` primitive declared outside the corelib |
 | [QN201](modules.md#qn201--missing-module) | missing module |
 | [QN202](modules.md#qn202--private-member-reached-through-its-module) | private member reached through its module |

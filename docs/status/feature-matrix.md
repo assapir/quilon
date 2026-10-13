@@ -39,12 +39,13 @@ sidebar:
 | Spread: prefix `<-` in literals — array splice `[<-xs, 4]`, record update `{<-p, x = 9}` | ✅ |
 | Pattern matching (numbers, text literals, wildcard, identifiers, sum-type variants); every match is total — a sum lists its variants, anything else takes a catch-all | ✅ |
 | User-defined sum types (`/` separator), exhaustive matching, payload binding | ✅ |
+| A sum variant carries at most one payload; several values travel together as one record, anonymous or declared (`Rect(Num, Num)` is a compile error — write `Rect({ Num, Num })`) | ✅ |
 | Sum-type methods: optional trailing `{ }` block (named methods, operators, render `` ` ``; `it` = the value); no fields, no `:=` methods | ✅ |
 | `Result` as a normal predefined sum type (`Ok`/`NotOk`) | ✅ |
 | Sum-type payloads: `Num` / `Bool` / `Text` | ✅ |
 | Sum-type payload is a named **record** (`Method = Get / Post(Body)`; match binds it, reads its fields / calls its methods) | ✅ |
 | Sum-type payload is a declared sum — the enclosing one included, directly (`Tree = Leaf / Node(Tree)`, boxed) or through an array/map (`Forest = Leaf(Num) / Branch([]Forest)`, inline) | ✅ |
-| Heterogeneous sum-type payloads: two variants may carry a different concrete type at the same position (`A(Num) / B(Text)`) | ✅ |
+| Heterogeneous sum-type payloads: two variants may carry a different concrete type in their one payload (`A(Num) / B(Text)`) | ✅ |
 | Record referencing itself, or a sum declared above it, directly as a field (`Wagon = { next :: Wagon }`) | ✅ |
 | Concrete `Result` payloads: a bound `Ok`/`NotOk` payload is usable at its real type (overload dispatch, across `-> Result` function **and method** boundaries) | ✅ |
 | Uniform `Result` layout: a `Result` of ANY payload (`Num`/`Text`/`[]Text`/composite) passes through a generic `(r :: Result)` parameter or return — powers `isOk()`/`isNotOk()` on `getEnv`/`getOpt` | ✅ |

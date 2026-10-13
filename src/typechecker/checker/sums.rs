@@ -209,6 +209,14 @@ impl TypeChecker {
                 Box::new(self.resolve_payload_type(key)),
                 Box::new(self.resolve_payload_type(value)),
             ),
+            // A multi-value payload's own fields may themselves name the enclosing sum
+            // (`Node({ Tree, Num, Tree })`) — resolve each the same way.
+            Type::Record(fields) => Type::Record(
+                fields
+                    .iter()
+                    .map(|(name, field_type)| (name.clone(), self.resolve_payload_type(field_type)))
+                    .collect(),
+            ),
             _ => field_type.clone(),
         }
     }

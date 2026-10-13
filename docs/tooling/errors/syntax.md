@@ -200,7 +200,8 @@ data in its variant payloads and its block holds methods only.
 Shape = Circle(Num) / Square(Num) { name :: Text }
 ```
 
-Move the data into a payload (`Circle(Num, Text)`) and keep the block to `=` methods.
+Move the data into a payload record (`Circle({ Num, Text })`) and keep the block to `=`
+methods.
 
 ### QN111 — bare expression as a function body
 
@@ -314,3 +315,14 @@ Write every field named (`{ size :: Num, label :: Text }`), or drop the names an
 every field positional (`{ Num, Text }`). The same rule applies to a record literal:
 `{ 1, label = "x" }` is the same error — write `{ size = 1, label = "x" }` or
 `{ 1, "x" }`.
+
+### QN119 — sum-type variant with more than one payload
+
+A sum-type variant's parenthesized list names more than one payload type. A variant
+carries at most one payload; several values travel together as a single record.
+
+```quilon ignore
+Shape = Circle(Num) / Rect(Num, Num)
+```
+
+Combine `Rect`'s two payload types into one record: `Rect({ Num, Num })`.

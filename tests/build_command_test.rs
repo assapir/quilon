@@ -503,6 +503,54 @@ describe = (m :: Mixed) -> Num => <
     assert_eq!(run.status.code(), Some(6), "wrong exit code");
 }
 
+/// A self-referential sum through a RECORD payload (`Node({ Tree, Num, Tree })`) builds
+/// and runs natively exactly like a direct self-payload (`Node(Tree)`) does above — a
+/// record is always heap-allocated, so the self-reference inside it needs no boxing of
+/// its own (`tests/recursive_sum_test.rs` covers the same shape under the JIT).
+#[test]
+fn record_payload_self_reference_builds_and_runs_natively() {
+    let Some(linker) = available_linker() else {
+        eprintln!("skipping record-payload self-reference build gate: need a linker on PATH");
+        return;
+    };
+
+    let src = "\
+Tree = Leaf / Node({ Tree, Num, Tree })
+treeSum = (t :: Tree) -> Num => <
+  t ?
+    | Leaf    => 0
+    | Node(n) => treeSum(n.0) + n.1 + treeSum(n.2)
+>
+^ = () -> Num => <
+  tree = Node({ Node({ Leaf, 1, Leaf }), 2, Leaf })
+  treeSum(tree)
+>
+";
+    let dir = tempfile::Builder::new()
+        .prefix("quilon_record_self_ref_build_")
+        .tempdir()
+        .expect("create temp dir");
+    let ql = dir.path().join("prog.qn");
+    std::fs::write(&ql, src).expect("write temp source");
+
+    let quilon = Path::new(env!("CARGO_BIN_EXE_quilon"));
+    let out = dir.path().join("prog");
+    let mut cmd = Command::new(quilon);
+    cmd.args(["build", ql.to_str().unwrap()])
+        .args(["--linker", linker])
+        .args(["-o", out.to_str().unwrap()]);
+    let build = run_allowing_busy_executable(&mut cmd).expect("run quilon build");
+    assert!(
+        build.status.success(),
+        "`quilon build` failed: {}",
+        String::from_utf8_lossy(&build.stderr)
+    );
+
+    let run = run_allowing_busy_executable(&mut Command::new(&out)).expect("run built binary");
+    // sum(Node({Node({Leaf,1,Leaf}),2,Leaf})) = (0+1+0) + 2 + 0 = 3.
+    assert_eq!(run.status.code(), Some(3), "wrong exit code");
+}
+
 /// Indexing into a self-referencing array field must build natively too, not just JIT.
 #[test]
 fn self_referencing_array_field_indexing_builds_and_runs_natively() {

@@ -551,10 +551,12 @@ impl<'a> Parser<'a> {
                 span: variant_span,
             });
 
-            // Optional payload-type list: `(Num)` or `(Num, Text)`, each field's span tracked alongside it.
+            // Optional payload-type list: `(Num)`, each field's span tracked alongside it. At
+            // most one payload type; several values go in a record instead of a longer list.
             let mut fields = Vec::new();
             let mut this_variant_spans = Vec::new();
             if self.check(&TokenKind::ParenOpen) {
+                let paren_start = self.peek().span.clone();
                 self.advance();
                 let parsed = self.parse_comma_separated(&TokenKind::ParenClose, |parser| {
                     let field_start = parser.peek().span.clone();
@@ -567,6 +569,25 @@ impl<'a> Parser<'a> {
                     this_variant_spans.push(field_span);
                 }
                 self.expect(&TokenKind::ParenClose)?;
+
+                if fields.len() > 1 {
+                    let whole_span = self.span(paren_start.start, self.previous_span().end);
+                    let record_form: Vec<String> =
+                        fields.iter().map(crate::ast::type_label).collect();
+                    return Err(ParseError::new(
+                        Code::VariantMultiplePayloads,
+                        whole_span,
+                        format!(
+                            "variant `{variant_name}` carries {} payloads — a variant carries \
+                             at most one",
+                            fields.len()
+                        ),
+                    )
+                    .help(format!(
+                        "combine them into one record: `{variant_name}({{ {} }})`",
+                        record_form.join(", ")
+                    )));
+                }
             }
 
             field_spans.push(this_variant_spans);

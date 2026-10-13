@@ -1,8 +1,10 @@
 ~ User-defined sum types use `/` as the variant separator. Variants may be
-~ nullary (`Red`) or carry built-in-typed payloads (`Rect(Num, Num)`, `Ok($)`).
-~ Pattern-match with `?`/`|` to dispatch on the variant and bind its payload; the
-~ match must be exhaustive. `Result` (`Ok`/`NotOk`) is just a predefined sum type.
-~ `<< core.test` verifies every result; on success the program exits 0.
+~ nullary (`Red`) or carry built-in-typed payloads (`Rect({ Num, Num })`, `Ok($)`).
+~ A variant carries at most one payload; several values travel together as one
+~ record. Pattern-match with `?`/`|` to dispatch on the variant and bind its
+~ payload; the match must be exhaustive. `Result` (`Ok`/`NotOk`) is just a
+~ predefined sum type. `<< core.test` verifies every result; on success the
+~ program exits 0.
 << core.test
 
 ~ A nullary enum.
@@ -16,13 +18,23 @@ rank = (c :: Color) -> Num => <
     | Blue  => 2
 >
 
-~ A sum type with payload variants (consistent payload types per position).
-Shape = Circle(Num) / Rect(Num, Num)
+~ A sum type with payload variants. Rect's one payload is a positional record,
+~ read back by position (`.0`, `.1`).
+Shape = Circle(Num) / Rect({ Num, Num })
 
 area = (s :: Shape) -> Num => <
   s ?
-    | Circle(r)  => 3 * r * r          ~ ~pi*r^2 (pi ~= 3 here, integer-only)
-    | Rect(w, h) => w * h
+    | Circle(r) => 3 * r * r          ~ ~pi*r^2 (pi ~= 3 here, integer-only)
+    | Rect(p)   => p.0 * p.1
+>
+
+~ A named record payload binds its fields by name instead of position.
+Ticket = Standard(Num) / Discounted({ price :: Num, percentOff :: Num })
+
+payable = (t :: Ticket) -> Num => <
+  t ?
+    | Standard(price) => price
+    | Discounted(d)   => d.price - d.price * d.percentOff / 100
 >
 
 ~ `Ok($)` is the canonical "succeeded, no meaningful value" Result; `NotOk(code)`
@@ -36,8 +48,10 @@ status = (n :: Num) -> Num => <
 >
 
 ^ = () -> $ => <
-  assert(area(Rect(6, 7)), equals(42))   ~ 6 * 7
+  assert(area(Rect({ 6, 7 })), equals(42))   ~ 6 * 7
   assert(rank(Green), equals(1))
+  assert(payable(Standard(80)), equals(80))
+  assert(payable(Discounted({ price = 80, percentOff = 25 })), equals(60))
   assert(status(50), equals(0))          ~ 50 <= 100 -> Ok($) -> 0
   assert(status(200), equals(200))       ~ 200 > 100 -> NotOk(200) -> 200
 >

@@ -36,6 +36,22 @@ fn test_p_dot_0_dot_1_lexes_as_one_number_token_after_the_dot() {
     assert_eq!(tokens[2].text, "0.1");
 }
 
+/// `p.0.size` lexes as `p`, `.`, then ONE number token — the number regex also allows a
+/// TRAILING `.` with no digit after it, so `0.` (followed by a name, not a digit) is
+/// still one token, with no `.` token of its own before `size`. The parser's job is to
+/// read that trailing `.` as the start of `.size` (`Parser::chain_positional_field_
+/// accesses`'s own trailing-dot case); the lexer stays oblivious to what follows.
+#[test]
+fn test_p_dot_0_dot_name_lexes_the_0_dot_as_one_number_token() {
+    let tokens = Lexer::tokenize("p.0.size").unwrap();
+    assert_eq!(tokens[0].kind, TokenKind::Ident);
+    assert_eq!(tokens[1].kind, TokenKind::Dot);
+    assert!(matches!(tokens[2].kind, TokenKind::Number(_)));
+    assert_eq!(tokens[2].text, "0.");
+    assert_eq!(tokens[3].kind, TokenKind::Ident);
+    assert_eq!(tokens[3].text, "size");
+}
+
 #[test]
 fn test_hello_world() {
     let source = r#"

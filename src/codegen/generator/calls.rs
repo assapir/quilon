@@ -319,7 +319,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             return self.generate_set_method(function_name, arguments);
         }
 
-        // Sum-type constructor with a payload (e.g. `Ok(x)`, `Circle(r)`, `Rect(w, h)`):
+        // Sum-type constructor with a payload (e.g. `Ok(x)`, `Circle(r)`, `Rect(p)`):
         // resolved from the variant registry built from the predefined Result and all
         // user `TypeDefinition::Sum` declarations. A constructor is a top-level name, so a
         // member call never reaches one.
@@ -1426,7 +1426,7 @@ impl<'ctx> CodeGenerator<'ctx> {
     /// an outer record variable's name would otherwise still read as that record.
     pub(super) fn receiver_type_name<'a>(&'a self, expression: &'a Expression) -> Option<&'a str> {
         // Any record/sum-typed receiver — a variable, a sum constructor call
-        // (`Rect(6, 7).area()`), a field read, a match result — dispatches by its type name.
+        // (`Rect({ 6, 7 }).area()`), a field read, a match result — dispatches by its type name.
         if let Some(ty) = self.oracle.expression_type(expression) {
             return match ty {
                 Type::Named { name, .. } | Type::Sum { name, .. } => Some(name),

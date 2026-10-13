@@ -384,10 +384,9 @@ pub enum TypeError {
         size: usize,
         span: Span,
     },
-    /// A sum-type variant payload outside the accepted set.
+    /// A sum-type variant's payload outside the accepted set.
     InvalidPayloadType {
         variant: String,
-        position: usize,
         got: Type,
         span: Span,
     },

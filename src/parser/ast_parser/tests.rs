@@ -462,6 +462,26 @@ fn test_parse_one_field_positional_record_type() {
     assert!(result.is_ok());
 }
 
+#[test]
+fn test_parse_sum_variant_with_two_payload_types_is_rejected() {
+    let tokens = Lexer::tokenize("Shape = Circle(Num) / Rect(Num, Num)").unwrap();
+    let Err(err) = parse(&tokens) else {
+        panic!("expected a two-payload variant to be a parse error");
+    };
+    assert_eq!(err.code, Code::VariantMultiplePayloads);
+    assert_eq!(
+        err.help.as_deref(),
+        Some("combine them into one record: `Rect({ Num, Num })`")
+    );
+}
+
+#[test]
+fn test_parse_sum_variant_with_one_record_payload_is_accepted() {
+    let tokens = Lexer::tokenize("Shape = Circle(Num) / Rect({ Num, Num })").unwrap();
+    let result = parse(&tokens);
+    assert!(result.is_ok());
+}
+
 /// `p.0.1` — the lexer reads `.0.1` as `.`, then the single NUMBER token `0.1` (a leading
 /// `.` never changes how a number lexes); the parser must still split that token back into
 /// two field accesses, `.0` then `.1`, never read it as the number `0.1`.
@@ -496,6 +516,73 @@ fn test_parse_chained_positional_field_access_splits_the_dotted_number() {
     assert!(
         matches!(inner_expression.as_ref(), Expression::Identifier { name, .. } if name == "p")
     );
+}
+
+/// `p.0.size` — the number regex also allows a TRAILING `.` with no digit after it, so
+/// `0.` (followed by a name, not a digit) lexes as one NUMBER token too, with no `.`
+/// token left over for the postfix loop to see. The parser must still read `.size` as a
+/// field access on `p.0`, not drop it.
+#[test]
+fn test_parse_positional_field_access_followed_by_a_named_field_access() {
+    let tokens = Lexer::tokenize("^ = () -> Num => < p.0.size >").unwrap();
+    let program = parse(&tokens).unwrap();
+    let Item::FunctionDeclaration(declaration) = &program.items[0] else {
+        panic!("expected a function declaration");
+    };
+    let Expression::Block { statements, .. } = &declaration.body else {
+        panic!("expected a block body");
+    };
+    let Some(Statement::Expression(Expression::FieldAccess {
+        expression: outer_expression,
+        field: outer_field,
+        ..
+    })) = statements.last()
+    else {
+        panic!("expected the block's last statement to be a field access");
+    };
+    assert_eq!(outer_field, "size");
+    let Expression::FieldAccess {
+        expression: inner_expression,
+        field: inner_field,
+        ..
+    } = outer_expression.as_ref()
+    else {
+        panic!("expected the outer field access's receiver to itself be a field access");
+    };
+    assert_eq!(inner_field, "0");
+    assert!(
+        matches!(inner_expression.as_ref(), Expression::Identifier { name, .. } if name == "p")
+    );
+}
+
+/// `p.0.method()` — the same trailing-dot number token, this time followed by a
+/// same-line `(`, must still read as a METHOD CALL on `p.0`, not a dropped name.
+#[test]
+fn test_parse_positional_field_access_followed_by_a_method_call() {
+    let tokens = Lexer::tokenize("^ = () -> Num => < p.0.sum() >").unwrap();
+    let program = parse(&tokens).unwrap();
+    let Item::FunctionDeclaration(declaration) = &program.items[0] else {
+        panic!("expected a function declaration");
+    };
+    let Expression::Block { statements, .. } = &declaration.body else {
+        panic!("expected a block body");
+    };
+    let Some(Statement::Expression(Expression::Call {
+        function,
+        arguments,
+        member_call,
+        ..
+    })) = statements.last()
+    else {
+        panic!("expected the block's last statement to be a call");
+    };
+    assert!(*member_call);
+    assert!(matches!(function.as_ref(), Expression::Identifier { name, .. } if name == "sum"));
+    assert_eq!(arguments.len(), 1);
+    let Expression::FieldAccess { field, .. } = &arguments[0] else {
+        panic!("expected the receiver argument to be a field access");
+    };
+    assert_eq!(field, "0");
 }
 
 #[test]

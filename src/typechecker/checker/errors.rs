@@ -210,8 +210,9 @@ impl TypeError {
                 diagnostic.help("use a position this record actually has")
             }
             TypeError::InvalidPayloadType { .. } => diagnostic.help(
-                "a payload is Num, Text, Bool, $, a declared record, a declared sum, or an \
-                 array/map of one of those"
+                "a payload is Num, Text, Bool, $, a declared record, a declared sum, an \
+                 anonymous record (named or positional) of one of those, or an array/map of \
+                 one of those"
                     .to_string(),
             ),
             TypeError::AtomicBindingNotMutable { name, .. } => {
@@ -799,16 +800,10 @@ impl std::fmt::Display for TypeError {
                     size.saturating_sub(1)
                 )
             }
-            TypeError::InvalidPayloadType {
-                variant,
-                position,
-                got,
-                ..
-            } => {
+            TypeError::InvalidPayloadType { variant, got, .. } => {
                 write!(
                     f,
-                    "`{variant}`'s payload {} is {}, which a sum type cannot carry",
-                    position + 1,
+                    "`{variant}`'s payload is {}, which a sum type cannot carry",
                     type_label(got)
                 )
             }
