@@ -2,35 +2,19 @@
 
 //! Deferred values — the runtime half of Quilon's colorless implicit futures.
 //!
-//! A value-returning `@` primitive does not park the calling fiber and hand back bytes;
-//! it *launches* the IO on a background fiber and returns a **deferred value** immediately. The
-//! value flows through the program as an ordinary one (a `Text`, here) and is *forced*
-//! only when a strict primitive is about to read its concrete bytes. Forcing parks the
-//! current fiber until the producing fiber has stored the result, then reads it — memoized,
-//! so a second force is O(1).
+//! A value-returning `@` primitive launches its IO on a background fiber and returns a
+//! deferred value immediately, which flows through the program as an ordinary one until a
+//! strict primitive forces it: park until the producer stores a result, then read it
+//! (memoized, so a second force is O(1)). A `Text`'s representation is hybrid: the `QnSlice`
+//! `{ ptr, i64 }` carries a real byte length (`>= 0`) when ready, or [`DEFERRED_SENTINEL`]
+//! (`-1`) and the deferred pointer when not — the two are unambiguous since a real length is
+//! never negative. `Deferred`'s cell is GC-allocated and held live on a scanned stack by both
+//! the producer and the forcing fiber across their respective parks.
 //!
-//! [`__read_launch`] backs `@read` (read one line from stdin): it allocates a `Deferred`,
-//! spawns a reader fiber that parks on stdin readiness and fills the cell, and returns the
-//! deferred [`QnSlice`] representation. [`__force_text`] is the force: park-until-ready,
-//! then return the stored bytes.
-//!
-//! Representation (hybrid, per the concurrency design): a `Text` is a `{ ptr, i64 }`
-//! `QnSlice`. A *ready* `Text` carries its byte length (`>= 0`) in the second field; a
-//! *deferred* `Text` carries [`DEFERRED_SENTINEL`] (`-1`) there and the deferred pointer in
-//! the first — a real byte length is never negative, so the two are unambiguous. The code
-//! generator forces exactly at the strict-use sites the deferred-taint pass marks, and only
-//! for values that pass can be deferred; pure code never sees a sentinel and pays nothing.
-//!
-//! GC: the deferred cell is GC-allocated so its stored `data` pointer keeps the result bytes
-//! alive; the reader fiber holds the cell on its (GC-scanned) stack from launch until it
-//! returns, and the forcing fiber holds it across the park — so a collection at any point in
-//! the deferred lifetime finds it. (A parked fiber's stack is scanned by the collector's
-//! push-roots callback; `scheduler`/`net` tests prove that scanning directly.)
-//!
-//! Stdin is a single serial stream, so all reads are serialized through a **gate**: a reader
-//! acquires the gate before it touches fd 0 and releases it when done, so at most one reader
-//! ever owns the descriptor and the shared line buffer at a time. Two concurrent `@readStdin`
-//! calls therefore read consecutive lines in launch order rather than racing the fd.
+//! Stdin is one descriptor for the whole process: a gate serializes every reader through it,
+//! by ticket rather than arrival order, so concurrent `@readStdin` calls read consecutive
+//! lines in launch order (see [`StdinGate`]'s own doc for why arrival order is not enough
+//! across real OS threads).
 
 use crate::mem::{__alloc, QnSlice, alloc_text};
 use crate::reactor::ReactorWaker;
@@ -67,10 +51,9 @@ pub struct QnResult {
 pub(crate) const RESULT_OK_TAG: i8 = 0;
 /// The `NotOk` discriminant — the code generator's built-in Result tag for the failure variant.
 pub(crate) const RESULT_NOTOK_TAG: i8 = 1;
-/// The tag a DEFERRED `Result` carries in place of `Ok`/`NotOk`, with the deferred cell pointer
-/// stashed in its slot's `data` field; the code generator's force check compares against it.
-/// Distinct from every real discriminant, so a ready `Result` is never mistaken for a deferred
-/// one.
+/// The tag a deferred `Result` carries in place of `Ok`/`NotOk`, with the deferred cell pointer
+/// stashed in its slot's `data` field. Distinct from every real discriminant, so a ready
+/// `Result` is never mistaken for a deferred one.
 pub const DEFERRED_RESULT_TAG: i8 = -1;
 
 impl QnResult {
@@ -104,9 +87,8 @@ impl QnResult {
     }
 }
 
-/// A deferred value's lifecycle. Carrying the resolved value INSIDE `Ready` makes
-/// "ready but value absent" unrepresentable — a whole class of bug a bool/flag plus a
-/// separate value field would allow. (Distinct from [`DEFERRED_SENTINEL`], which is the
+/// A deferred value's lifecycle. Carrying the resolved value inside `Ready` makes
+/// "ready but value absent" unrepresentable. (Distinct from [`DEFERRED_SENTINEL`], which is the
 /// C-ABI representation tag, not a lifecycle state.)
 enum DeferredState<T> {
     /// The producer has not finished yet.
@@ -119,16 +101,10 @@ enum DeferredState<T> {
     Faulted(String),
 }
 
-/// The reactor tokens of every fiber — on any worker — currently parked waiting on a
-/// condition, alongside the [`ReactorWaker`] that wakes each one's own worker. Woken through
-/// the same mechanism a blocking-call's completion already uses (`crate::blocking`), so a
-/// cross-worker wake costs no more than that.
-///
-/// Carries no lock of its own: it is always a field of a structure some OTHER `Mutex`
-/// already guards (`DeferredInner` below; the stdin gate's own state), and THAT lock is what
-/// makes [`register`](Self::register)-then-park atomic with respect to a concurrent
-/// [`wake_all`](Self::wake_all) — a wake landing between a waiter's own condition check and
-/// its registration is impossible only because both run while the same lock is held.
+/// Reactor tokens of fibers, on any worker, parked waiting on a condition, woken through the
+/// same mechanism `crate::blocking`'s completion already uses. Carries no lock of its own —
+/// it is always a field of a structure some other `Mutex` already guards, and that lock is
+/// what makes `register`-then-park atomic with a concurrent `wake_all`.
 #[derive(Default)]
 struct Waiters(Vec<(ReactorWaker, Token)>);
 
@@ -156,13 +132,9 @@ struct DeferredInner<T> {
 }
 
 /// A deferred value's cell — the generic core every value-returning `@` primitive shares.
-/// GC-allocated so any GC pointer inside a `Ready` value stays scannable. The producer that
-/// resolves it and a fiber forcing it may run on DIFFERENT workers (placement puts a
-/// freestanding launch's producer on whichever worker has the shortest run queue, which need
-/// not be the launching fiber's own), so the state is `Mutex`-guarded rather than the plain
-/// field a single cooperative thread could get away with — one lock per force/resolve, never
-/// held across a park. Opaque to the code generator, which only ever carries the cell
-/// pointer around and hands it back to a `force` intrinsic.
+/// GC-allocated so a GC pointer inside a `Ready` value stays scannable. The producer and the
+/// fiber forcing it may run on different workers (placement is not tied to the launching
+/// fiber's own), so the state is `Mutex`-guarded, never held across a park.
 pub(crate) struct Deferred<T> {
     inner: Mutex<DeferredInner<T>>,
 }
@@ -247,12 +219,11 @@ fn register_join<T: 'static>(cell: *mut Deferred<T>) {
     });
 }
 
-/// Launch `producer` on the CALLING fiber's own worker and return its deferred cell
-/// immediately — eager launch: the producer runs whether or not the result is ever forced.
-/// For a launch whose producer is tied to a resource already scoped to a specific worker: an
-/// accepted connection's own reads (the connection's socket is registered with its handler's
-/// worker's reactor, so a read on it must run there too), and `net.@tcpServe`'s accept loop
-/// itself, held to the worker `net.@tcpServe` was called from (see `net::server`'s own doc).
+/// Launch `producer` on the calling fiber's own worker and return its deferred cell
+/// immediately — the producer runs whether or not the result is ever forced. For a launch
+/// whose producer is tied to a resource already scoped to a specific worker: an accepted
+/// connection's own reads, and `net.@tcpServe`'s accept loop itself (see `net::server`'s own
+/// doc).
 pub(crate) fn launch_here<T: Send + 'static>(
     producer: impl FnOnce() -> T + 'static,
 ) -> *mut Deferred<T> {
@@ -263,11 +234,9 @@ pub(crate) fn launch_here<T: Send + 'static>(
 }
 
 /// Launch `producer` on whichever worker has the shortest run queue right now — every
-/// freestanding value-returning `@` primitive the deferral pass registers a launch scope
-/// around (`@readStdin`, `@tcpRequest`), which has no worker of its own to stay on. `producer`
-/// must be `Send`: it is built on the calling thread but never runs there — see
-/// `scheduler::spawn_placed`'s own doc for why that is sound despite `Coroutine` itself
-/// being `!Send`.
+/// freestanding value-returning `@` primitive (`@readStdin`, `@tcpRequest`), which has no
+/// worker of its own to stay on. `producer` must be `Send`: built on the calling thread but
+/// never run there — see `scheduler::spawn_placed`'s own doc.
 pub(crate) fn launch_placed<T: Send + 'static>(
     producer: impl FnOnce() -> T + Send + 'static,
 ) -> *mut Deferred<T> {
@@ -319,11 +288,10 @@ pub(crate) unsafe fn force<T: Copy>(cell: *mut Deferred<T>) -> T {
 /// join needs: it runs to completion whether or not anything ever forces it. `None` if it
 /// resolved to a value, `Some(report)` (the fully rendered fault text) if it faulted.
 ///
-/// `pub(crate)` (rather than the join thunk's own private helper) so a launch whose RETURN
-/// VALUE is never deferred — `net.@tcpServe`'s accept loop, registered directly with
-/// `launch_scope` rather than through [`launch_deferred_text`]/[`launch_deferred_result`] —
-/// can wait out its own background work the same way: `Server.kill` calls this on the accept
-/// loop's cell to know it has actually stopped before returning.
+/// `pub(crate)` so a launch whose return value is never deferred — `net.@tcpServe`'s accept
+/// loop, registered directly with `launch_scope` — can wait out its own background work the
+/// same way: `Server.kill` calls this on the accept loop's cell to know it has actually
+/// stopped before returning.
 ///
 /// # Safety
 /// `cell` is a live deferred for the whole wait (the registering `launch_here`/`launch_placed`
@@ -354,11 +322,9 @@ impl<T> DeferredInner<T> {
 }
 
 /// Launch a `Text`-producing IO on a background fiber, placed on the shortest-queue worker,
-/// and return its DEFERRED `Text` representation (`{ deferred, -1 }`) immediately — the
-/// C-ABI wrapper over [`launch_placed`] that every FREESTANDING value-returning `@`
-/// primitive shares (`@readStdin`, `@tcpRequest`), so none re-copies the sentinel-tagging.
-/// The result threads through the program as an ordinary `Text`; the code generator forces
-/// it (via [`__force_text`]) at its strict-use site.
+/// and return its deferred `Text` representation (`{ deferred, -1 }`) immediately — the
+/// C-ABI wrapper over [`launch_placed`] every freestanding value-returning `@` primitive
+/// shares (`@readStdin`, `@tcpRequest`).
 pub(crate) fn launch_deferred_text(producer: impl FnOnce() -> QnSlice + Send + 'static) -> QnSlice {
     let cell = launch_placed(producer);
     QnSlice {
@@ -367,11 +333,10 @@ pub(crate) fn launch_deferred_text(producer: impl FnOnce() -> QnSlice + Send + '
     }
 }
 
-/// Like [`launch_deferred_text`], but placed on the CALLING fiber's own worker
-/// ([`launch_here`]) rather than the shortest queue — `Connection.@read()`'s own launch: the
-/// connection's socket is already registered with a specific worker's reactor (its
-/// handler's own, set once at accept time), so the read must run there too, not wherever
-/// happens to have the shortest queue right now.
+/// Like [`launch_deferred_text`], but placed on the calling fiber's own worker
+/// ([`launch_here`]) rather than the shortest queue — `Connection.@read()`'s own launch: its
+/// socket is already registered with a specific worker's reactor, so the read must run there
+/// too.
 pub(crate) fn launch_deferred_text_here(producer: impl FnOnce() -> QnSlice + 'static) -> QnSlice {
     let cell = launch_here(producer);
     QnSlice {
@@ -381,13 +346,10 @@ pub(crate) fn launch_deferred_text_here(producer: impl FnOnce() -> QnSlice + 'st
 }
 
 /// Launch a `Result`-producing IO on a background fiber, placed on the shortest-queue
-/// worker, and return its DEFERRED `Result` representation immediately — the C-ABI wrapper
+/// worker, and return its deferred `Result` representation immediately — the C-ABI wrapper
 /// over [`launch_placed`] for a value-returning `@` primitive whose result is a `Result`
-/// (`@tcpRequest`), so its Ok/NotOk wrapping and force plumbing are shared, not re-copied.
-/// The deferred representation is a `Result` value tagged [`DEFERRED_RESULT_TAG`] with the
-/// deferred cell in its slot's `data` field; the result threads through the program as an
-/// ordinary `Result` and the code generator forces it (via [`__force_result`]) at the strict
-/// use that reads it.
+/// (`@tcpRequest`). Tagged [`DEFERRED_RESULT_TAG`] with the deferred cell in its slot's
+/// `data` field.
 pub(crate) fn launch_deferred_result(
     producer: impl FnOnce() -> QnResult + Send + 'static,
 ) -> QnResult {
@@ -422,9 +384,8 @@ pub extern "C" fn __force_result(out: *mut QnResult, deferred_ptr: *const c_void
 }
 
 /// `@readStdin()`: launch a background read of one line from stdin and return the deferred
-/// `Text` immediately (the calling fiber does not park here). A THIN wrapper over the shared
-/// `launch_deferred_text`, with a stdin-specific producer. `site` is the call's own location,
-/// used to frame a fault report; it may be null if unknown.
+/// `Text` immediately. `site` is the call's own location, used to frame a fault report; it
+/// may be null if unknown.
 ///
 /// # Safety contract (upheld by the compiler)
 /// `site` is null or points to a [`QnSite`] constant that outlives the program (the code
@@ -436,11 +397,10 @@ pub extern "C" fn __read_launch(site: *const QnSite) -> QnSlice {
     // producer on another worker), the same way `net::client`'s own address/request
     // pointers cross a `spawn` boundary.
     let site = site as usize;
-    // Taken HERE, synchronously, on the launching fiber, before the producer is even built —
-    // not inside the producer's own body, which only starts running once placement has
-    // handed it to some worker and that worker gets around to it. See `take_stdin_ticket`'s
-    // own doc for why ticket order (fixed now) rather than gate-arrival order (decided later,
-    // by racing OS thread scheduling) is what "launch order" actually requires.
+    // Taken synchronously, on the launching fiber, before the producer is even built — not
+    // inside the producer's own body, which only starts once placement hands it to some
+    // worker. See `take_stdin_ticket`'s own doc for why ticket order, not gate-arrival order,
+    // is what "launch order" requires.
     let ticket = take_stdin_ticket();
     launch_deferred_text(move || read_stdin_text(site as *const QnSite, ticket))
 }
@@ -486,22 +446,14 @@ fn fail_read(site: *const QnSite, error: &io::Error) -> ! {
     )
 }
 
-/// fd 0 is one descriptor for the whole PROCESS, not one per worker — a gate that serialized
-/// reads only among fibers on the SAME worker would let a fiber on one worker and a fiber on
-/// another both believe they hold it at once and race the same descriptor. One process-wide
-/// `Mutex`, not a `Worker` field or a thread-local, covers every worker alike.
+/// fd 0 is one descriptor for the whole process, not one per worker, so one process-wide
+/// `Mutex` covers every worker alike rather than a per-worker field.
 ///
-/// A TICKET lock, not a plain busy flag: two concurrent `@readStdin` calls must read
-/// consecutive lines in LAUNCH order, and launch order is decided once, at the moment
-/// `__read_launch` runs — before its producer fiber even exists, let alone which worker
-/// placement hands it to or when that worker's OS thread actually gets scheduled to run it
-/// for the first time. A plain "whoever reaches the gate first, or whoever a broadcast wake
-/// happens to let run first, wins" gate only preserved launch order by accident under the
-/// original single-threaded scheduler (one ready queue, so whichever fiber's turn came first
-/// in program order was also, unavoidably, whichever one the scheduler ran first) — across
-/// real OS threads racing to reach the gate, or racing a broadcast wake to re-acquire it,
-/// that accident stops holding. Handing out a ticket at launch time and serving strictly in
-/// ticket order removes the race entirely: order is fixed before any concurrency starts.
+/// A ticket lock, not a plain busy flag: launch order is decided once, when `__read_launch`
+/// hands out a ticket, before the producer fiber exists or placement has picked its worker.
+/// A "whoever reaches the gate first" flag only preserved launch order by accident under the
+/// old single-threaded scheduler's one ready queue; racing real OS threads, that accident
+/// stops holding, so order is instead fixed up front and served strictly in ticket order.
 struct StdinGate {
     next_ticket: u64,
     /// The one ticket currently allowed through.
@@ -583,7 +535,7 @@ fn read_stdin_line() -> io::Result<Vec<u8>> {
 }
 
 /// Read one line from `fd` into `buffer`, parking the fiber (via [`read_once`]) until a
-/// newline arrives or the stream ends. Returns the line WITHOUT its trailing newline (a
+/// newline arrives or the stream ends. Returns the line without its trailing newline (a
 /// trailing `\r` is dropped too). At end-of-input with nothing buffered, returns an empty
 /// `Vec` — the documented end-of-input value (`@read` yields an empty `Text` there). Bytes
 /// past the newline stay in `buffer` for the next call.
@@ -613,7 +565,7 @@ fn read_line_from(fd: i32, buffer: &mut Vec<u8>) -> io::Result<Vec<u8>> {
 /// (stdin, accumulating until a newline) and `@streamFile` (`crate::io`, chunk-buffered) each
 /// build their own loop over it.
 ///
-/// The reactor registration is LAZY: it reads first and only registers `fd` (and parks) on the
+/// The reactor registration is lazy: it reads first and only registers `fd` (and parks) on the
 /// first `WouldBlock`. So a source that is ready right away — piped data already buffered, a
 /// regular file (always), or a non-pollable fd like `/dev/null` that returns data/EOF at once —
 /// never touches `epoll`, which rejects such fds. Only a genuinely-not-ready pollable source
@@ -759,7 +711,7 @@ mod tests {
     #[test]
     fn deferred_read_launches_and_forces_the_line() {
         // Proves the whole value-returning path: `@read` launches a background reader that
-        // must PARK on stdin readiness (the writer is delayed), a separate fiber FORCES the
+        // must park on stdin readiness (the writer is delayed), a separate fiber forces the
         // deferred value (parking on the deferred), and the read line flows through.
         static GOT: Mutex<Vec<u8>> = Mutex::new(Vec::new());
         GOT.lock().unwrap().clear();
@@ -794,7 +746,7 @@ mod tests {
     #[test]
     fn force_is_memoized_after_ready() {
         // Forcing the same deferred value twice returns the same bytes, and the second force
-        // never parks (the cell is already READY).
+        // never parks (the cell is already ready).
         static FIRST: Mutex<Vec<u8>> = Mutex::new(Vec::new());
         static SECOND: Mutex<Vec<u8>> = Mutex::new(Vec::new());
         FIRST.lock().unwrap().clear();

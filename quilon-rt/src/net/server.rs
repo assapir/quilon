@@ -8,33 +8,22 @@
 //! `generate_at_primitive` and its `close`/`kill` interception ahead of ordinary method
 //! dispatch).
 //!
-//! **Ownership across workers.** A `Connection` handle's `ConnectionState` — the live
-//! `TcpStream`, registered with ITS OWN worker's reactor — is only ever touched from the
-//! worker that accepted it: that connection's own handler fiber (placed there once, at
-//! accept time — see `place_connection`), or the runtime's own auto-close once that
-//! fiber returns. It lives in that worker's own `crate::worker::Worker::connections` table,
-//! reached only by that worker's own thread. `Server.kill`, which may run on any worker
-//! (a handler answering by calling `server.kill()` on its own server is the deliverable's
-//! own pattern), never reaches into another worker's table for this: it force-closes a
-//! still-open connection through `ServerState::open_connections` instead, an
-//! `Arc<Mutex<..>>` map of every open connection's id to its raw descriptor alone —
-//! `shutdown(2)` needs no more than that, and acts on the descriptor directly rather than
-//! the worker-owned `RefCell`-guarded stream (see `force_shutdown_connection`).
+//! **Ownership across workers.** A connection's `ConnectionState` — the live `TcpStream`,
+//! registered with its own worker's reactor — is touched only from the worker that accepted
+//! it (its handler fiber, or the runtime's own auto-close once that fiber returns), in that
+//! worker's own `connections` table. `Server.kill`, which may run on any worker, never
+//! reaches into another worker's table: it force-closes a still-open connection through
+//! `ServerState::open_connections`, a shared id-to-raw-descriptor map `shutdown(2)` needs no
+//! more than, rather than the worker-owned stream.
 //!
-//! A `Server` handle's `ServerState` is reachable from any worker the same way: its
-//! `stopping`/`in_flight`/`open_connections` are `Arc`/atomic, and the table mapping every
-//! live server's id to its `ServerState` is `crate::placement::Registry::servers` — shared
-//! by every worker of this run, not owned by whichever one called `net.@tcpServe`.
+//! A `Server`'s `ServerState` is reachable from any worker the same way: its fields are
+//! `Arc`/atomic, and the table mapping every live server's id to its state is
+//! `crate::placement::Registry::servers`, shared by every worker of this run.
 //!
-//! `net.@tcpServe`'s accept loop is a launch registered directly with `launch_scope`
-//! (through the generic `deferred::launch_here`, whose own return value — the deferred cell
-//! pointer — is kept on `ServerState` rather than exposed to Quilon, since `@tcpServe`'s
-//! OWN return value, the `Server` handle, is a ready `Num` built by codegen, never
-//! deferred), placed on the SAME worker `net.@tcpServe` was called from, never moved —
-//! `launch_here`, not the shortest-queue `launch_placed` every accepted connection's own
-//! handler fiber uses. `Server.kill` settles that same cell before returning, so the
-//! enclosing block's own join finds it already done. Built on `super::TcpListener` and
-//! [`super::TcpStream`], the plumbing shared with [`super::client`].
+//! `net.@tcpServe`'s accept loop is a launch registered with `launch_scope`, placed
+//! (`launch_here`, not the shortest-queue `launch_placed` a handler fiber uses) on the same
+//! worker `net.@tcpServe` was called from, never moved. `Server.kill` settles that same cell
+//! before returning, so the enclosing block's own join finds it already done.
 
 use super::{TcpListener, TcpStream, bytes_to_string, copy_bytes, resolve};
 use crate::deferred::{launch_deferred_text_here, launch_here, settle};
@@ -71,14 +60,13 @@ pub(crate) struct ServerState {
     stopping: Arc<AtomicBool>,
     in_flight: Arc<AtomicUsize>,
     /// Every currently open connection this server accepted, id to raw descriptor —
-    /// deliberately NOT the worker-owned `ConnectionState` table: `Server.kill` may run on
+    /// deliberately not the worker-owned `ConnectionState` table: `Server.kill` may run on
     /// a different worker than any given connection's own, and this is all it needs to
     /// force-close one (see `force_shutdown_connection`).
     open_connections: Arc<Mutex<HashMap<u64, RawFd>>>,
     /// The accept loop's own deferred cell, from the `deferred::launch_here` call that
     /// started it — never exposed to Quilon; `Server.kill` [`settle`]s it so the enclosing
-    /// block's own join (over the SAME cell, registered by that same launch) finds it
-    /// already done.
+    /// block's own join (over that same cell) finds it already done.
     accept_loop: *mut crate::deferred::Deferred<()>,
     /// Where the listener is actually bound — used to wake the accept loop's own parked
     /// `accept()` on `kill` (see [`wake_accept_loop`]).
@@ -166,7 +154,7 @@ pub extern "C" fn __tcp_serve_launch(
     let loop_in_flight = Arc::clone(&in_flight);
     let loop_open_connections = Arc::clone(&open_connections);
     // `launch_here`, not `launch_placed`: the accept loop stays on the worker that called
-    // `net.@tcpServe` (see the module doc) — only each ACCEPTED CONNECTION's own handler
+    // `net.@tcpServe` (see the module doc) — only each accepted connection's own handler
     // fiber is placed by shortest queue, in `place_connection` below.
     let accept_loop = launch_here(move || {
         loop {
@@ -215,13 +203,12 @@ pub extern "C" fn __tcp_serve_launch(
 
 /// Place an accepted connection on the worker with the shortest run queue right now: assign
 /// its handle id and record it (and its raw descriptor) in the server's shared
-/// `open_connections` map SYNCHRONOUSLY, on the accept loop's own worker — so `in_flight`
-/// and the open-connection set are accurate immediately, before the placed job even runs,
-/// exactly as they were when this all ran on one worker — then place the actual
-/// registration and handler call as a fiber on the chosen worker
-/// (`crate::scheduler::spawn_placed`). Auto-closes the connection once the handler returns
-/// (`close-after-handler is the runtime's`, whether or not the handler closed it itself) and
-/// only then leaves `in_flight`, so `Server.kill`'s wait sees this handler as in-flight for
+/// `open_connections` map synchronously, on the accept loop's own worker — so `in_flight`
+/// and the open-connection set are accurate immediately, before the placed job even runs —
+/// then place the actual registration and handler call as a fiber on the chosen worker
+/// (`crate::scheduler::spawn_placed`). Auto-closes the connection once the handler returns,
+/// whether or not the handler closed it itself, and only then leaves `in_flight`, so
+/// `Server.kill`'s wait sees this handler as in-flight for
 /// its whole run, not just until its connection closes.
 fn place_connection(
     raw_stream: mio::net::TcpStream,
@@ -266,7 +253,7 @@ fn place_connection(
             );
         });
 
-        // Registered for the whole handler call so `Server.kill`, if THIS handler is the
+        // Registered for the whole handler call so `Server.kill`, if this handler is the
         // one that calls it, can tell it is being asked to wait on its own fiber and
         // exclude it — see `wait_for_in_flight`.
         let fiber_id = current_fiber_id().expect("a spawned fiber has an id while it runs");
@@ -302,11 +289,11 @@ fn close_connection(id: u64) {
 
 /// Shut connection `id` down at the descriptor level, without touching the owning worker's
 /// `connections` table at all — `Server.kill`'s force-close of a connection still open past
-/// its grace period, callable from ANY worker (not necessarily the one that accepted `id`;
+/// its grace period, callable from any worker (not necessarily the one that accepted `id`;
 /// see the module doc's ownership-rule paragraph), reading only the raw descriptor `kill`'s
 /// own `ServerState::open_connections` map already carries. `shutdown(2)` needs no more:
 /// acting on the descriptor directly is what lets it interrupt a handler fiber parked
-/// mid-read/write on this same connection (on ITS OWN worker, unreachable from here) rather
+/// mid-read/write on this same connection (on its own worker, unreachable from here) rather
 /// than deadlock behind it — the parked side typically wakes with EOF or a write error and
 /// finishes on its own; the descriptor itself is only actually closed once that side (or a
 /// later `Connection.close()`) drops the `TcpStream`, on its own worker.
@@ -422,7 +409,7 @@ pub extern "C" fn __connection_close(connection_id: f64) {
 
 /// Wake a server's accept loop out of a parked `accept()` with nothing pending, so it
 /// notices `stopping` promptly instead of waiting for the next real client (which may never
-/// come): connect to the listener's own bound port from loopback, in the SAME address
+/// come): connect to the listener's own bound port from loopback, in the same address
 /// family it bound (`127.0.0.1` for an IPv4 listener, `::1` for an IPv6 one) — connecting
 /// in the wrong family fails outright (nothing is listening there), leaving the accept
 /// loop parked forever with no genuine client to wake it either, which is exactly the hang
@@ -465,8 +452,8 @@ fn bounded_duration(seconds: f64) -> Duration {
 }
 
 /// Park the calling fiber, in short sleeps, until `server`'s `in_flight` count reaches zero
-/// — or, when the CALLING fiber is itself one of `server`'s own handlers (the deliverable's
-/// own pattern: a handler answers by calling `server.kill()`), until it reaches one, since
+/// — or, when the calling fiber is itself one of `server`'s own handlers (a handler answers
+/// by calling `server.kill()`), until it reaches one, since
 /// that one is this handler's own count and it cannot leave `in_flight` — this call, and so
 /// the handler itself, has not returned yet — until `kill` does. Without this exclusion, a
 /// `kill` called from inside a handler always burns its whole grace period, every time.
@@ -650,7 +637,7 @@ mod tests {
     fn accept_and_handler_per_connection_with_two_concurrent_clients() {
         // Each accepted connection reads one message and echoes it straight back, then
         // returns (letting the runtime auto-close it) — proving the accept loop hands each
-        // connection to its OWN fiber, running two clients' exchanges concurrently rather
+        // connection to its own fiber, running two clients' exchanges concurrently rather
         // than serializing them.
         extern "C" fn echo_handler(connection_id: f64, _environment: *mut c_void) -> u8 {
             let bytes = force_connection_read(connection_id);
@@ -831,9 +818,9 @@ mod tests {
 
     #[test]
     fn kill_called_from_its_own_handler_does_not_wait_out_the_whole_grace_period() {
-        // A handler that answers by calling `server.kill(seconds)` on its OWN server — the
-        // deliverable's own pattern — is itself still "in flight" until that call returns,
-        // so without excluding the calling fiber from its own wait, `kill` would always
+        // A handler that answers by calling `server.kill(seconds)` on its own server is
+        // itself still "in flight" until that call returns, so without excluding the
+        // calling fiber from its own wait, `kill` would always
         // burn its whole grace period. Proven by timing the whole run: an unfixed wait
         // would take (at least) the 5-second grace period below; the fix returns almost
         // at once, since nothing else is in flight.

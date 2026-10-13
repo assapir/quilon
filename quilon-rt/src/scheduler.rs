@@ -393,16 +393,14 @@ pub fn spawn<F: FnOnce() + 'static>(f: F) {
     spawn_with_stack(FIBER_STACK_SIZE, f);
 }
 
-/// Spawn `f` as a new fiber, placed on the worker with the shortest run queue right now
-/// (ties to the lowest index) rather than the calling fiber's own worker —
-/// `crate::deferred::launch_placed` (every freestanding value-returning `@` primitive) and
-/// an accepted connection's own handler fiber (`crate::net::server`) both place this way.
-/// `f` must be `Send`: nothing has run on the fiber's stack when it crosses to the worker
-/// that will actually run it (see [`UnstartedFiber`]'s own doc for why that makes a manual
-/// `Send` sound despite `Coroutine` itself being `!Send`). Panics if no scheduler is active.
+/// Spawn `f` on the worker with the shortest run queue right now (see [`placement`]'s own
+/// doc) — `deferred::launch_placed` and an accepted connection's own handler fiber
+/// (`net::server`) both place this way. `f` must be `Send`: see [`UnstartedFiber`]'s own
+/// doc. Panics if no scheduler is active.
 pub(crate) fn spawn_placed<F: FnOnce() + Send + 'static>(f: F) {
     let fiber = prepare_fiber(FIBER_STACK_SIZE, f);
     with_worker(|worker| {
+        ensure_helpers_started(&worker.registry);
         let target = worker.registry.shortest_queue();
         worker
             .registry
@@ -821,24 +819,16 @@ fn start_worker(index: usize, registry: &Arc<placement::Registry>) {
     crate::worker::install(index, Arc::clone(registry), reactor);
 }
 
-/// The leader's whole run: worker 0, the one `^`/`main` runs on. Waits at `barrier` until
-/// every worker of this run has published itself (so a launch `main` makes on its very
-/// first statement never races a helper that has not started `crate::placement::Registry`
-/// yet), seeds `main` as the first fiber, then loops exactly as a single-worker scheduler
-/// always has — drain the ready queue, drain placed work, block until the nearest wake
-/// deadline, sweep due timers/deadlines — stopping once genuinely idle. By the time that
-/// happens, every launch `main`'s own call tree made has already settled (a block joins its
-/// own launches before returning, transitively, all the way out to `^`), even the ones
-/// placed on another worker's queue — a join parks on the cross-worker mechanism
-/// `crate::deferred` uses, so the leader cannot reach here first. This is why the leader
-/// alone decides when the whole program is done; a helper never does (see [`run_helper`]).
-fn run_leader(
-    registry: Arc<placement::Registry>,
-    barrier: Arc<Barrier>,
-    main: impl FnOnce() + 'static,
-) {
+/// The leader's whole run: worker 0, the one `^`/`main` runs on. Publishes itself and runs
+/// alone — no helper exists yet (see [`ensure_helpers_started`]) — seeding `main` as the
+/// first fiber, then looping exactly as a single-worker scheduler always has until
+/// genuinely idle. The leader alone decides the program is done: every launch `main`'s call
+/// tree made, wherever it was placed, has already settled by the time its own queue and
+/// parked state are empty, since a join parks on the cross-worker mechanism
+/// `crate::deferred` uses rather than returning early. A helper never decides this on its
+/// own (see [`run_helper`]).
+fn run_leader(registry: Arc<placement::Registry>, main: impl FnOnce() + 'static) {
     start_worker(0, &registry);
-    barrier.wait();
     spawn_with_stack(SEED_STACK_SIZE, main);
 
     loop {
@@ -854,14 +844,11 @@ fn run_leader(
     crate::worker::teardown();
 }
 
-/// A helper worker's whole run: everything the leader's loop does except decide the
-/// program is over on its own — idle here means only that THIS worker has nothing to do
-/// right now, not that the program has finished, so it blocks waiting for more placed work
-/// instead of stopping, until [`placement::Registry::request_shutdown`] (called once, by
-/// the leader, after its own loop ends) asks it to. Registers with the collector the way
-/// `crate::blocking`'s pool threads do, and releases its GC fiber-scan registry slot
-/// ([`gc::end_thread`]) once its loop ends — this thread is one-shot, spawned and joined
-/// within a single `run` call, unlike the leader's own OS thread.
+/// A helper worker's whole run: the leader's own loop, except idle means only that this
+/// worker has no work right now — it waits for more instead of stopping, until
+/// [`placement::Registry::request_shutdown`] asks it to. Registers with the collector like
+/// `crate::blocking`'s pool threads; releases its GC scan-registry slot ([`gc::end_thread`])
+/// once done, since unlike the leader's thread it is one-shot.
 fn run_helper(index: usize, registry: Arc<placement::Registry>, barrier: Arc<Barrier>) {
     let _gc_thread = crate::mem::register_thread();
     start_worker(index, &registry);
@@ -882,31 +869,46 @@ fn run_helper(index: usize, registry: Arc<placement::Registry>, barrier: Arc<Bar
     gc::end_thread();
 }
 
-/// How many times [`spawn_worker_thread`] retries a failed spawn before giving up. 40
-/// attempts 25ms apart is a full second of retrying — resource pressure worth absorbing
-/// (a burst of other processes on the same machine each starting their own workers, this
-/// crate's own test suite among them) clears well within that; a full second still failing
-/// means the machine is genuinely out of whatever the OS refused (threads, memory), not
-/// momentarily busy.
+/// Spawn every helper the first time any fiber places a launch — a program that never
+/// launches anything never pays for them. Runs once per `run` call no matter how many
+/// fibers race into it (`Registry::start_helpers_once`); blocks (a `Barrier` the spawned
+/// helpers also wait on) until every helper has published itself, so the placement decision
+/// that triggered this never reads an unpublished slot.
+fn ensure_helpers_started(registry: &Arc<placement::Registry>) {
+    let worker_count = registry.worker_count();
+    if worker_count <= 1 {
+        return;
+    }
+    registry.start_helpers_once(|| {
+        let barrier = Arc::new(Barrier::new(worker_count));
+        let handles: Vec<_> = (1..worker_count)
+            .map(|index| {
+                let registry = Arc::clone(registry);
+                let barrier = Arc::clone(&barrier);
+                spawn_worker_thread(index, move || {
+                    let registry = Arc::clone(&registry);
+                    let barrier = Arc::clone(&barrier);
+                    move || run_helper(index, registry, barrier)
+                })
+            })
+            .collect();
+        registry.set_helpers(handles);
+        barrier.wait();
+    });
+}
+
+/// Retries 40 times, 25ms apart, before giving up — a burst of other processes each
+/// starting their own workers at once (this crate's own test suite among them) clears
+/// within that; still failing means the machine is genuinely out of threads or memory.
 const WORKER_SPAWN_ATTEMPTS: u32 = 40;
 
-/// How long [`spawn_worker_thread`] waits between retries.
 const WORKER_SPAWN_RETRY_DELAY: Duration = Duration::from_millis(25);
 
-/// Spawn helper worker `index`'s OS thread, calling `new_job` fresh for each attempt (a
-/// factory rather than a single closure: `Builder::spawn` consumes its closure even on
-/// failure, so retrying needs a new one each time — `new_job` is typically just "clone a
-/// couple of `Arc`s and move them into a closure", cheap to call repeatedly). Retries a
-/// handful of times with a short pause on failure before giving up.
-///
-/// `std::thread::Builder::spawn` fails only when the OS refuses to create a new thread
-/// (`EAGAIN`-style resource pressure) — ordinarily never, but real under a machine already
-/// running many other thread-heavy processes at once (this crate's own test suite, run
-/// concurrently, reproduces it). Transient pressure clears within a few milliseconds far
-/// more often than not, so a short retry loop absorbs it; still failing after that many
-/// attempts is treated as unrecoverable (see the panic message) rather than silently
-/// running with fewer workers than asked for — a worker that never starts would deadlock
-/// the startup barrier every other worker of this run is about to wait on.
+/// Spawn helper worker `index`'s OS thread, calling `new_job` fresh for each retry
+/// (`Builder::spawn` consumes its closure even on failure). Panics after
+/// [`WORKER_SPAWN_ATTEMPTS`] — unwinding into a compiled program's own `main` would abort
+/// the process anyway (crossing that C-ABI boundary), so failing loudly here is no worse,
+/// and a worker that never starts would deadlock the barrier the others wait on.
 fn spawn_worker_thread<J: FnOnce() + Send + 'static>(
     index: usize,
     new_job: impl Fn() -> J,
@@ -933,40 +935,25 @@ fn spawn_worker_thread<J: FnOnce() + Send + 'static>(
     unreachable!("the loop above always returns or panics")
 }
 
-/// Run the program: one worker per CPU (`QUILON_WORKERS` overrides the count — see
-/// `resolve_worker_count`), `main` seeded on worker 0. A helper worker runs on its own OS
-/// thread (`run_helper`); worker 0 runs right here, on the calling thread
-/// (`run_leader`), and its own loop deciding the program is done is what ends this call —
-/// every other worker is then asked to stop and joined before returning. A single-worker
-/// program (`QUILON_WORKERS=1`, or a machine `available_parallelism` reports as one) spawns
-/// no helper thread at all and behaves exactly as a single-threaded scheduler always has.
+/// Run the program: worker 0 seeded with `main`, on the calling thread (`run_leader`). A
+/// helper worker (one per CPU, `QUILON_WORKERS` overrides the count — see
+/// `resolve_worker_count`) only starts once something is placed on it
+/// ([`ensure_helpers_started`]); a program that never launches anything spawns none and
+/// behaves exactly as a single-threaded scheduler always has.
 ///
 /// Must be called on a thread registered with the Boehm GC (the process main thread is
 /// registered by `GC_init`; tests register explicitly). Not re-entrant.
 pub fn run<F: FnOnce() + 'static>(main: F) {
     let worker_count = resolve_worker_count();
     let registry = Arc::new(placement::Registry::new(worker_count));
-    let barrier = Arc::new(Barrier::new(worker_count));
 
-    let helpers: Vec<_> = (1..worker_count)
-        .map(|index| {
-            let registry = Arc::clone(&registry);
-            let barrier = Arc::clone(&barrier);
-            spawn_worker_thread(index, move || {
-                let registry = Arc::clone(&registry);
-                let barrier = Arc::clone(&barrier);
-                move || run_helper(index, registry, barrier)
-            })
-        })
-        .collect();
-
-    run_leader(registry.clone(), barrier, main);
+    run_leader(Arc::clone(&registry), main);
 
     registry.request_shutdown();
     // Propagate the first helper panic (if any) rather than swallow it: a bug in a placed
     // fiber must fail the program/test loudly, exactly as a leader-side one already would.
     let mut first_panic = None;
-    for helper in helpers {
+    for helper in registry.take_helpers() {
         if let Err(payload) = helper.join()
             && first_panic.is_none()
         {

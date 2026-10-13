@@ -203,12 +203,11 @@ impl TcpListener {
         self.inner.local_addr()
     }
 
-    /// Accept one connection, parking (via [`io_loop`]) until one is ready. Returns the RAW,
+    /// Accept one connection, parking (via [`io_loop`]) until one is ready. Returns the raw,
     /// not-yet-reactor-registered stream: `net.@tcpServe`'s accept loop places each
-    /// connection on a worker before deciding whose reactor it registers with (shortest
-    /// queue at accept time), so registering it here, on the accept loop's own worker,
-    /// would be the wrong one — [`TcpStream::from_accepted`] runs on the worker that
-    /// actually ends up owning it instead.
+    /// connection on a worker before deciding whose reactor registers it (shortest queue at
+    /// accept time), so [`TcpStream::from_accepted`] runs on the worker that ends up owning
+    /// it instead of here.
     fn accept(&mut self) -> io::Result<(mio::net::TcpStream, SocketAddr)> {
         io_loop(&mut self.inner, self.token, Interest::READABLE, |l| {
             l.accept()

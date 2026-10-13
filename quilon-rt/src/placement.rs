@@ -3,20 +3,15 @@
 //! Cross-worker placement: the shortest-run-queue pick for a new launch or an accepted
 //! connection, and the inbox each worker's own thread drains to receive one.
 //!
-//! One [`Registry`] is built per `scheduler::run` call and shared (`Arc`) by every worker
-//! thread of that run — it never outlives the `run` call that built it, so two independent
-//! `run` invocations in the same process (the test suite's own pattern, one dedicated GC
-//! thread per test) never see each other's workers. Every worker publishes its own
-//! [`WorkerHandle`] into the registry once, at startup, before any worker places work on
-//! any other — [`Registry::publish`]'s caller is responsible for that ordering (a startup
-//! barrier; see `scheduler::run`).
-//!
-//! Placement itself is one atomic read per worker ([`Registry::shortest_queue`]) — no lock,
-//! no contention between placement decisions on different threads. Handing work to the
-//! chosen worker ([`Registry::place`]) queues a boxed job in that worker's own inbox and
-//! wakes its reactor through the same [`ReactorWaker`] mechanism a blocking-pool job's
-//! completion already uses — the receiving worker drains its inbox on its own thread, every
-//! loop iteration, so which exact token woke it never matters.
+//! One [`Registry`] is built per `scheduler::run` call and shared (`Arc`) by every worker of
+//! that run. The leader (worker 0) publishes itself and runs alone; helper threads start
+//! lazily, on the first placement decision (`scheduler::spawn_placed`'s own
+//! `ensure_helpers_started`), so a program that never launches anything never pays for them.
+//! That first call spawns every helper, waits (a `Barrier` sized to the worker count, the
+//! caller its own participant) until each has published its [`WorkerHandle`], then proceeds
+//! — so [`Registry::shortest_queue`] never reads an unpublished slot. [`Registry::place`]
+//! queues a job in the chosen worker's inbox and wakes its reactor through the same
+//! [`ReactorWaker`] mechanism a blocking-pool job's completion already uses.
 
 use crate::net::server::ServerState;
 use crate::reactor::{Reactor, ReactorWaker};
@@ -24,28 +19,24 @@ use mio::Token;
 use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
+use std::thread::JoinHandle;
 
 /// A unit of work handed to a worker other than the one that created it. Already carries
 /// everything it needs — the receiving worker's own thread just calls it.
 pub(crate) type Job = Box<dyn FnOnce() + Send>;
 
 struct WorkerHandle {
-    /// This worker's current run-queue length, kept in step by `scheduler`'s own ready-queue
-    /// push/pop points.
+    /// Kept in step by `scheduler`'s own ready-queue push/pop points.
     ready_len: AtomicUsize,
-    /// Jobs placed on this worker but not yet drained onto its own ready queue. Without
-    /// this, several placement decisions made back to back (an accept loop handing off
-    /// connections one after another, faster than the first placed job's target worker can
-    /// wake up and drain it) all see the same stale `ready_len` and pile onto the very same
-    /// idle worker — a thundering herd. [`shortest_queue`](Registry::shortest_queue) reads
-    /// `ready_len + inbox_len` together so a job counts the instant it is placed, not only
-    /// once it is actually running.
+    /// Jobs placed but not yet drained — counted alongside `ready_len` in
+    /// [`shortest_queue`](Registry::shortest_queue) so a job counts the instant it is
+    /// placed, closing a thundering-herd window where several placements in a row would
+    /// otherwise all see the same stale idle worker.
     inbox_len: AtomicUsize,
     inbox: Mutex<VecDeque<Job>>,
     waker: ReactorWaker,
-    /// The token `waker.complete` is called with on every wake — never registered with any
-    /// real source. A worker drains its inbox unconditionally on every loop iteration once
-    /// woken, so which exact token fired never matters, only that one did.
+    /// Never registered with a real source — a worker drains its inbox unconditionally
+    /// every loop iteration once woken, so which token fired never matters.
     inbox_token: Token,
 }
 
@@ -65,18 +56,19 @@ impl WorkerHandle {
     }
 }
 
-/// Every worker of one `scheduler::run` call, reached by index. `0` is always the leader
-/// (the worker `^`/`main` runs on). Also the one process-wide-for-this-run home for state a
-/// `Server`/`Connection` handle needs reachable from more than one worker: the server table
-/// itself (a `Server` handle created on one worker's fiber is killed from whichever worker
-/// calls `Server.kill`, per `net::server`'s own ownership-rule comment) and the counter that
-/// hands out every `Connection`/`Server` handle id, so two workers can never hand out the
-/// same one.
+/// Every worker of one `scheduler::run` call, reached by index. `0` is the leader, publishes
+/// itself at startup; the rest start lazily (see the module doc). Also the shared home for a
+/// `Server`'s table and the `Connection`/`Server` id counter (`net::server`'s own
+/// ownership-rule comment).
 pub(crate) struct Registry {
     workers: Vec<OnceLock<WorkerHandle>>,
     shutdown: AtomicBool,
     servers: Mutex<HashMap<u64, Arc<ServerState>>>,
     next_handle: AtomicU64,
+    /// Runs the helper-spawning closure exactly once, across however many fibers race to be
+    /// first through [`shortest_queue`](Self::shortest_queue).
+    helpers_started: OnceLock<()>,
+    helpers: Mutex<Vec<JoinHandle<()>>>,
 }
 
 impl Registry {
@@ -87,13 +79,17 @@ impl Registry {
             shutdown: AtomicBool::new(false),
             servers: Mutex::new(HashMap::new()),
             next_handle: AtomicU64::new(1),
+            helpers_started: OnceLock::new(),
+            helpers: Mutex::new(Vec::new()),
         }
     }
 
-    /// A fresh `Connection`/`Server` handle id, never reused and never handed out twice —
-    /// one counter for every worker of this run, so a stale handle (one a program held onto
-    /// past its own close/kill) can never be confused with a later, unrelated one, and two
-    /// workers minting ids at once can never collide.
+    pub(crate) fn worker_count(&self) -> usize {
+        self.workers.len()
+    }
+
+    /// A fresh `Connection`/`Server` handle id, never reused, shared across every worker so
+    /// two can never hand out the same one.
     pub(crate) fn next_handle(&self) -> u64 {
         self.next_handle.fetch_add(1, Ordering::Relaxed)
     }
@@ -102,17 +98,29 @@ impl Registry {
         &self.servers
     }
 
-    /// Publish worker `index`'s own handle, built from its own reactor (its inbox token and
-    /// waker come from there). Called once per worker, from that worker's own thread, before
-    /// the startup barrier every worker waits on releases.
+    /// Publish worker `index`'s own handle, built from its own reactor.
     pub(crate) fn publish(&self, index: usize, reactor: &mut Reactor) {
         let _ = self.workers[index].set(WorkerHandle::new(reactor));
+    }
+
+    /// Run `spawn` exactly once for this registry, however many fibers call this
+    /// concurrently — see `scheduler::ensure_helpers_started`.
+    pub(crate) fn start_helpers_once(&self, spawn: impl FnOnce()) {
+        self.helpers_started.get_or_init(spawn);
+    }
+
+    pub(crate) fn set_helpers(&self, handles: Vec<JoinHandle<()>>) {
+        *self.helpers.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = handles;
+    }
+
+    pub(crate) fn take_helpers(&self) -> Vec<JoinHandle<()>> {
+        std::mem::take(&mut *self.helpers.lock().unwrap_or_else(|poisoned| poisoned.into_inner()))
     }
 
     fn handle(&self, index: usize) -> &WorkerHandle {
         self.workers[index]
             .get()
-            .expect("every worker publishes its handle before the startup barrier releases it")
+            .expect("shortest_queue/place/set_ready_len only run after ensure_helpers_started")
     }
 
     /// Record worker `index`'s current run-queue length, for [`shortest_queue`](Self::shortest_queue)
@@ -165,13 +173,14 @@ impl Registry {
         jobs
     }
 
-    /// Ask every helper worker to stop once idle, and wake each one so a worker blocked in
-    /// its own reactor wait notices promptly rather than on its next unrelated wake. Called
-    /// once, by the leader, after its own loop has ended.
+    /// Ask every started helper to stop once idle, and wake each one. A never-started slot
+    /// (no launch ever placed anything) is skipped, not an error.
     pub(crate) fn request_shutdown(&self) {
         self.shutdown.store(true, Ordering::SeqCst);
-        for index in 0..self.workers.len() {
-            self.handle(index).wake();
+        for slot in &self.workers {
+            if let Some(handle) = slot.get() {
+                handle.wake();
+            }
         }
     }
 
