@@ -28,14 +28,24 @@ fn fixture(name: &str) -> PathBuf {
 /// The base64 `core.net.Identity::Base64` takes — the real `base64 -w0` CLI the docs
 /// point readers at, over `fixture(name)`'s own bytes, not a hand-rolled encoder standing
 /// in for it.
+/// No single-line flag here: GNU `base64` spells it `-w0`, BSD/macOS `-b 0` — rather than
+/// pick one, this runs plain `base64 <path>` (wraps at 76 characters on both) and strips
+/// the wrapping itself, into one line, the way a Quilon `Text` literal needs it (an
+/// embedded newline is not valid inside `"..."`) — the same whitespace
+/// `core.net.Identity::Base64`'s own decoder would have stripped regardless (see
+/// `base64_decode_accepts_unpadded_input_and_embedded_newlines` in
+/// `quilon-rt/src/net/tls.rs`), done here instead since this base64 is embedded in
+/// generated SOURCE, not read back by that decoder directly.
 fn base64_of_fixture(name: &str) -> String {
     let output = Command::new("base64")
-        .arg("-w0")
         .arg(fixture(name))
         .output()
-        .expect("run base64 -w0");
-    assert!(output.status.success(), "base64 -w0 {name} failed");
-    String::from_utf8(output.stdout).expect("base64 output is ASCII")
+        .expect("run base64");
+    assert!(output.status.success(), "base64 {name} failed");
+    String::from_utf8(output.stdout)
+        .expect("base64 output is ASCII")
+        .split_whitespace()
+        .collect()
 }
 
 /// A `rustls::ClientConfig` trusting ONLY `tests/fixtures/tls/ca.crt` — this file's own
