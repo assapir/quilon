@@ -13,7 +13,7 @@
 //!
 //! Stdin is one descriptor for the whole process: a gate serializes every reader through it,
 //! by ticket rather than arrival order, so concurrent `@readStdin` calls read consecutive
-//! lines in launch order (see [`StdinGate`]'s own doc for why arrival order is not enough
+//! lines in launch order (see `StdinGate`'s own doc for why arrival order is not enough
 //! across real OS threads).
 
 use crate::mem::{__alloc, QnSlice, alloc_text};

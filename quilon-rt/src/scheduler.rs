@@ -900,7 +900,7 @@ fn spawn_worker_thread<J: FnOnce() + Send + 'static>(
 /// Run the program: worker 0 seeded with `main`, on the calling thread (`run_leader`). A
 /// helper worker (one per CPU, `QUILON_WORKERS` overrides the count — see
 /// `resolve_worker_count`) only starts once something is placed on it
-/// ([`ensure_helpers_started`]); a program that never launches anything spawns none and
+/// (`ensure_helpers_started`); a program that never launches anything spawns none and
 /// behaves exactly as a single-threaded scheduler always has.
 ///
 /// Must be called on a thread registered with the Boehm GC (the process main thread is
