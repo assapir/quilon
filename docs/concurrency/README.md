@@ -181,9 +181,9 @@ server's connections share the same one-fiber-per-connection behavior. See
 ## Where it is headed
 
 The M:N runtime itself is in place (`docs/concurrency/runtime.md`); what is left of it is
-work-stealing a not-yet-started launch between workers and atomic types (`T = @{ … }`), so
-`@name := …`'s ad-hoc atomic binding gets a real cross-field-invariant counterpart. A
-networked value-returning primitive makes independent launches overlap:
+work-stealing a not-yet-started launch between workers and atomic types (`T = @{ … }`),
+whose setters change several fields as one step. A networked value-returning primitive
+makes independent launches overlap:
 
 ```quilon ignore
 ~ `@get` is a leaf IO primitive (corelib/runtime) — the ONLY marked thing here.

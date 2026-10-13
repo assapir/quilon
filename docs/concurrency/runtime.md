@@ -17,22 +17,23 @@ single accessor — one per OS thread.
 
 ## Workers
 
-`scheduler::run` starts N workers, one per CPU as `std::thread::available_parallelism`
-reports it — `QUILON_WORKERS=<n>` overrides the count, read once at startup; invalid or `0`
-falls back to the CPU count. This is a debugging aid for chasing a scheduling bug, not for
-production use, and is documented nowhere else. Worker 0 (the "leader") runs on the thread
-that called `run`, and runs `^`; every other worker (a "helper") gets its own OS thread. Each
-worker has its own run queue and its own `mio` reactor — a socket registers with the reactor
-of the worker that owns its fiber, for that fiber's whole life.
+`scheduler::run` seeds `^` on worker 0 (the "leader"), one per CPU as
+`std::thread::available_parallelism` reports it — `QUILON_WORKERS=<n>` overrides the count,
+read once at startup; invalid or `0` falls back to the CPU count. This is a debugging aid
+for chasing a scheduling bug, not for production use. Every other worker (a "helper") gets
+its own OS thread, started lazily on the first launch or accepted connection placed on it —
+a program that never launches anything spawns none. Each worker has its own run queue and
+its own `mio` reactor — a socket registers with the reactor of the worker that owns its
+fiber, for that fiber's whole life.
 
 A fiber runs on the worker that created it and never moves. `^`'s own block joining a launch
 it made, even one placed on another worker's queue, and a strict force of a deferred value
-resolved on another worker, both park the calling fiber on its OWN worker's reactor and wake
+resolved on another worker, both park the calling fiber on its own worker's reactor and wake
 through the same `ReactorWaker` mechanism a blocking call's completion already uses — a
 cross-worker wait costs no more than that. This is also why the leader alone decides when a
 program is done: by the time its own ready queue and parked state are both empty, every
 launch its call tree made — wherever it ran — has already settled, so nothing is left
-running elsewhere either. A helper's own idle queue means only that IT has nothing to do; it
+running elsewhere either. A helper's own idle queue means only that it has nothing to do; it
 waits for more placed work.
 
 **Placement.** A new launch (every freestanding value-returning `@` primitive the deferral
