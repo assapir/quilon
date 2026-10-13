@@ -210,7 +210,7 @@ A `TLS` listener's identity could not be turned into a certificate and a private
 `Files`'s path named no readable file, `Base64`'s text did not decode, the decoded or
 read bytes were not a PEM certificate chain or private key in an accepted encoding
 (PKCS#8, SEC1, or PKCS#1), or the key did not match the certificate. The report names
-the listener's address and the reason, exactly as a bind failure
+the listener's address and a reason, exactly as a bind failure
 ([QN511](#qn511--bind-failed)) does.
 
 ```quilon ignore

@@ -182,7 +182,7 @@ function's return value), it is fatal when the listener starts
 ([QN512](../tooling/errors/runtime.md#qn512--mismatched-listener-transport-and-identity-at-startup)).
 An identity that cannot be loaded — a missing file, base64 that does not decode, bytes
 that are not a valid certificate chain or private key, or a key that does not match the
-certificate — is fatal the same way, naming the listener's address and the reason
+certificate — is fatal the same way, naming the listener's address and a reason
 ([QN513](../tooling/errors/runtime.md#qn513--tls-identity-failed-to-load)).
 
 `net.@tcpServe`'s listener-list form builds each `TLS` listener's `ServerConfig` ONCE,

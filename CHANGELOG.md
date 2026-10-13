@@ -43,7 +43,7 @@ All notable changes to Quilon are documented here.
   `transport = Plain` with an identity, is a compile error (`QN359`) on a literal
   `Listener`, fatal (`QN512`) on one built another way; an identity that fails to load
   (missing file, bad base64, bad PEM, a mismatched key) is fatal (`QN513`), naming the
-  listener's address and the reason. See `docs/corelib/net.md#tls-listeners` and
+  listener's address and a reason. See `docs/corelib/net.md#tls-listeners` and
   `docs/corelib/http.md#tls-listeners`. Part of #486.
 
 - **The signal trap (`!>`) — a top-level item, one per program, in the file that defines
