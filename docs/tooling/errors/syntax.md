@@ -313,4 +313,33 @@ half = (shape :: { Num, label :: Text }) -> Num => < shape.0 / 2 >
 Write every field named (`{ size :: Num, label :: Text }`), or drop the names and write
 every field positional (`{ Num, Text }`). The same rule applies to a record literal:
 `{ 1, label = "x" }` is the same error — write `{ size = 1, label = "x" }` or
-`{ 1, "x" }`.
+`{ 1, "x" }`. A spread update's own override entries are one shape too: `{<-p, name = 1,
+0 = 2}` mixes a named override with a numbered one.
+
+### QN119 — numbered record field without a spread
+
+A numbered entry (`0 = 6`) overrides a position a `<-source` spread brought in — written
+with no spread at all, there is nothing for it to override.
+
+```quilon ignore
+^ = () -> Num => <
+  pair = { 0 = 6, 1 = 7 }
+  pair.0
+>
+```
+
+Write the positions directly: `{ 6, 7 }`.
+
+### QN120 — record position with a leading zero
+
+A position's canonical form has no leading zero. `p.0` and `p.10` are fine; `p.01` and
+`p.00` are not — their canonical forms are `p.1` and `p.0`.
+
+```quilon ignore
+^ = () -> Num => <
+  pair = { 6, 7 }
+  pair.01
+>
+```
+
+Write the position without the leading zero: `pair.1`.

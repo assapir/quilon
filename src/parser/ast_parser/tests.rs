@@ -428,11 +428,13 @@ fn test_parse_named_record_type_annotation() {
     let Some(Type::Record(fields)) = &declaration.parameters[0].type_annotation else {
         panic!("expected a Record type");
     };
+    // Canonicalized to ascending-by-name order — field order isn't part of a named
+    // anonymous record type's identity.
     assert_eq!(
         fields,
         &[
-            ("name".to_string(), Type::Text),
-            ("age".to_string(), Type::Num)
+            ("age".to_string(), Type::Num),
+            ("name".to_string(), Type::Text)
         ]
     );
 }
@@ -453,6 +455,76 @@ fn test_parse_mixed_record_literal_is_rejected() {
         panic!("expected a mixed record literal to be a parse error");
     };
     assert_eq!(err.code, Code::MixedRecordFields);
+}
+
+#[test]
+fn test_parse_numbered_spread_override() {
+    let tokens = Lexer::tokenize("r = {<-p, 0 = 9}").unwrap();
+    let program = parse(&tokens).unwrap();
+    let Item::VariableDeclaration(declaration) = &program.items[0] else {
+        panic!("expected a variable declaration");
+    };
+    let Expression::Record { fields, .. } = &declaration.value else {
+        panic!("expected a Record expression");
+    };
+    assert_eq!(
+        fields
+            .iter()
+            .map(|(name, _)| name.as_str())
+            .collect::<Vec<_>>(),
+        ["", "0"]
+    );
+}
+
+#[test]
+fn test_parse_numbered_field_without_spread_is_rejected() {
+    let tokens = Lexer::tokenize("bad = { 0 = 6, 1 = 7 }").unwrap();
+    let Err(err) = parse(&tokens) else {
+        panic!("expected a numbered field without a spread to be a parse error");
+    };
+    assert_eq!(err.code, Code::NumberedRecordFieldWithoutSpread);
+}
+
+#[test]
+fn test_parse_bare_positional_after_spread_is_mixed_record_fields() {
+    let tokens = Lexer::tokenize("bad = {<-p, 9}").unwrap();
+    let Err(err) = parse(&tokens) else {
+        panic!("expected a bare positional entry after a spread to be a parse error");
+    };
+    assert_eq!(err.code, Code::MixedRecordFields);
+}
+
+#[test]
+fn test_parse_named_and_numbered_override_together_is_mixed_record_fields() {
+    let tokens = Lexer::tokenize("bad = {<-p, label = 1, 0 = 2}").unwrap();
+    let Err(err) = parse(&tokens) else {
+        panic!("expected a named and numbered override mix to be a parse error");
+    };
+    assert_eq!(err.code, Code::MixedRecordFields);
+}
+
+#[test]
+fn test_parse_leading_zero_field_access_is_rejected() {
+    let tokens = Lexer::tokenize("^ = () -> Num => < p.01 >").unwrap();
+    let Err(err) = parse(&tokens) else {
+        panic!("expected a leading-zero position access to be a parse error");
+    };
+    assert_eq!(err.code, Code::LeadingZeroPosition);
+}
+
+#[test]
+fn test_parse_leading_zero_numbered_override_is_rejected() {
+    let tokens = Lexer::tokenize("bad = {<-p, 01 = 9}").unwrap();
+    let Err(err) = parse(&tokens) else {
+        panic!("expected a leading-zero numbered override to be a parse error");
+    };
+    assert_eq!(err.code, Code::LeadingZeroPosition);
+}
+
+#[test]
+fn test_parse_position_with_no_leading_zero_is_fine() {
+    let tokens = Lexer::tokenize("^ = () -> Num => < p.0 + p.10 >").unwrap();
+    assert!(parse(&tokens).is_ok());
 }
 
 #[test]

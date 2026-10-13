@@ -145,9 +145,11 @@ fn a_record_type_mismatch_prints_quilon_syntax() {
     let (ok, stderr) = check("record", src);
 
     assert!(!ok, "expected non-zero exit, stderr was: {stderr}");
+    // Canonical (ascending-by-name) order: field order isn't part of an anonymous
+    // record type's identity, so the rendering doesn't follow the literal's write order.
     assert!(
         stderr.contains(
-            "error[QN301]: type mismatch: expected User, got { name :: Text, age :: Num }"
+            "error[QN301]: type mismatch: expected User, got { age :: Num, name :: Text }"
         ),
         "{stderr}"
     );

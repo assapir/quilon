@@ -104,8 +104,16 @@ greet = (guest :: { name :: Text, age :: Num }) -> Text => < "Hi, " + guest.name
   0
 >
 ```
-Two anonymous record types with the same fields (same names, same types, same order) are
-the same type — there is nothing further to declare for them to match. A named record
+Two anonymous record types with the same fields (same names, same types) are the same
+type — field order is not part of a named anonymous record's identity, so a differently-
+ordered literal still matches:
+```quilon
+f = (r :: { a :: Num, b :: Text }) -> Num => < r.a >
+
+^ = () -> Num => < f({ b = "x", a = 1 }) >
+```
+A diagnostic naming an anonymous record type prints its fields in canonical (ascending by
+name) order, regardless of how it was written. A named record
 type (`User = { name :: Text, age :: Num }`) never converts to or from an anonymous one
 implicitly, in either direction — a `User` and `{ name :: Text, age :: Num }` are
 distinct types even though their fields line up:
@@ -120,11 +128,12 @@ greet = (guest :: { name :: Text, age :: Num }) -> Text => < "Hi, " + guest.name
 >
 ```
 ```quilon ignore
-greet(u)   ~ error: expected { name :: Text, age :: Num }, got User
+greet(u)   ~ error: expected { age :: Num, name :: Text }, got User
 ```
 Going the other way, an anonymous record built to a named type's exact shape converts
 explicitly with the spread constructor: `User {<-guest}` (see
-[Spread](../expressions/README.md) and the functional-update form above).
+[Spread](../expressions/README.md) and the functional-update form above). (See
+`examples/records.qn`.)
 
 ## Positional records
 A record's fields may be positional — written as a bare list of types (`{ Num, Num }`)
@@ -143,12 +152,23 @@ record's last field is too:
 ```quilon ignore
 loot.5          ~ error: loot has 2 field(s), positions 0..1
 ```
-A position is digits directly after a `.` — `pair.0.1` is two field accesses, `.0` then
-`.1`, on a nested positional record:
+A position is digits directly after a `.`, with no leading zero (`pair.0` and `pair.10`
+are fine; `pair.01` is a compile error naming its canonical form, `pair.1`) —
+`pair.0.1` is two field accesses, `.0` then `.1`, on a nested positional record:
 ```quilon
 grid = { { 1, 2 }, { 3, 4 } }
 ^ = () -> Num => < grid.0.1 + grid.1.0 >   ~ 2 + 3
 ```
+A spread (`<-source`) copies a positional record, and a numbered entry (`position =
+value`) overrides one of its positions:
+```quilon
+loot = { 12, 3 }
+sameLoot = {<-loot}             ~ { 12, 3 }
+betterLoot = {<-loot, 0 = 20}   ~ { 20, 3 }
+```
+A numbered entry only overrides a position the spread already has — it never adds one,
+and it needs a spread to override at all: `{ 0 = 6, 1 = 7 }` with no spread is a compile
+error (write `{ 6, 7 }`). (See `examples/records.qn`.)
 
 ### Static methods
 A method whose body never reads `it` is **static**: it may be called on the type name

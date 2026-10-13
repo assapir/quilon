@@ -647,11 +647,23 @@ impl TypeChecker {
     /// earlier one of the same name, and a new name is appended. If the FIRST named-record
     /// spread source's declared field set is reproduced exactly by the merged result (same
     /// names, each type compatible, nothing added), the result KEEPS that named type — and
-    /// therefore its methods; otherwise it is an anonymous record.
+    /// therefore its methods; otherwise it is an anonymous record, its field order
+    /// canonicalized so two differently-written literals of the same shape are one type.
+    ///
+    /// A numbered entry (`0 = 9`, the parser's positional spread-update override) is
+    /// stricter than a named one: it may only replace a position a spread source already
+    /// has, never add one — validated once every spread is known, so write order
+    /// (override before or after its spread) doesn't matter.
     pub(super) fn infer_record(
         &mut self,
         fields: &[(String, Expression)],
     ) -> Result<Type, TypeError> {
+        // A digit-named direct entry is a NUMBERED OVERRIDE only next to a spread —
+        // otherwise it is a bare positional literal's own field (`{ 6, 7 }`), already
+        // named "0"/"1" by the parser, not an override of anything.
+        let has_spread = fields
+            .iter()
+            .any(|(_, value)| matches!(value, Expression::Spread { .. }));
         let mut merged: Vec<(String, Type)> = Vec::new();
         // The named type of the FIRST named-record spread source, if any (holds its
         // declared fields + methods) — the candidate the result may keep.
@@ -660,6 +672,11 @@ impl TypeChecker {
         // `<-source` spread brought in, which a later literal may legitimately overwrite
         // (functional update). A SECOND literal naming the same field is a duplicate.
         let mut literal_field_names = std::collections::HashSet::new();
+        let mut spread_positions = std::collections::HashSet::new();
+        let mut spread_is_named = false;
+        let mut spread_count = 0usize;
+        let mut any_positional_spread = false;
+        let mut numbered_overrides: Vec<(String, Span)> = Vec::new();
 
         for (name, value) in fields {
             if let Expression::Spread {
@@ -668,8 +685,17 @@ impl TypeChecker {
             {
                 let src_type = self.infer_expression(value)?;
                 let src_fields = match &src_type {
-                    Type::Record(fs) => fs.clone(),
+                    Type::Record(fs) => {
+                        if crate::ast::record_fields_are_positional(fs) {
+                            any_positional_spread = true;
+                            spread_positions.extend(fs.iter().map(|(n, _)| n.clone()));
+                        } else {
+                            spread_is_named = true;
+                        }
+                        fs.clone()
+                    }
                     Type::Named { fields: fs, .. } => {
+                        spread_is_named = true;
                         if named_identity.is_none() {
                             named_identity = Some(src_type.clone());
                         }
@@ -683,6 +709,15 @@ impl TypeChecker {
                         });
                     }
                 };
+                spread_count += 1;
+                // Two or more spreads where at least one is positional: which position
+                // wins where they overlap is undecided (named multi-spread already
+                // works — it always has — so only the new positional case is guarded).
+                if spread_count > 1 && any_positional_spread {
+                    return Err(TypeError::MultiplePositionalSpreads {
+                        span: value.span().clone(),
+                    });
+                }
                 for (fname, fty) in src_fields {
                     match merged.iter_mut().find(|(n, _)| *n == fname) {
                         Some(slot) => slot.1 = fty,
@@ -696,11 +731,30 @@ impl TypeChecker {
                         span: value.span().clone(),
                     });
                 }
+                if has_spread && crate::ast::is_positional_field(name) {
+                    numbered_overrides.push((name.clone(), value.span().clone()));
+                }
                 let value_type = self.infer_expression(value)?;
                 match merged.iter_mut().find(|(n, _)| *n == *name) {
                     Some(slot) => slot.1 = value_type,
                     None => merged.push((name.clone(), value_type)),
                 }
+            }
+        }
+
+        for (position, span) in &numbered_overrides {
+            if spread_is_named {
+                return Err(TypeError::PositionalAccessOnNamedRecord {
+                    field: position.clone(),
+                    span: span.clone(),
+                });
+            }
+            if !spread_positions.contains(position) {
+                return Err(TypeError::RecordUpdatePositionOutOfRange {
+                    position: position.clone(),
+                    size: spread_positions.len(),
+                    span: span.clone(),
+                });
             }
         }
 
@@ -723,7 +777,9 @@ impl TypeChecker {
             }
         }
 
-        Ok(Type::Record(merged))
+        Ok(Type::Record(crate::ast::canonical_record_field_order(
+            merged,
+        )))
     }
 
     /// Verify `ty` may be used as a Map/Set key. The built-in hashable types are `Num`,

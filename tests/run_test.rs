@@ -304,6 +304,102 @@ fn run_mixed_named_and_positional_record_literal_is_rejected() {
     assert_parse_error("^ = () -> Num => <\n  bad = { 1, label = \"x\" }\n  0\n>");
 }
 
+#[test]
+fn run_spread_copy_and_numbered_override_of_a_positional_record() {
+    assert_exit(
+        "^ = () -> Num => <\n  \
+           p = { 6, 7 }\n  \
+           q = {<-p}\n  \
+           r = {<-p, 0 = 9}\n  \
+           q.0 + q.1 + r.0 + r.1\n\
+         >",
+        29,
+    );
+}
+
+#[test]
+fn run_numbered_override_past_the_spread_source_is_rejected() {
+    assert_type_error_code(
+        "^ = () -> Num => <\n  \
+           p = { 6, 7 }\n  \
+           r = {<-p, 2 = 8}\n  \
+           r.0\n\
+         >",
+        Code::RecordUpdatePositionOutOfRange,
+    );
+}
+
+#[test]
+fn run_numbered_field_without_a_spread_is_rejected() {
+    assert_parse_error("^ = () -> Num => <\n  r = { 0 = 6, 1 = 7 }\n  r.0\n>");
+}
+
+#[test]
+fn run_bare_positional_entry_after_a_spread_is_rejected() {
+    assert_parse_error("^ = () -> Num => <\n  p = { 6, 7 }\n  r = {<-p, 9}\n  r.0\n>");
+}
+
+#[test]
+fn run_numbered_override_of_a_named_spread_source_is_rejected() {
+    assert_type_error_code(
+        "User = { name :: Text, age :: Num }\n\
+         ^ = () -> Num => <\n  \
+           u = User { name = \"Alice\", age = 30 }\n  \
+           r = {<-u, 0 = 1}\n  \
+           0\n\
+         >",
+        Code::PositionalAccessOnNamedRecord,
+    );
+}
+
+#[test]
+fn run_two_positional_spreads_in_one_literal_is_rejected() {
+    assert_type_error_code(
+        "^ = () -> Num => <\n  \
+           p = { 6, 7 }\n  \
+           q = { 8, 9 }\n  \
+           r = {<-p, <-q}\n  \
+           r.0\n\
+         >",
+        Code::MultiplePositionalSpreads,
+    );
+}
+
+#[test]
+fn run_named_anonymous_record_field_order_does_not_matter() {
+    assert_exit(
+        "f = (r :: { a :: Num, b :: Text }) -> Num => < r.a >\n\
+         ^ = () -> Num => < f({ b = \"x\", a = 1 }) >",
+        1,
+    );
+}
+
+#[test]
+fn run_empty_record_type_annotation_is_still_rejected() {
+    assert_parse_error("f = (r :: {}) -> Num => < 0 >\n^ = () -> Num => < f({}) >");
+}
+
+#[test]
+fn run_leading_zero_position_access_is_rejected() {
+    assert_parse_error("^ = () -> Num => <\n  p = { 6, 7 }\n  p.01\n>");
+}
+
+#[test]
+fn run_leading_zero_numbered_override_is_rejected() {
+    assert_parse_error("^ = () -> Num => <\n  p = { 6, 7 }\n  r = {<-p, 01 = 9}\n  r.0\n>");
+}
+
+#[test]
+fn run_position_past_nine_and_zero_itself_are_not_leading_zero_errors() {
+    assert_exit(
+        "^ = () -> Num => <\n  \
+           p = { 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16 }\n  \
+           p.0 + p.10\n\
+         >",
+        22,
+    );
+}
+
 // --- IO: write / print over `<< core.io` ---
 
 #[test]

@@ -1255,6 +1255,19 @@ pub fn positional_field_name(index: usize) -> String {
     index.to_string()
 }
 
+/// Canonical field order for an anonymous record — ascending by name (named) or by
+/// index (positional, numeric so it holds past nine fields) — so two records of the
+/// same shape are the same `Type::Record` however they were written, and codegen lays
+/// out one struct shape for both.
+pub fn canonical_record_field_order(mut fields: Vec<(String, Type)>) -> Vec<(String, Type)> {
+    if record_fields_are_positional(&fields) {
+        fields.sort_by_key(|(name, _)| name.parse::<usize>().unwrap_or(usize::MAX));
+    } else {
+        fields.sort_by(|a, b| a.0.cmp(&b.0));
+    }
+    fields
+}
+
 /// A short, user-facing label for a type (`Num`, `Text`, `[]Text`, a user type's name).
 /// Shared by the type checker's overload diagnostics and codegen's entry-point
 /// signature diagnostic, so both render types the same way. A not-yet-concrete
