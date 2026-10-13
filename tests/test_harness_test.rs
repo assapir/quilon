@@ -556,11 +556,13 @@ fn importing_core_http_contributes_exactly_this_surface() {
         "core.test.reportSummary",
         // core.net, and the client itself. `@tcpRequest` has a Text and an Address form,
         // each with a two-argument and a three-argument (`ConnectOptions`) overload: four
-        // items. `@tcpServe` has a Text overload and an Address overload: one item each.
+        // items. `@tcpServe` has a Text overload, an Address overload, and a listener-list
+        // overload: one item each.
         "core.net.@tcpRequest",
         "core.net.@tcpRequest",
         "core.net.@tcpRequest",
         "core.net.@tcpRequest",
+        "core.net.@tcpServe",
         "core.net.@tcpServe",
         "core.net.@tcpServe",
         "core.net.Connection",
@@ -570,6 +572,9 @@ fn importing_core_http_contributes_exactly_this_surface() {
         "core.net.Transport",
         "core.net.Certificates",
         "core.net.ConnectOptions",
+        // The listener-list overload's own types: a TLS identity, and the listener itself.
+        "core.net.Identity",
+        "core.net.Listener",
         "core.http.Body",
         "core.http.Method",
         "core.http.Status",
@@ -578,8 +583,10 @@ fn importing_core_http_contributes_exactly_this_surface() {
         "core.http.Headers",
         "core.http.Params",
         "core.http.RequestOptions",
-        // `@serve`'s two-argument and three-argument overloads, each with a Text and an
-        // Address form: one item apiece.
+        // `@serve`'s two-argument and three-argument overloads, each with a Text, an
+        // Address, and a listener-list form: one item apiece.
+        "core.http.@serve",
+        "core.http.@serve",
         "core.http.@serve",
         "core.http.@serve",
         "core.http.@serve",
