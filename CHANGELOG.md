@@ -11,6 +11,24 @@ All notable changes to Quilon are documented here.
   positional (`{ Num, Num }`, values `{ 6, 7 }`, read with `.0`/`.1`). Mixing named and
   positional fields is `QN118`; `.0` on a named record is `QN359`; an out-of-range
   position is `QN360`. See `docs/types/records.md`. Step 1 of #490.
+- **A TLS client, over `net.@tcpRequest` and `core.http`.** `net.ConnectOptions { transport
+  :: Transport, certificates :: Certificates }` and the `net.@tcpRequest(address,
+  requestBytes, options)` overload — `Transport = Plain / TLS`, `Certificates = Checked /
+  Unchecked`. `core.http`'s `RequestOptions` gains `transport`/`certificates` fields
+  (default `Plain`/`Checked`): an `https://` URL connects over TLS (default port 443);
+  `http://` and a scheme-less URL stay plain (default port 80); `transport = TLS` forces
+  TLS for any URL, scheme included. Built on `rustls` 0.23 with the `ring` crypto provider,
+  trusting the OS certificate store (`rustls-native-certs`, which honours
+  `SSL_CERT_FILE`/`SSL_CERT_DIR`) or, absent one, the compiled-in Mozilla list
+  (`webpki-roots`) — a built binary needs nothing installed. The handshake's crypto (key
+  exchange, certificate and signature verification) runs on the runtime's blocking-call
+  pool, parking only the calling fiber; the network I/O around it stays on the reactor, and
+  record encryption/decryption afterward run inline there too. A handshake or certificate
+  failure is a `NotOk`
+  naming the address and a plain-English reason for the common cases (an untrusted issuer,
+  an expired certificate with its date, a name mismatch naming both names), rustls's own
+  text otherwise. See `docs/corelib/net.md#tls` and `docs/corelib/http.md#tls`. Closes
+  #339. Part of #486.
 
 - **The signal trap (`!>`) — a top-level item, one per program, in the file that defines
   `^`, matching signals via a new `core.process` module.** `!>` followed by one or more
