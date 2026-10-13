@@ -1117,6 +1117,25 @@ serveConnection = (
   @serve(address.text(), handler, options)
 >
 
+~ `http.@serve(listeners, handler)`: `net.@tcpServe`'s listener-list form, each listener's
+~ accepted connections served over HTTP. Lowers to the same runtime entry the single-
+~ listener forms above do, with `serveConnection`/`ServerOptions.default()` filled in the
+~ same way — see this file's own `@serve(address, handler)` doc for why that body is
+~ written in ordinary Quilon rather than run.
+>> @serve = (listeners :: []net.Listener, handler :: (Request) -> Response) -> net.Server => <
+  serveConnection(net.Connection { handle = 0 }, handler, ServerOptions.default())
+  net.Server { handle = 0 }
+>
+
+~ `http.@serve(listeners, handler, options)`: as above, with `options.maxBodySize`/
+~ `options.idleTimeout` in place of the defaults.
+>> @serve = (
+  listeners :: []net.Listener, handler :: (Request) -> Response, options :: ServerOptions
+) -> net.Server => <
+  serveConnection(net.Connection { handle = 0 }, handler, options)
+  net.Server { handle = 0 }
+>
+
 ~ The suite for everything above: every parser and serialiser edge case, offline over canned
 ~ `Text`, so it runs anywhere. Only `quilon test corelib/http.qn` compiles these blocks — every
 ~ other command erases them, and the fixtures below carry no `>>`, so a program importing

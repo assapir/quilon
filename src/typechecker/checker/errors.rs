@@ -71,6 +71,7 @@ impl TypeError {
             TypeError::TrapWithoutProcessImport { .. } => Code::TrapWithoutProcessImport,
             TypeError::TrapArmNotASignalPattern { .. } => Code::TrapArmNotASignalPattern,
             TypeError::DuplicateTrapArm { .. } => Code::DuplicateTrapArm,
+            TypeError::ListenerIdentityMismatch { .. } => Code::ListenerIdentityMismatch,
         }
     }
 
@@ -240,6 +241,15 @@ impl TypeError {
             TypeError::DuplicateTrapArm { first, .. } => diagnostic
                 .label(first, Some("already matched here".to_string()))
                 .help("a trap has at most one arm per signal"),
+            TypeError::ListenerIdentityMismatch { has_identity, .. } => {
+                diagnostic.help(if *has_identity {
+                    "set identity = None, or change transport to TLS".to_string()
+                } else {
+                    "set identity = Files(certificatePath, keyPath) or Base64(certificate, key), \
+                     or change transport to Plain"
+                        .to_string()
+                })
+            }
             _ => diagnostic,
         }
     }
@@ -304,7 +314,8 @@ impl TypeError {
             | TypeError::SecondTrap { span, .. }
             | TypeError::TrapWithoutProcessImport { span }
             | TypeError::TrapArmNotASignalPattern { span }
-            | TypeError::DuplicateTrapArm { span, .. } => span,
+            | TypeError::DuplicateTrapArm { span, .. }
+            | TypeError::ListenerIdentityMismatch { span, .. } => span,
         }
     }
 }
@@ -847,6 +858,13 @@ impl std::fmt::Display for TypeError {
                 f,
                 "'{variant}' is already matched by an earlier arm of this trap"
             ),
+            TypeError::ListenerIdentityMismatch { has_identity, .. } => {
+                if *has_identity {
+                    write!(f, "a Plain listener's identity must be None")
+                } else {
+                    write!(f, "a TLS listener needs an identity other than None")
+                }
+            }
         }
     }
 }

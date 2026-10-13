@@ -79,6 +79,9 @@ pub mod codes {
     pub const WRITE_FAILED: u16 = 509;
     pub const REPLACE_INVALID_COUNT: u16 = 510;
     pub const BIND_FAILED: u16 = 511;
+    pub const LISTENER_IDENTITY_MISMATCH_AT_STARTUP: u16 = 512;
+    pub const IDENTITY_LOAD_FAILED: u16 = 513;
+    pub const AMBIGUOUS_SERVER_ADDRESS: u16 = 514;
 }
 
 /// ANSI styling for a report, or nothing at all when stderr is not a terminal that wants

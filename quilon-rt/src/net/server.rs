@@ -17,19 +17,89 @@
 //! block's own join finds it already done. Built on `super::TcpListener` and
 //! [`super::TcpStream`], the plumbing shared with [`super::client`].
 
+use super::tls::{Identity as TlsIdentity, server_config};
 use super::{TcpListener, TcpStream, bytes_to_string, copy_bytes, resolve};
 use crate::deferred::{launch, launch_deferred_text, settle};
 use crate::mem::{QnSlice, alloc_text};
 use crate::report::{QnSite, RUNTIME_EXIT_CODE, codes, fail_at};
 use crate::scheduler::{current_fiber_id, sleep, spawn};
 use crate::worker::with_worker;
+use rustls::ServerConfig;
 use std::cell::{Cell, RefCell};
 use std::collections::HashSet;
+use std::io::{self, Read, Write};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::os::raw::c_void;
 use std::os::unix::io::RawFd;
 use std::rc::Rc;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
+
+/// Whether a listener is `Plain` or `TLS`, and — for `TLS` — the `ServerConfig` built
+/// once when it started, shared (via `Arc`) by every connection this one listener ever
+/// accepts, never rebuilt per-connection.
+#[derive(Clone)]
+pub(crate) enum ListenerKind {
+    Plain,
+    Tls(Arc<ServerConfig>),
+}
+
+/// An accepted connection's transport: a plain stream, or a TLS session already past its
+/// handshake — the stream it is handshaking over, and the `rustls::ServerConnection`
+/// driving record encryption/decryption. `Connection.@read`/`@write` read/write through
+/// whichever this is with no other change to their own logic.
+enum ConnectionTransport {
+    Plain(TcpStream),
+    Tls {
+        stream: TcpStream,
+        connection: Box<rustls::ServerConnection>,
+    },
+}
+
+impl ConnectionTransport {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        match self {
+            Self::Plain(stream) => stream.read(buf),
+            Self::Tls { stream, connection } => {
+                rustls::Stream::new(&mut **connection, stream).read(buf)
+            }
+        }
+    }
+
+    /// [`Self::read`]'s timed counterpart. A TLS connection checks rustls's own buffered
+    /// plaintext FIRST — a pure in-memory read, no socket I/O at all — since a client's
+    /// first request can arrive bundled with its own last handshake flight: by the time
+    /// `handshake_server` returns, that plaintext already sits decrypted and waiting, with
+    /// nothing further ever arriving at the socket for this read to wait on. Only once
+    /// that is empty (`WouldBlock`, rustls's own signal for "not yet, but still open") does
+    /// it check readiness against `deadline` BEFORE decrypting any new ciphertext — see
+    /// `TcpStream::wait_readable`'s own doc for why it checks first rather than threading
+    /// the deadline into rustls's own record I/O.
+    fn read_with_deadline(&mut self, buf: &mut [u8], deadline: Instant) -> io::Result<usize> {
+        match self {
+            Self::Plain(stream) => stream.read_with_deadline(buf, deadline),
+            Self::Tls { stream, connection } => {
+                match connection.reader().read(buf) {
+                    Err(error) if error.kind() == io::ErrorKind::WouldBlock => {}
+                    other => return other,
+                }
+                if !stream.wait_readable(deadline)? {
+                    return Ok(0);
+                }
+                rustls::Stream::new(&mut **connection, stream).read(buf)
+            }
+        }
+    }
+
+    fn write_all(&mut self, buf: &[u8]) -> io::Result<()> {
+        match self {
+            Self::Plain(stream) => stream.write_all(buf),
+            Self::Tls { stream, connection } => {
+                rustls::Stream::new(&mut **connection, stream).write_all(buf)
+            }
+        }
+    }
+}
 
 /// A connection's own state: the accepted stream (taken on close, so a further read/write
 /// after that reads as "closed" rather than reusing a dropped socket), its raw descriptor
@@ -37,26 +107,38 @@ use std::time::{Duration, Instant};
 /// handler fiber's read/write, which holds the `RefCell` borrow across a park), and the
 /// server's own open-connection set, so closing removes this connection's id from it.
 pub(crate) struct ConnectionState {
-    stream: RefCell<Option<TcpStream>>,
+    stream: RefCell<Option<ConnectionTransport>>,
     raw_fd: RawFd,
     open_connections: Rc<RefCell<HashSet<u64>>>,
 }
 
-/// A server's own state, reachable both from its accept loop (owns nothing here directly —
-/// the listener lives on the loop's own closure, dropped when it returns) and from
-/// `Server.kill`, run on whichever fiber calls it.
+/// One listener within a server: its own accept loop (dropped, deregistering the
+/// listener, once the loop returns) and where it actually bound — `net.@tcpServe`/
+/// `http.@serve`'s single-address forms build a `ServerState` with exactly one of these;
+/// the listener-list forms build one per `Listener` given, sharing everything else in
+/// `ServerState` across the whole group.
+struct ListenerState {
+    /// The accept loop's own deferred cell, from the `deferred::launch` call that started
+    /// it — never exposed to Quilon; `Server.kill` [`settle`]s every listener's so the
+    /// enclosing block's own join (over those SAME cells, registered by those same
+    /// `launch` calls) finds them already done.
+    accept_loop: *mut crate::deferred::Deferred<()>,
+    /// Where the listener is actually bound — used to wake its accept loop's own parked
+    /// `accept()` on `kill` (see [`wake_accept_loop`]).
+    local_addr: SocketAddr,
+}
+
+/// A server's own state, reachable both from its listeners' accept loops (which own
+/// nothing here directly — each listener lives on its own loop's closure, dropped when
+/// that loop returns) and from `Server.kill`, run on whichever fiber calls it. In-flight
+/// handlers and open connections are counted/tracked ONE set for the whole server, shared
+/// across every listener in it, so `kill` waits for and force-closes across all of them
+/// together rather than one listener at a time.
 pub(crate) struct ServerState {
     stopping: Rc<Cell<bool>>,
     in_flight: Rc<Cell<usize>>,
     open_connections: Rc<RefCell<HashSet<u64>>>,
-    /// The accept loop's own deferred cell, from the `deferred::launch` call that started
-    /// it — never exposed to Quilon; `Server.kill` [`settle`]s it so the enclosing block's
-    /// own join (over the SAME cell, registered by that same `launch` call) finds it
-    /// already done.
-    accept_loop: *mut crate::deferred::Deferred<()>,
-    /// Where the listener is actually bound — used to wake the accept loop's own parked
-    /// `accept()` on `kill` (see [`wake_accept_loop`]).
-    local_addr: SocketAddr,
+    listeners: Vec<ListenerState>,
 }
 
 /// A fresh handle id, never reused — ids are never freed back into a pool, so a stale
@@ -114,16 +196,6 @@ pub extern "C" fn __tcp_serve_launch(
             RUNTIME_EXIT_CODE,
         )
     };
-    let bind_addr = match resolve(&address) {
-        Ok(addr) => addr,
-        Err(error) => bind(error.to_string()),
-    };
-    let mut listener = match TcpListener::bind(bind_addr) {
-        Ok(listener) => listener,
-        Err(error) => bind(error.to_string()),
-    };
-    let local_addr = listener.local_addr().unwrap_or(bind_addr);
-
     let stopping = Rc::new(Cell::new(false));
     let in_flight = Rc::new(Cell::new(0usize));
     let open_connections: Rc<RefCell<HashSet<u64>>> = Rc::new(RefCell::new(HashSet::new()));
@@ -132,9 +204,58 @@ pub extern "C" fn __tcp_serve_launch(
     // `ServerState` itself) is alive.
     let server_identity = Rc::as_ptr(&in_flight) as usize;
 
-    let loop_stopping = Rc::clone(&stopping);
-    let loop_in_flight = Rc::clone(&in_flight);
-    let loop_open_connections = Rc::clone(&open_connections);
+    let listener = match start_listener(
+        &address,
+        ListenerKind::Plain,
+        handler_fn,
+        handler_env,
+        &stopping,
+        &in_flight,
+        &open_connections,
+        server_identity,
+    ) {
+        Ok(listener) => listener,
+        Err(reason) => bind(reason),
+    };
+
+    let server_id = next_handle();
+    with_worker(|worker| {
+        worker.servers.borrow_mut().insert(
+            server_id,
+            Rc::new(ServerState {
+                stopping,
+                in_flight,
+                open_connections,
+                listeners: vec![listener],
+            }),
+        );
+    });
+    server_id as f64
+}
+
+/// Resolve and bind `address`, build the `ListenerKind`-appropriate accept loop over it,
+/// and launch that loop — the common half of [`__tcp_serve_launch`] and
+/// [`__tcp_serve_listeners_launch`], sharing one server's `stopping`/`in_flight`/
+/// `open_connections` across however many listeners call this. `Err(reason)` on a
+/// resolve/bind failure; the caller names which listener this was.
+#[allow(clippy::too_many_arguments)]
+fn start_listener(
+    address: &str,
+    kind: ListenerKind,
+    handler_fn: extern "C" fn(f64, *mut c_void) -> u8,
+    handler_env: *mut c_void,
+    stopping: &Rc<Cell<bool>>,
+    in_flight: &Rc<Cell<usize>>,
+    open_connections: &Rc<RefCell<HashSet<u64>>>,
+    server_identity: usize,
+) -> Result<ListenerState, String> {
+    let bind_addr = resolve(address).map_err(|error| error.to_string())?;
+    let mut listener = TcpListener::bind(bind_addr).map_err(|error| error.to_string())?;
+    let local_addr = listener.local_addr().unwrap_or(bind_addr);
+
+    let loop_stopping = Rc::clone(stopping);
+    let loop_in_flight = Rc::clone(in_flight);
+    let loop_open_connections = Rc::clone(open_connections);
     let accept_loop = launch(move || {
         loop {
             let stream = match listener.accept() {
@@ -149,6 +270,7 @@ pub extern "C" fn __tcp_serve_launch(
             }
             spawn_connection_handler(
                 stream,
+                &kind,
                 handler_fn,
                 handler_env,
                 &loop_in_flight,
@@ -159,6 +281,170 @@ pub extern "C" fn __tcp_serve_launch(
         // `listener` drops here, deregistering it — the runtime's own "close the listener".
     });
 
+    Ok(ListenerState {
+        accept_loop,
+        local_addr,
+    })
+}
+
+/// `core.net.Identity`'s own declaration-order tags (`None`/`Files`/`Base64`) — the
+/// `identity_kind` flag codegen flattens an `Identity` sum value into for
+/// [`__tcp_serve_listeners_push`], mirroring how `deferred::RESULT_OK_TAG`/
+/// `RESULT_NOTOK_TAG` mirror `Result`'s own declaration order. `Base64` needs no constant
+/// of its own: it is whatever `identity_kind` is once it is neither of these.
+const IDENTITY_NONE_TAG: i64 = 0;
+const IDENTITY_FILES_TAG: i64 = 1;
+
+/// One `core.net.Listener` [`__tcp_serve_listeners_push`] has read off a `[]Listener`
+/// element and recorded — `address`, and whether its `transport`/`identity` resolve to a
+/// listener this server can actually start, or to the fatal mismatch
+/// `core.net.@tcpServe`/`@serve`'s own startup check rejects (`TLS` with `None`, or
+/// `Plain` with an identity). Held rather than reported immediately: `push` has no `site`
+/// to report at, only [`__tcp_serve_listeners_launch`] does.
+struct ListenerSpec {
+    address: String,
+    outcome: Result<ListenerSpecKind, bool>,
+}
+
+/// A listener's resolved kind, past the mismatch check — [`ListenerKind`]'s own
+/// not-yet-built-a-`ServerConfig` counterpart.
+enum ListenerSpecKind {
+    Plain,
+    Tls(TlsIdentity),
+}
+
+/// Start a `[]Listener`-list builder for `net.@tcpServe`/`http.@serve`'s listener-list
+/// overload: an opaque handle [`__tcp_serve_listeners_push`] appends one listener to at a
+/// time, as codegen loops over the `[]Listener` argument, consumed by
+/// [`__tcp_serve_listeners_launch`] once the loop ends.
+#[unsafe(no_mangle)]
+pub extern "C" fn __tcp_serve_listeners_new() -> *mut c_void {
+    Box::into_raw(Box::new(Vec::<ListenerSpec>::new())).cast()
+}
+
+/// Append one listener — read off a `core.net.Listener` record's `address`/`transport`/
+/// `identity` fields by codegen, with `identity`'s own sum flattened into `identity_kind`
+/// (see `IDENTITY_NONE_TAG`/`IDENTITY_FILES_TAG`) and its two canonical payload
+/// slots, meaningless when `identity_kind` is `None`'s — to `list`.
+///
+/// # Safety contract (upheld by the compiler)
+/// `list` is a pointer [`__tcp_serve_listeners_new`] returned, not yet handed to
+/// [`__tcp_serve_listeners_launch`]; `address_data`/`first_data`/`second_data` are each
+/// null, or point to their own `_len` readable bytes for the duration of this call.
+#[allow(clippy::too_many_arguments, clippy::not_unsafe_ptr_arg_deref)]
+#[unsafe(no_mangle)]
+pub extern "C" fn __tcp_serve_listeners_push(
+    list: *mut c_void,
+    address_data: *const u8,
+    address_len: i64,
+    is_tls: i64,
+    identity_kind: i64,
+    first_data: *const u8,
+    first_len: i64,
+    second_data: *const u8,
+    second_len: i64,
+) {
+    let address = bytes_to_string(address_data, address_len);
+    let is_tls = is_tls != 0;
+    let has_identity = identity_kind != IDENTITY_NONE_TAG;
+    let outcome = if is_tls != has_identity {
+        Err(has_identity)
+    } else if !is_tls {
+        Ok(ListenerSpecKind::Plain)
+    } else if identity_kind == IDENTITY_FILES_TAG {
+        Ok(ListenerSpecKind::Tls(TlsIdentity::Files {
+            certificate_path: bytes_to_string(first_data, first_len),
+            key_path: bytes_to_string(second_data, second_len),
+        }))
+    } else {
+        Ok(ListenerSpecKind::Tls(TlsIdentity::Base64 {
+            certificate: bytes_to_string(first_data, first_len),
+            key: bytes_to_string(second_data, second_len),
+        }))
+    };
+    // SAFETY: per the contract, a live `Vec<ListenerSpec>` this call's own builder owns.
+    let specs = unsafe { &mut *list.cast::<Vec<ListenerSpec>>() };
+    specs.push(ListenerSpec { address, outcome });
+}
+
+/// Consume `list` (built by zero or more [`__tcp_serve_listeners_push`] calls) and start
+/// every listener it named, sharing one `Server` across all of them: `kill` stops every
+/// one, `addresses()` reports all of their bound addresses. Builds each `TLS` listener's
+/// `ServerConfig` once, here, from its identity. Fatal — naming the failing listener's
+/// address and the reason — on a mismatched transport/identity, an identity that fails to
+/// load, or a bind failure, exactly as [`__tcp_serve_launch`]'s own single listener.
+///
+/// # Safety contract (upheld by the compiler)
+/// `list` is the pointer [`__tcp_serve_listeners_new`] returned for this call, filled by
+/// zero or more `__tcp_serve_listeners_push` calls and not consumed anywhere else;
+/// `handler_fn`/`handler_env`/`site` are as [`__tcp_serve_launch`]'s own contract.
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
+#[unsafe(no_mangle)]
+pub extern "C" fn __tcp_serve_listeners_launch(
+    list: *mut c_void,
+    handler_fn: *const c_void,
+    handler_env: *mut c_void,
+    site: *const QnSite,
+) -> f64 {
+    // SAFETY: per the contract, the boxed `Vec<ListenerSpec>` this call's own builder made.
+    let specs = *unsafe { Box::from_raw(list.cast::<Vec<ListenerSpec>>()) };
+    // SAFETY: per the contract, a live `(f64, ptr) -> i8` trampoline.
+    let handler_fn: extern "C" fn(f64, *mut c_void) -> u8 =
+        unsafe { std::mem::transmute(handler_fn) };
+
+    let stopping = Rc::new(Cell::new(false));
+    let in_flight = Rc::new(Cell::new(0usize));
+    let open_connections: Rc<RefCell<HashSet<u64>>> = Rc::new(RefCell::new(HashSet::new()));
+    let server_identity = Rc::as_ptr(&in_flight) as usize;
+
+    let mut listeners = Vec::with_capacity(specs.len());
+    for spec in specs {
+        let kind = match spec.outcome {
+            Ok(ListenerSpecKind::Plain) => ListenerKind::Plain,
+            Ok(ListenerSpecKind::Tls(identity)) => match server_config(&identity) {
+                Ok(config) => ListenerKind::Tls(config),
+                Err(reason) => fail_at(
+                    site,
+                    codes::IDENTITY_LOAD_FAILED,
+                    &format!("TLS identity for {}: {reason}", spec.address),
+                    RUNTIME_EXIT_CODE,
+                ),
+            },
+            Err(has_identity) => fail_at(
+                site,
+                codes::LISTENER_IDENTITY_MISMATCH_AT_STARTUP,
+                &format!(
+                    "listener {}: {}",
+                    spec.address,
+                    if has_identity {
+                        "a Plain listener's identity must be None"
+                    } else {
+                        "a TLS listener needs an identity other than None"
+                    }
+                ),
+                RUNTIME_EXIT_CODE,
+            ),
+        };
+        match start_listener(
+            &spec.address,
+            kind,
+            handler_fn,
+            handler_env,
+            &stopping,
+            &in_flight,
+            &open_connections,
+            server_identity,
+        ) {
+            Ok(listener) => listeners.push(listener),
+            Err(reason) => fail_at(
+                site,
+                codes::BIND_FAILED,
+                &format!("core.net.@tcpServe: bind {}: {reason}", spec.address),
+                RUNTIME_EXIT_CODE,
+            ),
+        }
+    }
+
     let server_id = next_handle();
     with_worker(|worker| {
         worker.servers.borrow_mut().insert(
@@ -167,8 +453,7 @@ pub extern "C" fn __tcp_serve_launch(
                 stopping,
                 in_flight,
                 open_connections,
-                accept_loop,
-                local_addr,
+                listeners,
             }),
         );
     });
@@ -182,6 +467,67 @@ pub extern "C" fn __tcp_serve_launch(
 /// handler as in-flight for its whole run, not just until its connection closes.
 fn spawn_connection_handler(
     stream: TcpStream,
+    kind: &ListenerKind,
+    handler_fn: extern "C" fn(f64, *mut c_void) -> u8,
+    handler_env: *mut c_void,
+    in_flight: &Rc<Cell<usize>>,
+    open_connections: &Rc<RefCell<HashSet<u64>>>,
+    server_identity: usize,
+) {
+    match kind {
+        ListenerKind::Plain => {
+            let raw_fd = stream.as_raw_fd();
+            register_and_run_handler(
+                ConnectionTransport::Plain(stream),
+                raw_fd,
+                handler_fn,
+                handler_env,
+                in_flight,
+                open_connections,
+                server_identity,
+            );
+        }
+        // The handshake — crypto on `run_blocking`, record I/O on the reactor, exactly
+        // like the client's own (`super::tls::handshake_server`) — runs on its OWN fiber,
+        // so a slow or silent peer parks neither the accept loop nor another connection's
+        // handler. A failed handshake drops `stream` here (deregistering it) with no
+        // table entry ever made and `handler_fn` never called — closed silently.
+        ListenerKind::Tls(config) => {
+            let config = Arc::clone(config);
+            let in_flight = Rc::clone(in_flight);
+            let open_connections = Rc::clone(open_connections);
+            spawn(move || {
+                let mut stream = stream;
+                let raw_fd = stream.as_raw_fd();
+                if let Ok(connection) = super::tls::handshake_server(config, &mut stream) {
+                    register_and_run_handler(
+                        ConnectionTransport::Tls {
+                            stream,
+                            connection: Box::new(connection),
+                        },
+                        raw_fd,
+                        handler_fn,
+                        handler_env,
+                        &in_flight,
+                        &open_connections,
+                        server_identity,
+                    );
+                }
+            });
+        }
+    }
+}
+
+/// Register `transport` as an open connection and run `handler_fn` against it on its own
+/// fiber — the shared second half of [`spawn_connection_handler`]'s `Plain`/`Tls` paths.
+/// Auto-closes the connection once the handler returns (`close-after-handler is the
+/// runtime's`, whether or not the handler closed it itself) and only then leaves
+/// `in_flight`, so `Server.kill`'s wait sees this handler as in-flight for its whole run,
+/// not just until its connection closes.
+#[allow(clippy::too_many_arguments)]
+fn register_and_run_handler(
+    transport: ConnectionTransport,
+    raw_fd: RawFd,
     handler_fn: extern "C" fn(f64, *mut c_void) -> u8,
     handler_env: *mut c_void,
     in_flight: &Rc<Cell<usize>>,
@@ -189,12 +535,11 @@ fn spawn_connection_handler(
     server_identity: usize,
 ) {
     let id = next_handle();
-    let raw_fd = stream.as_raw_fd();
     with_worker(|worker| {
         worker.connections.borrow_mut().insert(
             id,
             Rc::new(ConnectionState {
-                stream: RefCell::new(Some(stream)),
+                stream: RefCell::new(Some(transport)),
                 raw_fd,
                 open_connections: Rc::clone(open_connections),
             }),
@@ -355,23 +700,26 @@ pub extern "C" fn __connection_close(connection_id: f64) {
     close_connection(connection_id as u64);
 }
 
-/// Wake a server's accept loop out of a parked `accept()` with nothing pending, so it
-/// notices `stopping` promptly instead of waiting for the next real client (which may never
-/// come): connect to the listener's own bound port from loopback, in the SAME address
-/// family it bound (`127.0.0.1` for an IPv4 listener, `::1` for an IPv6 one) — connecting
-/// in the wrong family fails outright (nothing is listening there), leaving the accept
-/// loop parked forever with no genuine client to wake it either, which is exactly the hang
-/// this match avoids. Best-effort otherwise (a listener bound to one specific non-loopback
-/// interface address is not reachable via loopback at all) — a failure here just means a
-/// genuine client connection (or `Server.kill`'s own grace period ending) wakes it instead;
-/// either way `kill` still [`settle`]s the accept loop before returning.
+/// Wake every one of a server's accept loops out of a parked `accept()` with nothing
+/// pending, so each notices `stopping` promptly instead of waiting for the next real
+/// client (which may never come): connect to the listener's own bound port from
+/// loopback, in the SAME address family it bound (`127.0.0.1` for an IPv4 listener,
+/// `::1` for an IPv6 one) — connecting in the wrong family fails outright (nothing is
+/// listening there), leaving that accept loop parked forever with no genuine client to
+/// wake it either, which is exactly the hang this match avoids. Best-effort otherwise (a
+/// listener bound to one specific non-loopback interface address is not reachable via
+/// loopback at all) — a failure here just means a genuine client connection (or
+/// `Server.kill`'s own grace period ending) wakes that one listener instead; either way
+/// `kill` still [`settle`]s every accept loop before returning.
 fn wake_accept_loop(server: &ServerState) {
-    let loopback = match server.local_addr.ip() {
-        IpAddr::V4(_) => IpAddr::V4(Ipv4Addr::LOCALHOST),
-        IpAddr::V6(_) => IpAddr::V6(Ipv6Addr::LOCALHOST),
-    };
-    let target = SocketAddr::new(loopback, server.local_addr.port());
-    let _ = TcpStream::connect(target);
+    for listener in &server.listeners {
+        let loopback = match listener.local_addr.ip() {
+            IpAddr::V4(_) => IpAddr::V4(Ipv4Addr::LOCALHOST),
+            IpAddr::V6(_) => IpAddr::V6(Ipv6Addr::LOCALHOST),
+        };
+        let target = SocketAddr::new(loopback, listener.local_addr.port());
+        let _ = TcpStream::connect(target);
+    }
 }
 
 /// The largest deadline this module honors for a caller-supplied `seconds` — `Server.kill`'s
@@ -441,39 +789,99 @@ pub extern "C" fn __server_kill(server_id: f64, seconds: f64) {
     for connection_id in stuck {
         force_shutdown_connection(connection_id);
     }
-    // SAFETY: `accept_loop` is the cell `launch` returned for this server's own accept
-    // loop, still reachable through `server` (this function's only owner of it, since the
-    // handle was just removed from the worker's `servers` table above).
-    unsafe {
-        settle(server.accept_loop);
+    for listener in &server.listeners {
+        // SAFETY: `accept_loop` is the cell `launch` returned for this listener's own
+        // accept loop, still reachable through `server` (this function's only owner of
+        // it, since the handle was just removed from the worker's `servers` table above).
+        unsafe {
+            settle(listener.accept_loop);
+        }
     }
 }
 
-/// `server_id`'s bound `SocketAddr`, or `None` on an already-killed or unknown handle.
-fn bound_address(server_id: f64) -> Option<SocketAddr> {
+/// `server_id`'s listeners' bound `SocketAddr`s, in list order, or `None` on an
+/// already-killed or unknown handle.
+fn bound_addresses(server_id: f64) -> Option<Vec<SocketAddr>> {
     let id = server_id as u64;
     with_worker(|worker| {
         worker
             .servers
             .borrow()
             .get(&id)
-            .map(|server| server.local_addr)
+            .map(|server| server.listeners.iter().map(|l| l.local_addr).collect())
     })
 }
 
-/// `Server.address()`'s `host` half, rendered bare (`Address.text()` adds brackets).
+/// `Server.address()`'s fatal guard: a server with other than exactly one listener has
+/// no single address to report. A no-op on an already-killed or unknown handle, matching
+/// every other `Server`/`Connection` method here.
+#[unsafe(no_mangle)]
+pub extern "C" fn __server_address_guard(server_id: f64, site: *const QnSite) {
+    let Some(addresses) = bound_addresses(server_id) else {
+        return;
+    };
+    if addresses.len() != 1 {
+        fail_at(
+            site,
+            codes::AMBIGUOUS_SERVER_ADDRESS,
+            &format!(
+                "this server has {} listeners; use addresses()",
+                addresses.len()
+            ),
+            RUNTIME_EXIT_CODE,
+        );
+    }
+}
+
+/// `Server.address()`'s `host` half, rendered bare (`Address.text()` adds brackets) —
+/// the first (and, past [`__server_address_guard`], only) listener's.
 #[unsafe(no_mangle)]
 pub extern "C" fn __server_address_host(server_id: f64) -> QnSlice {
-    bound_address(server_id).map_or_else(
-        || alloc_text(&[]),
-        |a| alloc_text(a.ip().to_string().as_bytes()),
-    )
+    bound_addresses(server_id)
+        .and_then(|addresses| addresses.into_iter().next())
+        .map_or_else(
+            || alloc_text(&[]),
+            |a| alloc_text(a.ip().to_string().as_bytes()),
+        )
 }
 
 /// `Server.address()`'s `port` half.
 #[unsafe(no_mangle)]
 pub extern "C" fn __server_address_port(server_id: f64) -> f64 {
-    bound_address(server_id).map_or(0.0, |a| f64::from(a.port()))
+    bound_addresses(server_id)
+        .and_then(|addresses| addresses.into_iter().next())
+        .map_or(0.0, |a| f64::from(a.port()))
+}
+
+/// `Server.addresses()`'s listener count, so codegen can build the `[]Address` array
+/// before filling it — [`__server_address_host_at`]/[`__server_address_port_at`] read
+/// one listener's bound address at a time, by index in list order.
+#[unsafe(no_mangle)]
+pub extern "C" fn __server_listener_count(server_id: f64) -> f64 {
+    bound_addresses(server_id).map_or(0.0, |addresses| addresses.len() as f64)
+}
+
+/// `Server.addresses()`'s `host` half for the listener at `index` (0-based, list order).
+/// `""` past the end, or on an already-killed or unknown handle — codegen only ever asks
+/// for an index under [`__server_listener_count`]'s own answer, so this never actually
+/// happens; it is a bound rather than a channel to report anything through.
+#[unsafe(no_mangle)]
+pub extern "C" fn __server_address_host_at(server_id: f64, index: f64) -> QnSlice {
+    bound_addresses(server_id)
+        .and_then(|addresses| addresses.into_iter().nth(index as usize))
+        .map_or_else(
+            || alloc_text(&[]),
+            |a| alloc_text(a.ip().to_string().as_bytes()),
+        )
+}
+
+/// `Server.addresses()`'s `port` half for the listener at `index`. `0` past the end, or
+/// on an already-killed or unknown handle — see [`__server_address_host_at`]'s own doc.
+#[unsafe(no_mangle)]
+pub extern "C" fn __server_address_port_at(server_id: f64, index: f64) -> f64 {
+    bound_addresses(server_id)
+        .and_then(|addresses| addresses.into_iter().nth(index as usize))
+        .map_or(0.0, |a| f64::from(a.port()))
 }
 
 #[cfg(test)]
@@ -499,6 +907,7 @@ mod tests {
                 .borrow()
                 .get(&(server_id as u64))
                 .expect("server handle")
+                .listeners[0]
                 .local_addr
         })
     }

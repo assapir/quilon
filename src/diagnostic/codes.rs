@@ -137,6 +137,7 @@ codes! {
     TrapWithoutProcessImport = 356 => "signal trap without `core.process`",
     TrapArmNotASignalPattern = 357 => "signal trap arm without a signal pattern",
     DuplicateTrapArm = 358 => "duplicate signal trap arm",
+    ListenerIdentityMismatch = 359 => "mismatched listener transport and identity",
 
     // Family 4 — codegen and build
     CodegenFailed = 400 => "code generation failed",
@@ -155,6 +156,9 @@ codes! {
     WriteFailed = 509 => "write failed",
     ReplaceInvalidCount = 510 => "invalid `replace` count",
     BindFailed = 511 => "bind failed",
+    ListenerIdentityMismatchAtStartup = 512 => "mismatched listener transport and identity at startup",
+    IdentityLoadFailed = 513 => "TLS identity failed to load",
+    AmbiguousServerAddress = 514 => "address() on a server with more than one listener",
 }
 
 impl Code {
@@ -351,6 +355,18 @@ mod tests {
             Code::ReplaceInvalidCount.number()
         );
         assert_eq!(codes::BIND_FAILED, Code::BindFailed.number());
+        assert_eq!(
+            codes::LISTENER_IDENTITY_MISMATCH_AT_STARTUP,
+            Code::ListenerIdentityMismatchAtStartup.number()
+        );
+        assert_eq!(
+            codes::IDENTITY_LOAD_FAILED,
+            Code::IdentityLoadFailed.number()
+        );
+        assert_eq!(
+            codes::AMBIGUOUS_SERVER_ADDRESS,
+            Code::AmbiguousServerAddress.number()
+        );
     }
 
     /// A diagnostic's exit code is its family digit — the rule `main.rs`'s `fail` applies

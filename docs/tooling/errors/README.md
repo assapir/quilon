@@ -177,6 +177,7 @@ its name relative to the first block (`` ```quilon title="lib/util.qn" ``).
 | [QN356](semantics.md#qn356--signal-trap-without-coreprocess) | signal trap without `core.process` |
 | [QN357](semantics.md#qn357--signal-trap-arm-without-a-signal-pattern) | signal trap arm without a signal pattern |
 | [QN358](semantics.md#qn358--duplicate-signal-trap-arm) | duplicate signal trap arm |
+| [QN359](semantics.md#qn359--mismatched-listener-transport-and-identity) | mismatched listener transport and identity |
 | [QN400](build.md#qn400--code-generation-failed) | code generation failed |
 | [QN401](build.md#qn401--native-build-failed) | native build failed |
 | [QN500](runtime.md#qn500--assertion-failed) | assertion failed |
@@ -191,3 +192,6 @@ its name relative to the first block (`` ```quilon title="lib/util.qn" ``).
 | [QN509](runtime.md#qn509--write-failed) | write failed |
 | [QN510](runtime.md#qn510--invalid-replace-count) | invalid `replace` count |
 | [QN511](runtime.md#qn511--bind-failed) | bind failed |
+| [QN512](runtime.md#qn512--mismatched-listener-transport-and-identity-at-startup) | mismatched listener transport and identity at startup |
+| [QN513](runtime.md#qn513--tls-identity-failed-to-load) | TLS identity failed to load |
+| [QN514](runtime.md#qn514--address-on-a-server-with-more-than-one-listener) | address() on a server with more than one listener |

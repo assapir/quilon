@@ -1,22 +1,27 @@
 // SPDX-License-Identifier: GPL-2.0-only WITH Classpath-exception-2.0
 
-//! `net.@tcpRequest`'s `TLS` transport.
+//! TLS for `core.net`: `net.@tcpRequest`'s `TLS` transport (the client half, below), and
+//! `net.@tcpServe`/`http.@serve`'s `TLS` listeners (the server half, at the end of this
+//! file).
 //!
-//! The connect and the handshake's record I/O run on the reactor, exactly like the plain
-//! path; only `process_new_packets()` — the CPU-bound step (signature verification, key
-//! exchange) — goes to the blocking-call pool ([`run_blocking`]), so a slow or silent peer
-//! parks the calling fiber, not a pool thread, and record encryption/decryption afterward
-//! runs inline on the reactor.
+//! Both sides share the same shape: the connect/accept and the handshake's record I/O run
+//! on the reactor; only the CPU-bound step (`ClientConnection`/`ServerConnection::new`,
+//! `process_new_packets()` — signature verification, key exchange) goes to the
+//! blocking-call pool ([`run_blocking`]), so a slow or silent peer parks the calling
+//! fiber, not a pool thread, and record encryption/decryption afterward runs inline on
+//! the reactor.
 
 use super::TcpStream;
 use crate::blocking::run_blocking;
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
 use rustls::crypto::{CryptoProvider, verify_tls12_signature, verify_tls13_signature};
-use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
+use rustls::pki_types::pem::PemObject;
+use rustls::pki_types::{CertificateDer, PrivateKeyDer, ServerName, UnixTime};
 use rustls::{
     CertificateError, ClientConfig, ClientConnection, DigitallySignedStruct, Error as TLSError,
-    RootCertStore, SignatureScheme,
+    RootCertStore, ServerConfig, ServerConnection, SignatureScheme,
 };
+use std::fs;
 use std::io;
 use std::sync::{Arc, OnceLock};
 
@@ -269,5 +274,179 @@ impl ServerCertVerifier for AcceptAnyCertificate {
         self.provider
             .signature_verification_algorithms
             .supported_schemes()
+    }
+}
+
+// ---------------------------------------------------------------------------------------
+// Server side: `net.@tcpServe`/`http.@serve`'s `TLS` listeners.
+// ---------------------------------------------------------------------------------------
+
+/// A `TLS` listener's identity, already split into its two PEM byte sources —
+/// `core.net.Identity`'s `Files`/`Base64` variants, read off a `Listener` record by
+/// codegen and reassembled by `super::server::__tcp_serve_listeners_push` into this, the
+/// `None` variant never reaching here (a `Plain` listener has no [`ListenerKind::Tls`],
+/// so nothing of this module's own runs for it at all).
+pub(super) enum Identity {
+    Files {
+        certificate_path: String,
+        key_path: String,
+    },
+    Base64 {
+        certificate: String,
+        key: String,
+    },
+}
+
+impl Identity {
+    /// This identity's certificate-chain and private-key PEM bytes: `Files` reads them
+    /// from disk, `Base64` decodes them. Either way, the result is handed to
+    /// [`CertificateDer::pem_slice_iter`]/[`PrivateKeyDer::from_pem_slice`] exactly as if
+    /// they had come from a PEM file.
+    fn pem_bytes(&self) -> Result<(Vec<u8>, Vec<u8>), String> {
+        match self {
+            Identity::Files {
+                certificate_path,
+                key_path,
+            } => {
+                let certificate = fs::read(certificate_path)
+                    .map_err(|error| format!("reading {certificate_path}: {error}"))?;
+                let key =
+                    fs::read(key_path).map_err(|error| format!("reading {key_path}: {error}"))?;
+                Ok((certificate, key))
+            }
+            Identity::Base64 { certificate, key } => {
+                let certificate = base64_decode(certificate)
+                    .map_err(|error| format!("the certificate's base64: {error}"))?;
+                let key =
+                    base64_decode(key).map_err(|error| format!("the key's base64: {error}"))?;
+                Ok((certificate, key))
+            }
+        }
+    }
+}
+
+/// Build the `ServerConfig` a `TLS` listener serves every connection it accepts under —
+/// built once, here, when the listener starts, never per-connection. `identity`'s
+/// certificate PEM may hold a whole chain (leaf first); its key PEM may be PKCS#8, SEC1,
+/// or PKCS#1 — whatever [`PrivateKeyDer`]'s own PEM parser accepts.
+pub(super) fn server_config(identity: &Identity) -> Result<Arc<ServerConfig>, String> {
+    let (certificate_pem, key_pem) = identity.pem_bytes()?;
+    let certificates: Vec<CertificateDer<'static>> =
+        CertificateDer::pem_slice_iter(&certificate_pem)
+            .collect::<Result<_, _>>()
+            .map_err(|error| format!("the certificate is not a valid PEM chain: {error}"))?;
+    if certificates.is_empty() {
+        return Err("the certificate holds no certificate".to_string());
+    }
+    let key = PrivateKeyDer::from_pem_slice(&key_pem).map_err(|error| {
+        format!("the key is not a valid PEM private key (PKCS#8, SEC1, or PKCS#1): {error}")
+    })?;
+    let provider = Arc::new(rustls::crypto::ring::default_provider());
+    let config = ServerConfig::builder_with_provider(provider)
+        .with_safe_default_protocol_versions()
+        .expect("ring's cipher suites support rustls's default protocol versions")
+        .with_no_client_auth()
+        .with_single_cert(certificates, key)
+        .map_err(|error| format!("the certificate and key do not match: {error}"))?;
+    Ok(Arc::new(config))
+}
+
+/// Build the `ServerConnection` and drive it to completion — this file's client-side
+/// `handshake`, mirrored: `ServerConnection::new` and `process_new_packets` both run on
+/// the blocking-call pool; `write_tls`/`read_tls` move raw bytes over `stream`'s own
+/// park-on-readiness `read`/`write`, the only steps that stay on the reactor. A client
+/// whose handshake fails this way is closed silently by the caller — see
+/// `super::server::spawn_connection_handler`'s own `ListenerKind::Tls` arm.
+pub(super) fn handshake_server(
+    config: Arc<ServerConfig>,
+    stream: &mut TcpStream,
+) -> io::Result<ServerConnection> {
+    let mut conn = run_blocking(move || ServerConnection::new(config))?.map_err(tls_io_error)?;
+    while conn.is_handshaking() {
+        while conn.wants_write() {
+            if conn.write_tls(stream)? == 0 {
+                break;
+            }
+        }
+        if !conn.wants_read() {
+            continue;
+        }
+        if conn.read_tls(stream)? == 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "connection closed during the TLS handshake",
+            ));
+        }
+        let (returned, outcome) = run_blocking(move || {
+            let outcome = conn.process_new_packets();
+            (conn, outcome)
+        })?;
+        conn = returned;
+        outcome.map_err(tls_io_error)?;
+    }
+    Ok(conn)
+}
+
+/// Decode standard base64 (RFC 4648: `A`-`Z`, `a`-`z`, `0`-`9`, `+`, `/`, optional `=`
+/// padding) — `core.net.Identity::Base64`'s own encoding, `base64 -w0`'s output. Hand
+/// rolled rather than a dependency: the whole thing is a fixed lookup table and some bit
+/// shifting, the same call this file's own `format_date` already makes ("a date-handling
+/// dependency buys nothing a dozen lines of civil-calendar arithmetic don't already
+/// cover") for a comparably small, comparably fixed piece of arithmetic.
+fn base64_decode(text: &str) -> Result<Vec<u8>, String> {
+    fn sextet(byte: u8) -> Option<u8> {
+        match byte {
+            b'A'..=b'Z' => Some(byte - b'A'),
+            b'a'..=b'z' => Some(byte - b'a' + 26),
+            b'0'..=b'9' => Some(byte - b'0' + 52),
+            b'+' => Some(62),
+            b'/' => Some(63),
+            _ => None,
+        }
+    }
+    let input: Vec<u8> = text
+        .bytes()
+        .filter(|byte| !byte.is_ascii_whitespace())
+        .collect();
+    let unpadded = input
+        .strip_suffix(b"==")
+        .or_else(|| input.strip_suffix(b"="))
+        .unwrap_or(input.as_slice());
+
+    let mut bits: u32 = 0;
+    let mut bit_count: u32 = 0;
+    let mut decoded = Vec::with_capacity(unpadded.len() * 3 / 4);
+    for &byte in unpadded {
+        let value = sextet(byte).ok_or_else(|| format!("invalid base64 character {byte:#x}"))?;
+        bits = (bits << 6) | u32::from(value);
+        bit_count += 6;
+        if bit_count >= 8 {
+            bit_count -= 8;
+            decoded.push((bits >> bit_count) as u8);
+        }
+    }
+    Ok(decoded)
+}
+
+#[cfg(test)]
+mod server_tests {
+    use super::*;
+
+    #[test]
+    fn base64_decode_round_trips_known_text() {
+        // `echo -n 'Quilon TLS' | base64` — a known-good vector, not a round trip through
+        // an encoder this crate does not have (nothing here ever encodes base64).
+        assert_eq!(base64_decode("UXVpbG9uIFRMUw==").unwrap(), b"Quilon TLS");
+    }
+
+    #[test]
+    fn base64_decode_accepts_unpadded_input_and_embedded_newlines() {
+        assert_eq!(base64_decode("UXVpbG9u").unwrap(), b"Quilon");
+        assert_eq!(base64_decode("UXVp\nbG9uIFRMUw==").unwrap(), b"Quilon TLS");
+    }
+
+    #[test]
+    fn base64_decode_rejects_an_invalid_character() {
+        assert!(base64_decode("not valid base64!").is_err());
     }
 }

@@ -806,3 +806,23 @@ Two arms of the same trap name the same `process.Signal` variant.
 ```
 
 A trap has at most one arm per signal — remove or merge the duplicate.
+
+### QN359 — mismatched listener transport and identity
+
+A literal `core.net.Listener { ... }` whose `transport` and `identity` are written as
+one of `core.net`'s own constructors disagree: `transport = TLS` with `identity =
+None`, or `transport = Plain` with an identity other than `None`.
+
+```quilon ignore
+<< core.net
+
+listener = net.Listener { address = ":443", transport = net.TLS, identity = net.None }
+
+^ = () -> Num => < 0 >
+```
+
+Set `identity = net.Files(certificatePath, keyPath)` (or `net.Base64(certificate,
+key)`) for a `TLS` listener, or `identity = net.None` for a `Plain` one. The same
+disagreement on a `Listener` built another way — assembled from a variable, say, rather
+than written out in place — is not caught here; it is fatal when that listener starts
+(see [QN512](runtime.md#qn512--mismatched-listener-transport-and-identity-at-startup)).

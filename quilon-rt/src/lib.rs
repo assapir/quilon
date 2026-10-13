@@ -81,8 +81,10 @@ pub use mem::{
 };
 pub use net::{
     __connection_close, __connection_read_launch, __connection_read_with_timeout_launch,
-    __connection_write, __server_address_host, __server_address_port, __server_kill,
-    __tcp_request_launch, __tcp_serve_launch,
+    __connection_write, __server_address_guard, __server_address_host, __server_address_host_at,
+    __server_address_port, __server_address_port_at, __server_kill, __server_listener_count,
+    __tcp_request_launch, __tcp_serve_launch, __tcp_serve_listeners_launch,
+    __tcp_serve_listeners_new, __tcp_serve_listeners_push,
 };
 pub use process::{__argv_to_text_array, __envp_to_map, __exit};
 pub use report::{
@@ -208,9 +210,27 @@ intrinsic_registry! {
     __connection_read_with_timeout_launch: extern "C" fn(f64, f64) -> QnSlice,
     __connection_write: extern "C" fn(f64, *const u8, i64),
     __connection_close: extern "C" fn(f64),
+    __server_address_guard: extern "C" fn(f64, *const QnSite),
     __server_address_host: extern "C" fn(f64) -> QnSlice,
     __server_address_port: extern "C" fn(f64) -> f64,
+    __server_listener_count: extern "C" fn(f64) -> f64,
+    __server_address_host_at: extern "C" fn(f64, f64) -> QnSlice,
+    __server_address_port_at: extern "C" fn(f64, f64) -> f64,
     __server_kill: extern "C" fn(f64, f64),
+    __tcp_serve_listeners_new: extern "C" fn() -> *mut c_void,
+    __tcp_serve_listeners_push: extern "C" fn(
+        *mut c_void,
+        *const u8,
+        i64,
+        i64,
+        i64,
+        *const u8,
+        i64,
+        *const u8,
+        i64,
+    ),
+    __tcp_serve_listeners_launch:
+        extern "C" fn(*mut c_void, *const c_void, *mut c_void, *const QnSite) -> f64,
     __stream_file_run: extern "C" fn(*mut QnResult, *const u8, i64, f64, *const c_void, *mut c_void),
     __http_frame_body:
         extern "C" fn(*mut QnResult, *const u8, i64, i8, *const u8, i64, *const u8, i64),

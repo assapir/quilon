@@ -10,6 +10,21 @@
 ~ any certificate, trusted or not.
 >> Certificates = Checked / Unchecked
 
+~ A `Listener`'s TLS identity: `None` (a `Plain` listener), `Files(certificatePath,
+~ keyPath)` — two PEM files read when the listener starts, the certificate file holding a
+~ whole chain, leaf first — or `Base64(certificate, key)`, the base64 of each of those same
+~ two PEM files, one line each (`base64 -w0 fullchain.pem`), for an environment variable or
+~ a secrets manager. Either way the private key may be PKCS#8, SEC1, or PKCS#1. See
+~ docs/corelib/net.md.
+>> Identity = None / Files(Text, Text) / Base64(Text, Text)
+
+~ One socket a server binds: `address` (`host:port`, exactly the form `@tcpRequest`/
+~ `@tcpServe` accept), `transport`, and the TLS `identity` a `TLS` listener serves —
+~ `None` for a `Plain` one. `transport = TLS` with `identity = None`, or `transport =
+~ Plain` with an identity other than `None`, is a compile error on a listener written as
+~ a literal, or fatal when a listener built another way starts — see docs/corelib/net.md.
+>> Listener = { address :: Text, transport :: Transport, identity :: Identity }
+
 ~ `@tcpRequest`'s `TLS`-overload settings.
 >> ConnectOptions = {
   transport :: Transport,
@@ -107,8 +122,17 @@
   kill = () -> $ => < $ >,
 
   ~ The address this server actually bound — most useful after binding port `0` (any free
-  ~ port), to learn which one the OS actually chose.
-  address = () -> Address => < Address { host = "", port = 0 } >
+  ~ port), to learn which one the OS actually chose. Fatal on a server with more than one
+  ~ listener, naming `addresses()` — see that method.
+  address = () -> Address => < Address { host = "", port = 0 } >,
+
+  ~ Every listener's bound address, in the order `@tcpServe`/`@serve` was given them — a
+  ~ one-element list for a server with a single listener. The way to learn a multi-listener
+  ~ server's bound addresses, where `address()` is fatal.
+  addresses = () -> []Address => <
+    none :: []Address = []
+    none
+  >
 }
 
 ~ Bind `address` (`host:port`, exactly what `@tcpRequest` accepts — a numeric IPv4/IPv6
@@ -125,6 +149,19 @@
 ~ `@tcpServe`, given the `Address` a `Server.address()` reported instead of `host:port` text.
 >> @tcpServe = (address :: Address, handler :: (Connection) -> $) -> Server => <
   @tcpServe(address.text(), handler)
+>
+
+~ Bind every `Listener` in `listeners` — each its own `address`, `Plain` or `TLS` per its
+~ own `transport`/`identity` — and return ONE `Server` handle: `kill` stops every listener,
+~ `addresses()` reports all of their bound addresses in list order. A `TLS` listener's
+~ `ServerConfig` is built once, when this call starts it, from its `identity`; a client
+~ whose handshake against it fails is closed silently, the handler never run. Every
+~ accepted connection, over every listener, runs `handler` on its own fiber, exactly as
+~ the single-listener form above. A bind failure, or an identity that cannot be loaded
+~ (a missing file, bad base64, bad PEM, or a key that does not match the certificate), is
+~ fatal, naming the failing listener's address and the reason.
+>> @tcpServe = (listeners :: []Listener, handler :: (Connection) -> $) -> Server => <
+  Server { handle = 0 }
 >
 
 ~ The suite for `Address.text()`: offline over canned host/port pairs, so it runs anywhere.

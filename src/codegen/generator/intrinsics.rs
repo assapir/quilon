@@ -311,6 +311,54 @@ impl<'ctx> CodeGenerator<'ctx> {
             // is still open past that grace period, then settle the accept loop's own
             // launch. Parks the calling fiber until all of that has happened.
             "__server_kill" => void.fn_type(&[f64t.into(), f64t.into()], false),
+            // void __server_address_guard(double serverId, Site* site) — `Server.address()`'s
+            // fatal check: a server with other than exactly one listener has no single
+            // address to report.
+            "__server_address_guard" => void.fn_type(&[f64t.into(), ptr.into()], false),
+            // double __server_listener_count(double serverId) — `Server.addresses()`'s own
+            // listener count, read before looping over `__server_address_host_at`/
+            // `__server_address_port_at` to fill the `[]Address` this builds.
+            "__server_listener_count" => f64t.fn_type(&[f64t.into()], false),
+            // { ptr, i64 } __server_address_host_at(double serverId, double index) —
+            // `Server.addresses()`'s `host` half for the listener at `index` (list order).
+            "__server_address_host_at" => self
+                .ptr_len_struct_type()
+                .fn_type(&[f64t.into(), f64t.into()], false),
+            // double __server_address_port_at(double serverId, double index) —
+            // `Server.addresses()`'s `port` half for the listener at `index`.
+            "__server_address_port_at" => f64t.fn_type(&[f64t.into(), f64t.into()], false),
+            // ptr __tcp_serve_listeners_new() — start a `[]Listener`-list builder for
+            // `net.@tcpServe`/`http.@serve`'s listener-list overload.
+            "__tcp_serve_listeners_new" => ptr.fn_type(&[], false),
+            // void __tcp_serve_listeners_push(ptr list, i8* address, i64 addressLen,
+            // i64 isTls, i64 identityKind, i8* first, i64 firstLen, i8* second, i64
+            // secondLen) — append one `core.net.Listener`'s fields, read off it by codegen,
+            // to `list`. `isTls`/`identityKind` are the `transport`/`identity` sums'
+            // discriminants flattened to `i64` flags, exactly as `__tcp_request_launch`'s
+            // own `tls`/`unchecked_certificates`; `first`/`second` are `identity`'s two
+            // canonical payload slots (`Files`/`Base64`'s own two `Text` fields),
+            // meaningless when `identityKind` is `None`'s.
+            "__tcp_serve_listeners_push" => void.fn_type(
+                &[
+                    ptr.into(),
+                    ptr.into(),
+                    i64t.into(),
+                    i64t.into(),
+                    i64t.into(),
+                    ptr.into(),
+                    i64t.into(),
+                    ptr.into(),
+                    i64t.into(),
+                ],
+                false,
+            ),
+            // double __tcp_serve_listeners_launch(ptr list, ptr handlerFn, ptr handlerEnv,
+            // Site* site) — consume `list` and start every listener it named, sharing one
+            // `Server` across all of them, exactly as `__tcp_serve_launch`'s own single
+            // listener otherwise.
+            "__tcp_serve_listeners_launch" => {
+                f64t.fn_type(&[ptr.into(), ptr.into(), ptr.into(), ptr.into()], false)
+            }
             // void __stream_file_run({i8,{ptr,i64}}* out, i8* path,i64, double chunkSize,
             // ptr onChunk, ptr environment) — the `@streamFile` leaf IO primitive: runs on the
             // calling fiber, parking between reads, calling the code generator's fixed-shape

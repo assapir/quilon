@@ -203,7 +203,12 @@ impl<'ctx> CodeGenerator<'ctx> {
                     return self.generate_connection_close(arguments);
                 }
                 ("core.net.Server", "kill") => return self.generate_server_kill(arguments),
-                ("core.net.Server", "address") => return self.generate_server_address(arguments),
+                ("core.net.Server", "address") => {
+                    return self.generate_server_address(arguments, span);
+                }
+                ("core.net.Server", "addresses") => {
+                    return self.generate_server_addresses(arguments);
+                }
                 _ => {}
             }
         }
@@ -776,17 +781,29 @@ impl<'ctx> CodeGenerator<'ctx> {
                 const NAME: &str = "core.net.@tcpServe";
                 const CALL_FAILED: &str = "Failed to call core.net.@tcpServe";
                 Self::expect_arity(NAME, arguments, false, 2)?;
-                let (address_ptr, address_len) = self.address_text_fields(&arguments[0])?;
                 let BasicValueEnum::StructValue(closure) =
                     self.generate_expression(&arguments[1])?
                 else {
                     return Err(format!("{NAME} expects a closure handler"));
                 };
-
                 let bundle = self.bundle_closure(closure, "tcp_serve_bundle")?;
-
                 let thunk = self.emit_tcp_serve_handler_thunk()?;
                 let thunk_ptr = thunk.as_global_value().as_pointer_value();
+
+                if matches!(
+                    self.oracle.expression_type(&arguments[0]),
+                    Some(Type::Array(_))
+                ) {
+                    return self.generate_tcp_serve_listeners(
+                        &arguments[0],
+                        thunk_ptr,
+                        bundle.into(),
+                        site,
+                        CALL_FAILED,
+                    );
+                }
+
+                let (address_ptr, address_len) = self.address_text_fields(&arguments[0])?;
                 let launch_site = self.site_value(site)?;
 
                 let serve = self.get_intrinsic("__tcp_serve_launch")?;
@@ -822,7 +839,6 @@ impl<'ctx> CodeGenerator<'ctx> {
                         arguments.len()
                     ));
                 }
-                let (address_ptr, address_len) = self.address_text_fields(&arguments[0])?;
                 let BasicValueEnum::StructValue(closure) =
                     self.generate_expression(&arguments[1])?
                 else {
@@ -860,6 +876,21 @@ impl<'ctx> CodeGenerator<'ctx> {
 
                 let thunk = self.emit_http_serve_handler_thunk()?;
                 let thunk_ptr = thunk.as_global_value().as_pointer_value();
+
+                if matches!(
+                    self.oracle.expression_type(&arguments[0]),
+                    Some(Type::Array(_))
+                ) {
+                    return self.generate_tcp_serve_listeners(
+                        &arguments[0],
+                        thunk_ptr,
+                        bundle.into(),
+                        site,
+                        CALL_FAILED,
+                    );
+                }
+
+                let (address_ptr, address_len) = self.address_text_fields(&arguments[0])?;
                 let launch_site = self.site_value(site)?;
 
                 let serve = self.get_intrinsic("__tcp_serve_launch")?;
@@ -939,6 +970,182 @@ impl<'ctx> CodeGenerator<'ctx> {
         }
     }
 
+    /// `net.@tcpServe(listeners, handler)` / `http.@serve(listeners, handler[, options])`:
+    /// the listener-list lowering both call sites share, parameterized only by which
+    /// `handler_fn`/`handler_env` built the fixed-shape call behind it (`net.@tcpServe`'s
+    /// own handler thunk, or `core.http`'s `serveConnection` thunk wrapping it) — the
+    /// same split their single-`Listener` forms already have. Loops over `listeners` (via
+    /// [`Self::array_loop`]) pushing one `__tcp_serve_listeners_push` call per element,
+    /// reading each `Listener`'s `address`/`transport`/`identity` fields with a raw
+    /// struct GEP rather than [`Self::generate_field_access`]: the array ELEMENT is a
+    /// runtime loop variable, not an `Expression` that call could re-evaluate.
+    /// `transport`/`identity`'s sum tags flatten to the `i64` flags the push intrinsic
+    /// takes, exactly as [`Self::tcp_request_option_flag`]'s own flattening of
+    /// `ConnectOptions`.
+    fn generate_tcp_serve_listeners(
+        &mut self,
+        listeners: &Expression,
+        handler_fn: PointerValue<'ctx>,
+        handler_env: BasicValueEnum<'ctx>,
+        site: &Span,
+        call_failed: &'static str,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let listener_fields = match self.oracle.expression_type(listeners) {
+            Some(Type::Array(elem)) => match elem.as_ref() {
+                Type::Named { fields, name, .. } if name == "core.net.Listener" => {
+                    Rc::clone(fields)
+                }
+                _ => return Err("expected a []core.net.Listener".to_string()),
+            },
+            _ => return Err("expected a []core.net.Listener".to_string()),
+        };
+        let listener_struct_ty = self.record_struct_type(&listener_fields)?;
+        let listener_elem_ty: BasicTypeEnum = self.context.ptr_type(AddressSpace::default()).into();
+        let text_ty = self.ptr_len_struct_type();
+        let transport_ty = self.sum_struct_type("core.net.Transport");
+        let identity_ty = self.sum_struct_type("core.net.Identity");
+
+        let (_, data_ptr, size) = self.extract_array(listeners)?;
+
+        let new_fn = self.get_intrinsic("__tcp_serve_listeners_new")?;
+        let list = Self::call_result_to_basic(
+            self.builder
+                .build_call(new_fn, &[], "listener_list")
+                .map_err(ctx(call_failed))?,
+        )?;
+
+        let push_fn = self.get_intrinsic("__tcp_serve_listeners_push")?;
+        self.array_loop(size, |this, index| {
+            let element = this
+                .load_element(data_ptr, listener_elem_ty, index)?
+                .into_pointer_value();
+
+            let address_field = this
+                .builder
+                .build_struct_gep(listener_struct_ty, element, 0, "listener_address_field")
+                .map_err(ctx("Failed to GEP Listener.address"))?;
+            let BasicValueEnum::StructValue(address) = this
+                .builder
+                .build_load(text_ty, address_field, "listener_address")
+                .map_err(ctx("Failed to load Listener.address"))?
+            else {
+                return Err("core.net.Listener.address must be a Text".to_string());
+            };
+            let address_ptr = this
+                .builder
+                .build_extract_value(address, 0, "address_ptr")
+                .map_err(ctx("Failed to extract Text ptr"))?
+                .into_pointer_value();
+            let address_len = this
+                .builder
+                .build_extract_value(address, 1, "address_len")
+                .map_err(ctx("Failed to extract Text len"))?
+                .into_int_value();
+
+            let transport_field = this
+                .builder
+                .build_struct_gep(listener_struct_ty, element, 1, "listener_transport_field")
+                .map_err(ctx("Failed to GEP Listener.transport"))?;
+            let transport = this
+                .builder
+                .build_load(transport_ty, transport_field, "listener_transport")
+                .map_err(ctx("Failed to load Listener.transport"))?;
+            let is_tls = this.variant_tag_matches("core.net.TLS", transport)?;
+            let is_tls = this
+                .builder
+                .build_int_z_extend(is_tls, this.context.i64_type(), "is_tls")
+                .map_err(ctx("Failed to widen is_tls"))?;
+
+            let identity_field = this
+                .builder
+                .build_struct_gep(listener_struct_ty, element, 2, "listener_identity_field")
+                .map_err(ctx("Failed to GEP Listener.identity"))?;
+            let BasicValueEnum::StructValue(identity) = this
+                .builder
+                .build_load(identity_ty, identity_field, "listener_identity")
+                .map_err(ctx("Failed to load Listener.identity"))?
+            else {
+                return Err("core.net.Listener.identity must be a sum value".to_string());
+            };
+            let identity_kind = this
+                .builder
+                .build_extract_value(identity, 0, "identity_tag")
+                .map_err(ctx("Failed to extract Identity tag"))?
+                .into_int_value();
+            let identity_kind = this
+                .builder
+                .build_int_z_extend(identity_kind, this.context.i64_type(), "identity_kind")
+                .map_err(ctx("Failed to widen identity_kind"))?;
+            let first = this
+                .builder
+                .build_extract_value(identity, 1, "identity_first")
+                .map_err(ctx("Failed to extract Identity payload 0"))?
+                .into_struct_value();
+            let second = this
+                .builder
+                .build_extract_value(identity, 2, "identity_second")
+                .map_err(ctx("Failed to extract Identity payload 1"))?
+                .into_struct_value();
+            let first_ptr = this
+                .builder
+                .build_extract_value(first, 0, "identity_first_ptr")
+                .map_err(ctx("Failed to extract Text ptr"))?
+                .into_pointer_value();
+            let first_len = this
+                .builder
+                .build_extract_value(first, 1, "identity_first_len")
+                .map_err(ctx("Failed to extract Text len"))?
+                .into_int_value();
+            let second_ptr = this
+                .builder
+                .build_extract_value(second, 0, "identity_second_ptr")
+                .map_err(ctx("Failed to extract Text ptr"))?
+                .into_pointer_value();
+            let second_len = this
+                .builder
+                .build_extract_value(second, 1, "identity_second_len")
+                .map_err(ctx("Failed to extract Text len"))?
+                .into_int_value();
+
+            this.builder
+                .build_call(
+                    push_fn,
+                    &[
+                        list.into(),
+                        address_ptr.into(),
+                        address_len.into(),
+                        is_tls.into(),
+                        identity_kind.into(),
+                        first_ptr.into(),
+                        first_len.into(),
+                        second_ptr.into(),
+                        second_len.into(),
+                    ],
+                    "",
+                )
+                .map_err(ctx("Failed to call __tcp_serve_listeners_push"))?;
+            Ok(())
+        })?;
+
+        let launch_fn = self.get_intrinsic("__tcp_serve_listeners_launch")?;
+        let launch_site = self.site_value(site)?;
+        let call = self
+            .builder
+            .build_call(
+                launch_fn,
+                &[
+                    list.into(),
+                    handler_fn.into(),
+                    handler_env.into(),
+                    launch_site.into(),
+                ],
+                "tcp_serve_listeners",
+            )
+            .map_err(ctx(call_failed))?;
+        let handle = Self::call_result_to_basic(call)?;
+        self.build_plain_record(&[handle])
+    }
+
     /// `Connection.close()`: close the connection now, if it is not already closed.
     fn generate_connection_close(
         &mut self,
@@ -984,16 +1191,20 @@ impl<'ctx> CodeGenerator<'ctx> {
         Ok(self.unit_value().into())
     }
 
-    /// `Server.address()`: the bound host and port from two runtime reads of the same
-    /// `local_addr`, assembled with [`Self::build_plain_record`].
+    /// `Server.address()`: fatal, naming `addresses()`, on a server with other than
+    /// exactly one listener ([`Self::generate_server_address_guard`]); otherwise the
+    /// bound host and port from two runtime reads of the same `local_addr`, assembled
+    /// with [`Self::build_plain_record`].
     fn generate_server_address(
         &mut self,
         arguments: &[Expression],
+        span: &Span,
     ) -> Result<BasicValueEnum<'ctx>, String> {
         const NAME: &str = "core.net.Server.address";
         const CALL_FAILED: &str = "Failed to call core.net.Server.address";
         Self::expect_arity(NAME, arguments, true, 0)?;
         let handle = self.handle_field(&arguments[0])?;
+        self.generate_server_address_guard(handle, span)?;
         let host_fn = self.get_intrinsic("__server_address_host")?;
         let host = Self::call_result_to_basic(
             self.builder
@@ -1007,6 +1218,80 @@ impl<'ctx> CodeGenerator<'ctx> {
                 .map_err(ctx(CALL_FAILED))?,
         )?;
         self.build_plain_record(&[host, port])
+    }
+
+    /// `Server.address()`'s fatal startup guard: a server with other than exactly one
+    /// listener has no single address for it to report.
+    fn generate_server_address_guard(
+        &mut self,
+        handle: inkwell::values::FloatValue<'ctx>,
+        span: &Span,
+    ) -> Result<(), String> {
+        const CALL_FAILED: &str = "Failed to call core.net.Server.address";
+        let guard = self.get_intrinsic("__server_address_guard")?;
+        let site = self.site_value(span)?;
+        self.builder
+            .build_call(guard, &[handle.into(), site.into()], "")
+            .map_err(ctx(CALL_FAILED))?;
+        Ok(())
+    }
+
+    /// `Server.addresses()`: every listener's bound address, in list order — a `[]Address`
+    /// built by looping (via [`Self::array_loop`]) over `__server_listener_count`'s own
+    /// answer, reading each one's host/port with `__server_address_host_at`/
+    /// `__server_address_port_at` and assembling it with [`Self::build_plain_record`],
+    /// exactly as [`Self::generate_server_address`]'s own single `Address`.
+    fn generate_server_addresses(
+        &mut self,
+        arguments: &[Expression],
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        const NAME: &str = "core.net.Server.addresses";
+        const CALL_FAILED: &str = "Failed to call core.net.Server.addresses";
+        Self::expect_arity(NAME, arguments, true, 0)?;
+        let handle = self.handle_field(&arguments[0])?;
+
+        let count_fn = self.get_intrinsic("__server_listener_count")?;
+        let BasicValueEnum::FloatValue(count) = Self::call_result_to_basic(
+            self.builder
+                .build_call(count_fn, &[handle.into()], "listener_count")
+                .map_err(ctx(CALL_FAILED))?,
+        )?
+        else {
+            return Err(format!("{NAME} expects a Num listener count"));
+        };
+        let count_i64 = self
+            .builder
+            .build_float_to_signed_int(count, self.context.i64_type(), "listener_count_i64")
+            .map_err(ctx(CALL_FAILED))?;
+
+        // `Address` is a named record: an array of it, like any array of a named record,
+        // holds one pointer per element.
+        let element_llvm: BasicTypeEnum = self.context.ptr_type(AddressSpace::default()).into();
+        let data_ptr = self.alloc_array_data(element_llvm, count_i64)?;
+
+        let host_fn = self.get_intrinsic("__server_address_host_at")?;
+        let port_fn = self.get_intrinsic("__server_address_port_at")?;
+        self.array_loop(count_i64, |this, index| {
+            let index_f64 = this
+                .builder
+                .build_signed_int_to_float(index, this.context.f64_type(), "index_f64")
+                .map_err(ctx("Failed to convert a listener index to Num"))?;
+            let host = Self::call_result_to_basic(
+                this.builder
+                    .build_call(host_fn, &[handle.into(), index_f64.into()], "address_host")
+                    .map_err(ctx(CALL_FAILED))?,
+            )?;
+            let port = Self::call_result_to_basic(
+                this.builder
+                    .build_call(port_fn, &[handle.into(), index_f64.into()], "address_port")
+                    .map_err(ctx(CALL_FAILED))?,
+            )?;
+            let address = this.build_plain_record(&[host, port])?;
+            this.store_element(data_ptr, element_llvm, index, address)?;
+            Ok(())
+        })?;
+
+        self.array_struct(data_ptr, count_i64)
     }
 
     /// The `handle :: Num` field of a `Connection`/`Server` receiver — the raw id every

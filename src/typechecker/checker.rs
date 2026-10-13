@@ -456,6 +456,13 @@ pub enum TypeError {
         first: Span,
         span: Span,
     },
+    /// A literal `core.net.Listener` whose `transport` and `identity` disagree: `TLS`
+    /// with `identity = None`, or `Plain` with an identity other than `None`.
+    /// `has_identity` is which side of that disagreement this literal is on.
+    ListenerIdentityMismatch {
+        has_identity: bool,
+        span: Span,
+    },
 }
 
 /// What the position a lambda sits in states about its type — the target of **contextual
