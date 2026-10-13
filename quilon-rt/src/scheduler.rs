@@ -160,14 +160,11 @@ impl Scheduler {
     }
 }
 
-/// The id of the fiber whose own code is executing right now, if this thread is inside a
-/// [`resume_fiber`] call at all (every fiber, including the seed one, is resumed through it).
-/// Per-worker state, kept as a SEPARATE stack from `gc::enter_fiber`/`leave_fiber`'s own
-/// nesting (pushed/popped in lockstep, inside [`resume_fiber`]) so other state that must live
-/// per FIBER rather than per worker (a `< >` block's open launch scopes — see
-/// `crate::launch_scope`) has a way to ask "which fiber is running right now" without
-/// reaching into the GC module's own bookkeeping. Several fibers interleave on one worker, so
-/// per-worker state alone conflates them; per-fiber state keyed by this id does not.
+/// The id of the fiber executing right now, if this thread is inside a [`resume_fiber`] call
+/// at all. Kept as its own stack (pushed/popped in lockstep with `gc::enter_fiber`/
+/// `leave_fiber`, but separate from them) so per-fiber state that is not the GC's business —
+/// a `< >` block's open launch scopes (`crate::launch_scope`) — has a way to ask which fiber
+/// is running without reaching into GC bookkeeping.
 pub(crate) fn current_fiber_id() -> Option<usize> {
     with_worker(|worker| worker.running_fibers.borrow().last().copied())
 }
@@ -187,18 +184,10 @@ fn current_yielder(name: &str) -> *const FiberYielder {
     yielder
 }
 
-/// Suspend `yielder` with `park` — first holding off collection for the jump away
-/// (`gc::switch_disable`, see `crate::gc`'s module doc's switch-guard section) once GC's
-/// parked-fiber scan already covers this fiber's stack (`gc::leave_fiber`, the last
-/// fiber-side bookkeeping before the actual jump away; this must run from the fiber's own
-/// code rather than wrapping the resumer's opaque `coroutine.resume()`, since only fiber
-/// code can say the jump has not happened yet) — then, once resumed, restore the worker's
-/// current-yielder cell to it (sibling fibers run between the suspend and its resume and
-/// clobber the shared cell — see `crate::worker::Worker::current_yielder`'s own doc), hand
-/// this fiber's stack back to the automatic scan before excluding it from the parked one
-/// again (`gc::enter_fiber`), and only then let collection resume (`gc::switch_enable`) —
-/// matching the `gc::switch_disable` [`resume_fiber`] made just before the `resume()` call
-/// that landed here.
+/// Suspend `yielder` with `park`: hold off collection for the jump away (`gc::switch_disable`)
+/// once the parked-fiber scan already covers this fiber's stack (`gc::leave_fiber`), jump,
+/// then on resume restore the worker's current-yielder cell (a sibling fiber running in
+/// between clobbers it) and reverse the GC bookkeeping before letting collection resume.
 fn suspend_on(yielder: *const FiberYielder, park: Park) {
     let id = current_fiber_id().expect("suspend_on runs only from within a fiber");
     gc::switch_disable();
@@ -213,12 +202,8 @@ fn suspend_on(yielder: *const FiberYielder, park: Park) {
 
 /// Suspend `yielder` with `park` and never return — the one-way trip
 /// [`abort_current_case`]/[`abort_current_trap`] take, whose coroutine its guard loop
-/// force-resets rather than resuming again. Still runs [`gc::switch_disable`]/
-/// [`gc::leave_fiber`] first, for the same reason [`suspend_on`] does: this fiber's stack
-/// must stay parked-scan-covered and collection held off across the jump away, and only
-/// fiber-side code can say the jump has not happened yet. No matching `switch_enable` here
-/// — [`resume_fiber`]'s own, once its `coroutine.resume()` call returns with this park, is
-/// the match.
+/// force-resets rather than resuming again. No matching `switch_enable` here: `resume_fiber`
+/// provides it once `coroutine.resume()` returns with this park.
 fn suspend_final(yielder: *const FiberYielder, park: Park) -> ! {
     gc::switch_disable();
     gc::leave_fiber();
@@ -235,26 +220,13 @@ fn set_current_yielder(yielder: *const FiberYielder) {
     with_worker(|worker| worker.current_yielder.set(yielder));
 }
 
-/// Resume `coroutine` (fiber `id`, guard page `[guard_low, guard_high)`) with its guard
-/// page recorded for [`stack_overflow`] (restored to whatever it covered before once the
-/// coroutine yields or returns), `id` tracked in the worker's `running_fibers` for the
-/// whole call, and collection held off (`gc::switch_disable`) for the `resume()` call
-/// itself — matched by a `gc::switch_enable`, either the FIBER's own (landing on this same
-/// resume, see [`new_fiber`]/[`suspend_on`]) or, once `resume()` returns here, this
-/// function's own (the fiber parked or finished, so it is this thread's turn to run
-/// normally again). See `crate::gc`'s module doc's switch-guard section for why the
-/// pairing splits this way. [`run`]'s ready-queue loop and [`run_case_guarded`]'s both
-/// resume this way — a fiber is a fiber to stack-overflow reporting and to the collector,
-/// whichever loop is driving it.
-///
-/// The GC's own scan bookkeeping (`gc::enter_fiber`/`gc::leave_fiber`) does NOT wrap this
-/// call either, for the same reason: it runs from the fiber's own code instead
-/// (`new_fiber`'s entry, and around every `suspend_on`/`suspend_final`), because only code
-/// already running ON the fiber's stack can say the jump onto or off of it has actually
-/// happened. `running_fibers` is still pushed/popped here, caller-side, before/after the
-/// call: it is plain Rust bookkeeping (which id is innermost), not a raw stack-pointer
-/// race, and fiber-side code (`suspend_on`, `new_fiber`) reads it via [`current_fiber_id`]
-/// to know its own id.
+/// Resume `coroutine` (fiber `id`, guard page `[guard_low, guard_high)`), with its guard
+/// page recorded for `stack_overflow`, `id` pushed onto `running_fibers` for the call, and
+/// collection held off (`gc::switch_disable`) across the `resume()` itself — matched by a
+/// `gc::switch_enable` either the fiber's own (`new_fiber`/`suspend_on`, landing on this same
+/// resume) or this function's own once `resume()` returns (see `crate::gc`'s module doc).
+/// `running_fibers` is plain caller-side bookkeeping, not GC state, so it is pushed/popped
+/// here rather than fiber-side.
 fn resume_fiber(
     id: usize,
     guard_low: usize,
@@ -300,20 +272,11 @@ fn allocate_fiber_stack(stack_size: usize) -> FiberStackAllocation {
     }
 }
 
-/// Build a coroutine on `stack` that installs its own `Yielder` into the worker's
-/// current-yielder cell, then tells the GC this fiber has landed (`gc::enter_fiber` — see
-/// `crate::gc`'s module doc for why this must happen fiber-side, as the very first thing
-/// this fiber's own code does) and, bookkeeping now done, lets collection resume
-/// (`gc::switch_enable`, matching the `gc::switch_disable` [`resume_fiber`] made just
-/// before this very first `resume()` call landed here) — then runs `body`, then holds
-/// collection off again (`gc::switch_disable`) and tells the GC it is about to fall off
-/// the end (`gc::leave_fiber`, mirroring every `suspend_on` call `body` may have made
-/// along the way), leaving the matching `gc::switch_enable` to [`resume_fiber`] once this
-/// final jump away lands there — the entry every fiber shares, whether driven by the ready
-/// queue ([`spawn_with_stack`]) or resumed directly by its own guard
-/// ([`run_case_guarded`]). The worker's `running_fibers` (read by `gc::enter_fiber` via
-/// [`current_fiber_id`]) is already pushed by [`resume_fiber`] before this closure ever
-/// gets to run.
+/// Build a coroutine on `stack`: install its own `Yielder`, tell the GC it has landed
+/// (`gc::enter_fiber`, which must run fiber-side — see `crate::gc`'s module doc) and let
+/// collection resume, run `body`, then reverse the GC bookkeeping before falling off the
+/// end. The entry every fiber shares, whether driven by the ready queue
+/// ([`spawn_with_stack`]) or resumed directly by its own guard ([`run_case_guarded`]).
 fn new_fiber(stack: DefaultStack, body: impl FnOnce() + 'static) -> FiberCoroutine {
     Coroutine::with_stack(stack, move |yielder, ()| {
         set_current_yielder(yielder as *const FiberYielder);
@@ -328,9 +291,9 @@ fn new_fiber(stack: DefaultStack, body: impl FnOnce() + 'static) -> FiberCorouti
 
 /// A fiber built but not yet installed on any worker's scheduler. The stack allocation and
 /// coroutine construction ([`allocate_fiber_stack`], [`new_fiber`]) have no thread affinity
-/// of their own — only actually RUNNING the fiber does — so [`spawn_placed`] builds one on
-/// the calling thread and hands it to whichever worker will run it, via
-/// [`install_fiber`], before it is ever resumed.
+/// of their own — only running the fiber does — so [`spawn_placed`] builds one on the
+/// calling thread and hands it to whichever worker will run it, via [`install_fiber`],
+/// before it is ever resumed.
 struct UnstartedFiber {
     coroutine: FiberCoroutine,
     low: usize,
@@ -359,10 +322,9 @@ fn prepare_fiber(stack_size: usize, f: impl FnOnce() + 'static) -> UnstartedFibe
     }
 }
 
-/// Install `fiber` on the CURRENT thread's worker and ready-queue it. Call only from the
-/// worker thread that will actually run it — [`spawn_with_stack`]'s own tail (the calling
-/// fiber's own worker) and a placed job drained from `crate::placement::Registry::drain`
-/// (the shortest-queue worker [`spawn_placed`] picked) both satisfy this.
+/// Install `fiber` on the current thread's worker and ready-queue it. Call only from the
+/// worker thread that will actually run it — [`spawn_with_stack`]'s own tail and a placed
+/// job drained from `crate::placement::Registry::drain` both satisfy this.
 fn install_fiber(fiber: UnstartedFiber) {
     with_worker(|worker| {
         {
@@ -380,7 +342,7 @@ fn install_fiber(fiber: UnstartedFiber) {
     });
 }
 
-/// Spawn `f` as a new fiber and enqueue it, on the CALLING fiber's own worker, with a stack
+/// Spawn `f` as a new fiber and enqueue it, on the calling fiber's own worker, with a stack
 /// of `stack_size` bytes.
 fn spawn_with_stack<F: FnOnce() + 'static>(stack_size: usize, f: F) {
     install_fiber(prepare_fiber(stack_size, f));

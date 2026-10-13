@@ -1,19 +1,10 @@
 // SPDX-License-Identifier: GPL-2.0-only WITH Classpath-exception-2.0
 
-//! The current worker: the state that used to sit in seven separate thread-locals across
-//! `scheduler`, `launch_scope`, `net::server`, and `abort_trap`, now owned by one [`Worker`]
-//! per OS thread and reached only through [`with_worker`]/[`try_with_worker`] — never a bare
-//! thread-local read. [`WORKER`] is a plain `thread_local!`; `scheduler::run` spawns one
-//! `Worker` per OS thread (see `docs/concurrency/runtime.md`), and every caller reaches its
-//! own through this module's accessors, never another thread's.
-//!
-//! Each field keeps its own interior mutability (a `Cell`/`RefCell` per field, not one
-//! `RefCell` around the whole struct) — exactly mirroring the independent thread-locals it
-//! replaces. [`with_worker`] only ever takes a shared `&Worker` (never `borrow_mut`s the
-//! outer `Option`), so nesting two calls to it — already how the replaced thread-locals were
-//! used relative to each other — stays panic-free: one field's own short-scoped borrow never
-//! blocks access to a sibling field's.
-//!
+//! The current worker's state, one [`Worker`] per OS thread, reached only through
+//! [`with_worker`]/[`try_with_worker`] — never a bare thread-local read. Each field keeps
+//! its own interior mutability rather than one `RefCell` around the whole struct, so
+//! [`with_worker`] (a shared `&Worker` only, never `borrow_mut` on the outer `Option`) stays
+//! panic-free when called again from inside itself.
 use crate::launch_scope::LaunchScope;
 use crate::net::server::ConnectionState;
 use crate::placement::Registry;
