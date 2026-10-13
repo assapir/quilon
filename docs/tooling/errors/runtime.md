@@ -192,12 +192,12 @@ side of the disagreement it is on.
 ```quilon ignore
 << core.net
 
-mismatched = () -> net.Listener => <
-  net.Listener { address = ":443", transport = net.TLS, identity = net.None }
+mismatched = (transport :: net.Transport, identity :: net.Identity) -> net.Listener => <
+  net.Listener { address = ":443", transport = transport, identity = identity }
 >
 
 ^ = () -> Num => <
-  server = net.@tcpServe([mismatched()], connection => $)
+  server = net.@tcpServe([mismatched(net.TLS, net.None)], connection => $)
   0
 >
 ```
