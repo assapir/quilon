@@ -1,5 +1,7 @@
-~ core.http — a minimal HTTP client built entirely on core.net's @tcpRequest. HTTP only,
-~ no TLS. Import with `<< core.http`. Reference: docs/corelib/http.md.
+~ core.http — a minimal HTTP client built entirely on core.net's @tcpRequest, and a server
+~ built over core.net's @tcpServe. The client speaks HTTP only; the server's `@serve`
+~ listener-list form carries TLS listeners too, same as core.net's own. Import with
+~ `<< core.http`. Reference: docs/corelib/http.md.
 
 << core.net
 
