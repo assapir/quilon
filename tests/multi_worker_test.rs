@@ -151,6 +151,11 @@ fn cpu_bound_handlers_overlap_across_more_than_one_worker() {
     let file = temp_ql("cpu_overlap", &cpu_bound_server_program(ITERATIONS));
     let (child, port) = spawn_server(&file, Some("4"));
 
+    // Warm-up: the first placement this process ever makes starts the helper threads
+    // (lazy start — see `scheduler::ensure_helpers_started`), a one-time cost that belongs
+    // outside the steady-state measurement below, not folded into the baseline.
+    timed_round_trip(port);
+
     let baseline = timed_round_trip(port);
 
     let start = Instant::now();
@@ -187,6 +192,10 @@ fn four_concurrent_sleeping_handlers_overlap_under_the_naive_sum() {
     const SECONDS: f64 = 0.15;
     let file = temp_ql("sleep_overlap", &sleeping_server_program(SECONDS));
     let (child, port) = spawn_server(&file, None);
+
+    // Warm-up: see the matching comment in `cpu_bound_handlers_overlap_across_more_than_one_worker` —
+    // the one-time helper-spawn cost of this process's first placement stays out of `elapsed`.
+    timed_round_trip(port);
 
     let start = Instant::now();
     let clients: Vec<_> = (0..4)
