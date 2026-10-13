@@ -61,6 +61,10 @@ impl TypeError {
             TypeError::FunctionTypedField { .. } => Code::FunctionTypedField,
             TypeError::PositionalAccessOnNamedRecord { .. } => Code::PositionalAccessOnNamedRecord,
             TypeError::RecordPositionOutOfRange { .. } => Code::RecordPositionOutOfRange,
+            TypeError::RecordUpdatePositionOutOfRange { .. } => {
+                Code::RecordUpdatePositionOutOfRange
+            }
+            TypeError::MultiplePositionalSpreads { .. } => Code::MultiplePositionalSpreads,
             TypeError::InvalidPayloadType { .. } => Code::InvalidPayloadType,
             TypeError::AtomicBindingNotMutable { .. } => Code::AtomicBindingNotMutable,
             TypeError::AtomicBindingUsedBare { .. } => Code::AtomicBindingUsedBare,
@@ -202,13 +206,17 @@ impl TypeError {
                 "write `{name}` as a method instead: `{name} = (…) -> R => < … >`"
             )),
             TypeError::PositionalAccessOnNamedRecord { .. } => diagnostic.help(
-                "`.0`/`.1`/… reads a POSITIONAL record's fields — one written `{ T1, T2 }`, \
-                 never a named one"
+                "a position (`0`, `1`, …) reaches a POSITIONAL record's fields — one \
+                 written `{ T1, T2 }`, never a named one"
                     .to_string(),
             ),
             TypeError::RecordPositionOutOfRange { .. } => {
                 diagnostic.help("use a position this record actually has")
             }
+            TypeError::RecordUpdatePositionOutOfRange { .. } => diagnostic
+                .help("a spread update only overrides an existing position, never adds one"),
+            TypeError::MultiplePositionalSpreads { .. } => diagnostic
+                .help("spread one source at a time, or override positions after a single spread"),
             TypeError::InvalidPayloadType { .. } => diagnostic.help(
                 "a payload is Num, Text, Bool, $, a declared record, a declared sum, an \
                  anonymous record (named or positional) of one of those, or an array/map of \
@@ -306,6 +314,8 @@ impl TypeError {
             | TypeError::FunctionTypedField { span, .. }
             | TypeError::PositionalAccessOnNamedRecord { span, .. }
             | TypeError::RecordPositionOutOfRange { span, .. }
+            | TypeError::RecordUpdatePositionOutOfRange { span, .. }
+            | TypeError::MultiplePositionalSpreads { span }
             | TypeError::InvalidPayloadType { span, .. }
             | TypeError::AtomicBindingNotMutable { span, .. }
             | TypeError::AtomicBindingUsedBare { span, .. }
@@ -788,8 +798,8 @@ impl std::fmt::Display for TypeError {
             TypeError::PositionalAccessOnNamedRecord { field, .. } => {
                 write!(
                     f,
-                    "`.{field}` reads a position, and this record's fields are named — \
-                     read a named field with `.name` instead"
+                    "`{field}` names a position, and this record's fields are named — \
+                     reach them by name instead"
                 )
             }
             TypeError::RecordPositionOutOfRange { position, size, .. } => {
@@ -800,6 +810,19 @@ impl std::fmt::Display for TypeError {
                     size.saturating_sub(1)
                 )
             }
+            TypeError::RecordUpdatePositionOutOfRange { position, size, .. } => {
+                write!(
+                    f,
+                    "`{position}` overrides nothing: the spread source has {size} \
+                     position(s), 0..{}",
+                    size.saturating_sub(1)
+                )
+            }
+            TypeError::MultiplePositionalSpreads { .. } => write!(
+                f,
+                "this literal spreads more than one source, and at least one is positional \
+                 — which position wins is undecided"
+            ),
             TypeError::InvalidPayloadType { variant, got, .. } => {
                 write!(
                     f,

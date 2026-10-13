@@ -618,6 +618,23 @@ impl<'ctx> CodeGenerator<'ctx> {
         self.text_fields(text_value)
     }
 
+    /// Whether `options.<field>` — a two-variant, no-payload sum — IS `variant`, as the `i64`
+    /// flag `__tcp_request_launch` takes instead of the sum itself. `variant` is the sum's
+    /// fully-qualified name (e.g. `core.net.TLS`): `core.net`'s own canonical name, not the
+    /// `net` alias an importer binds it to.
+    fn tcp_request_option_flag(
+        &mut self,
+        options: &Expression,
+        field: &str,
+        variant: &str,
+    ) -> Result<inkwell::values::IntValue<'ctx>, String> {
+        let value = self.generate_field_access(options, field)?;
+        let matches = self.variant_tag_matches(variant, value)?;
+        self.builder
+            .build_int_z_extend(matches, self.context.i64_type(), "flag")
+            .map_err(|e| e.to_string())
+    }
+
     /// Lower a leaf `@` IO primitive call to its runtime intrinsic. `site` is the span of the
     /// `@`-identifier — the call's launch site, which a fault in the launched work reports at.
     ///
@@ -662,16 +679,34 @@ impl<'ctx> CodeGenerator<'ctx> {
                 // where it is forced. Nothing here dereferences it.
                 Self::call_result_to_basic(call)
             }
+            // `net.@tcpRequest(address, requestBytes)` or, the `TLS` transport overload,
+            // `net.@tcpRequest(address, requestBytes, options :: net.ConnectOptions)` — both
+            // arities, and both the `Text` and `Address` forms of `address`
+            // ([`Self::address_text_fields`]), are compiler-lowered here, onto one intrinsic.
             "tcpRequest" => {
                 const NAME: &str = "core.net.@tcpRequest";
                 const CALL_FAILED: &str = "Failed to call core.net.@tcpRequest";
                 const LOAD_FAILED: &str = "Failed to load core.net.@tcpRequest result";
-                Self::expect_arity(NAME, arguments, false, 2)?;
+                if arguments.len() != 2 && arguments.len() != 3 {
+                    return Err(format!(
+                        "{NAME} expects 2 or 3 arguments, got {}",
+                        arguments.len()
+                    ));
+                }
                 let (addr_ptr, addr_len) = self.address_text_fields(&arguments[0])?;
                 let (req_ptr, req_len) = self.extract_text(&arguments[1])?;
-                // The launch writes a DEFERRED `Result` (`Ok(responseBytes)` / `NotOk(message)`,
-                // tagged deferred) into `out`; a `Result` crosses the FFI via this out-pointer, not
-                // an aggregate return. The loaded value is forced at its strict-use site.
+                let zero = self.context.i64_type().const_zero();
+                let (tls_flag, unchecked_flag) = match arguments.get(2) {
+                    None => (zero, zero),
+                    Some(options) => (
+                        self.tcp_request_option_flag(options, "transport", "core.net.TLS")?,
+                        self.tcp_request_option_flag(
+                            options,
+                            "certificates",
+                            "core.net.Unchecked",
+                        )?,
+                    ),
+                };
                 let result_ty = self.sum_struct_type("Result");
                 let out = self.create_entry_block_alloca("tcp_request_out", result_ty.into())?;
                 let request = self.get_intrinsic("__tcp_request_launch")?;
@@ -684,6 +719,8 @@ impl<'ctx> CodeGenerator<'ctx> {
                             addr_len.into(),
                             req_ptr.into(),
                             req_len.into(),
+                            tls_flag.into(),
+                            unchecked_flag.into(),
                         ],
                         "",
                     )

@@ -384,6 +384,19 @@ pub enum TypeError {
         size: usize,
         span: Span,
     },
+    /// A spread-update's numbered entry (`{<-p, 2 = 8}`) names a position the spread
+    /// source doesn't have — an override only, never an addition.
+    RecordUpdatePositionOutOfRange {
+        position: String,
+        size: usize,
+        span: Span,
+    },
+    /// A record literal spreads more than one source and at least one is positional —
+    /// which position wins where they overlap is undecided, so this is rejected rather
+    /// than guessed.
+    MultiplePositionalSpreads {
+        span: Span,
+    },
     /// A sum-type variant's payload outside the accepted set.
     InvalidPayloadType {
         variant: String,

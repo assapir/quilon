@@ -301,6 +301,7 @@ impl<'a> Parser<'a> {
             if part.is_empty() {
                 continue;
             }
+            reject_leading_zero_position(part, self.span(part_start, part_start + part_len))?;
             let span = self.span(expression.span().start, part_start + part_len);
             expression = Expression::FieldAccess {
                 expression: Box::new(expression),
@@ -785,15 +786,18 @@ impl<'a> Parser<'a> {
     }
 
     /// The bare `{ … }` record literal's field list — like [`Self::parse_record_fields`]
-    /// (named-only, for a constructor), plus a positional entry: a plain expression with
-    /// no name (`{ 6, 7 }`). Mixing named/spread entries with positional ones is
-    /// `Code::MixedRecordFields`.
+    /// (named-only, for a constructor), plus two entries a constructor has no use for:
+    /// a positional one, a plain expression with no name (`{ 6, 7 }`), and a numbered
+    /// override, `position = value` (`{<-p, 0 = 9}`), which only makes sense next to a
+    /// spread. Mixing is `Code::MixedRecordFields`; a numbered entry with no spread at
+    /// all is `Code::NumberedRecordFieldWithoutSpread`.
     fn parse_record_literal_fields(&mut self) -> Result<Vec<(String, Expression)>, ParseError> {
         let start = self.current_span();
 
         enum Entry {
             Spread(Expression),
             Named(String, Expression),
+            Numbered(String, Expression),
             Positional(Expression),
         }
 
@@ -806,6 +810,15 @@ impl<'a> Parser<'a> {
                 let field_name = parser.expect_ident()?;
                 parser.expect(&TokenKind::Assign)?;
                 Ok(Entry::Named(field_name, parser.parse_expression()?))
+            } else if matches!(parser.peek().kind, TokenKind::Number(_))
+                && !parser.peek().text.contains('.')
+                && parser.peek_ahead(1).kind == TokenKind::Assign
+            {
+                let token = parser.peek().clone();
+                reject_leading_zero_position(&token.text, token.span.clone())?;
+                parser.advance();
+                parser.expect(&TokenKind::Assign)?;
+                Ok(Entry::Numbered(token.text, parser.parse_expression()?))
             } else {
                 Ok(Entry::Positional(parser.parse_expression()?))
             }
@@ -813,11 +826,24 @@ impl<'a> Parser<'a> {
         self.expect(&TokenKind::BraceClose)?;
         let span = self.span(start.start, self.previous_span().end);
 
-        let positional_count = entries
+        let bare_count = entries
             .iter()
             .filter(|entry| matches!(entry, Entry::Positional(_)))
             .count();
-        if positional_count > 0 && positional_count < entries.len() {
+        let named_count = entries
+            .iter()
+            .filter(|entry| matches!(entry, Entry::Named(..)))
+            .count();
+        let numbered_count = entries
+            .iter()
+            .filter(|entry| matches!(entry, Entry::Numbered(..)))
+            .count();
+        let spread_count = entries
+            .iter()
+            .filter(|entry| matches!(entry, Entry::Spread(_)))
+            .count();
+
+        if bare_count > 0 && bare_count < entries.len() {
             return Err(ParseError::new(
                 Code::MixedRecordFields,
                 span,
@@ -828,23 +854,40 @@ impl<'a> Parser<'a> {
                  record: `{ v1, v2 }`",
             ));
         }
+        if numbered_count > 0 && spread_count == 0 {
+            return Err(ParseError::new(
+                Code::NumberedRecordFieldWithoutSpread,
+                span,
+                "a numbered field only overrides a spread; write the positions directly"
+                    .to_string(),
+            )
+            .help("drop the positions: `{ v1, v2 }`"));
+        }
+        if named_count > 0 && numbered_count > 0 {
+            return Err(ParseError::new(
+                Code::MixedRecordFields,
+                span,
+                "a record literal is all named fields or all positional — not both".to_string(),
+            )
+            .help("override a spread with either `name = value` entries or `position = value` ones, not both"));
+        }
 
-        Ok(if positional_count > 0 {
+        Ok(if bare_count > 0 {
             entries
                 .into_iter()
                 .enumerate()
                 .map(|(index, entry)| match entry {
                     Entry::Positional(value) => (crate::ast::positional_field_name(index), value),
-                    _ => unreachable!("checked above: no named/spread entries"),
+                    _ => unreachable!("checked above: no other entries alongside a bare one"),
                 })
                 .collect()
         } else {
             entries
                 .into_iter()
                 .map(|entry| match entry {
-                    Entry::Named(name, value) => (name, value),
+                    Entry::Named(name, value) | Entry::Numbered(name, value) => (name, value),
                     Entry::Spread(value) => (String::new(), value),
-                    Entry::Positional(_) => unreachable!("checked above: no positional entries"),
+                    Entry::Positional(_) => unreachable!("checked above: bare_count == 0 here"),
                 })
                 .collect()
         })
@@ -988,4 +1031,18 @@ impl<'a> Parser<'a> {
             span,
         }))
     }
+}
+
+/// A position has no leading zero (`p.01`, `01 = v`); `text` is the digits as written.
+fn reject_leading_zero_position(text: &str, span: Span) -> Result<(), ParseError> {
+    if text.len() > 1 && text.starts_with('0') {
+        let canonical = text.trim_start_matches('0');
+        let canonical = if canonical.is_empty() { "0" } else { canonical };
+        return Err(ParseError::new(
+            Code::LeadingZeroPosition,
+            span,
+            format!("position `{text}` has a leading zero; write `{canonical}`"),
+        ));
+    }
+    Ok(())
 }

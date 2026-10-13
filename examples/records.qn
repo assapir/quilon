@@ -26,4 +26,9 @@ haul = (loot :: { Num, Num }) -> Num => < loot.0 + loot.1 >
   ~ `.0.1` is two field accesses on a nested positional record, never the number `0.1`.
   grid = { { 1, 2 }, { 3, 4 } }
   assert(grid.0.1 + grid.1.0, equals(5))
+
+  ~ A spread copies a positional record; a numbered entry overrides one of its positions.
+  betterLoot = {<-goblinLoot, 0 = 20}
+  assert(betterLoot.0, equals(20))
+  assert(betterLoot.1, equals(3))
 >

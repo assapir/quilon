@@ -1,8 +1,10 @@
 ~ A live walkthrough of the `core.http` client: a GET matched to a Response, a transport
-~ failure, request options, headers, params, every request constructor (both overloads),
-~ and Method's own methods. On success the program exits 0.
-~ NOTE: this makes LIVE network calls to example.com:80 when run.
+~ failure, an https:// request and a forced-TLS scheme-less one, request options, headers,
+~ params, every request constructor (both overloads), and Method's own methods. On success
+~ the program exits 0.
+~ NOTE: this makes LIVE network calls to example.com:80 and :443 when run.
 << core.http
+<< core.net
 
 ^ = () -> $ => <
   ~ A plain GET, matched to its Response, checking status, a non-empty body, and headers.
@@ -17,6 +19,21 @@
 
   ~ A transport failure comes back as NotOk, not a crash.
   assert(http.Request.get("http://127.0.0.1:1/").send(), isNotOk())
+
+  ~ An https:// URL connects over TLS, against the OS trust store, with no other change
+  ~ to the call.
+  secureResult = http.Request.get("https://example.com/").send()
+  assert(secureResult, isOk())
+  secureResponse = secureResult ?
+    | Ok(page) => page
+    | NotOk(_) => http.Response { raw = "" }
+  assert(secureResponse.status().code(), equals(200))
+
+  ~ RequestOptions.transport = TLS forces TLS for a URL that names no scheme at all —
+  ~ the same reply as the https:// request above.
+  tlsOptions := http.RequestOptions.default()
+  tlsOptions.transport := net.TLS
+  assert(http.Request.get("example.com/", tlsOptions).send(), isOk())
 
   ~ Build options with headers added one at a time, then a whole map at once.
   options := http.RequestOptions.default()

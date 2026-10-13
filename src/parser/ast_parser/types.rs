@@ -231,6 +231,8 @@ impl<'a> Parser<'a> {
                 .collect()
         };
 
-        Ok(crate::ast::Type::Record(fields))
+        Ok(crate::ast::Type::Record(
+            crate::ast::canonical_record_field_order(fields),
+        ))
     }
 }

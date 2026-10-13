@@ -809,7 +809,7 @@ A trap has at most one arm per signal — remove or merge the duplicate.
 
 ### QN359 — positional access on a named record
 
-`.0`/`.1`/… reads a position, which only a POSITIONAL record (`{ Num, Num }`) has. A
+`.0`/`.1`/… reads a position, which only a positional record (`{ Num, Num }`) has. A
 named record — anonymous (`{ name :: Text }`) or a declared type (`User`) — reads its
 fields by name.
 
@@ -822,7 +822,8 @@ User = { name :: Text, age :: Num }
 ```
 
 Read the field by name (`u.name`), or declare the record positional if that's what was
-meant.
+meant. A spread update's numbered override hits the same error when its source is named:
+`{<-u, 0 = 1}` for the `u` above.
 
 ### QN360 — record position out of range
 
@@ -837,3 +838,34 @@ A positional record access named a position past the record's last field.
 
 `pair` has positions `0` and `1` — use one of those, or add another field to the
 record's type.
+
+### QN361 — record update overriding a position past the spread source
+
+A spread update's numbered entry (`0 = 9`) overrides an existing position; it never adds
+one, the way a named override may.
+
+```quilon ignore
+^ = () -> Num => <
+  pair = { 6, 7 }
+  updated = {<-pair, 2 = 8}
+  updated.0
+>
+```
+
+`pair` has positions `0` and `1` — override one of those.
+
+### QN362 — more than one positional spread in a record literal
+
+A record literal with two or more `<-source` spreads, at least one positional, where
+they overlap, which position wins is undecided.
+
+```quilon ignore
+^ = () -> Num => <
+  p = { 6, 7 }
+  q = { 8, 9 }
+  both = {<-p, <-q}
+  both.0
+>
+```
+
+Spread one source, then override specific positions afterward.

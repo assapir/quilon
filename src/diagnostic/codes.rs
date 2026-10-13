@@ -66,7 +66,9 @@ codes! {
     InterpolatedTextPattern = 116 => "text pattern with interpolation",
     EmptyTrap = 117 => "signal trap with no arms",
     MixedRecordFields = 118 => "mixed named and positional record fields",
-    VariantMultiplePayloads = 119 => "sum-type variant with more than one payload",
+    NumberedRecordFieldWithoutSpread = 119 => "numbered record field without a spread",
+    LeadingZeroPosition = 120 => "record position with a leading zero",
+    VariantMultiplePayloads = 121 => "sum-type variant with more than one payload",
 
     // Family 2 — module resolution and linking
     AtDeclarationOutsideCorelib = 200 => "`@` primitive declared outside the corelib",
@@ -141,6 +143,8 @@ codes! {
     DuplicateTrapArm = 358 => "duplicate signal trap arm",
     PositionalAccessOnNamedRecord = 359 => "positional access on a named record",
     RecordPositionOutOfRange = 360 => "record position out of range",
+    RecordUpdatePositionOutOfRange = 361 => "record update overriding a position past the spread source",
+    MultiplePositionalSpreads = 362 => "more than one positional spread in a record literal",
 
     // Family 4 — codegen and build
     CodegenFailed = 400 => "code generation failed",

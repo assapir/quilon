@@ -200,7 +200,8 @@ intrinsic_registry! {
     __sleep: extern "C" fn(f64),
     __now: extern "C" fn() -> f64,
     __read_launch: extern "C" fn(*const QnSite) -> QnSlice,
-    __tcp_request_launch: extern "C" fn(*mut QnResult, *const u8, i64, *const u8, i64),
+    __tcp_request_launch:
+        extern "C" fn(*mut QnResult, *const u8, i64, *const u8, i64, i64, i64),
     __tcp_serve_launch:
         extern "C" fn(*const u8, i64, *const c_void, *mut c_void, *const QnSite) -> f64,
     __connection_read_launch: extern "C" fn(f64) -> QnSlice,
