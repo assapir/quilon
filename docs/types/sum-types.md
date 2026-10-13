@@ -18,8 +18,8 @@ Shape = Circle(Num) / Rect({ Num, Num })   ~ variants with payloads
   identity (see `Ok($)` below).
 - **A variant carries at most one payload.** Several values travel together as one
   record: `Rect({ Num, Num })` constructs as `Rect({ 6, 7 })` and reads back by
-  position, `p.0 * p.1`. `Rect(Num, Num)` — two payload types instead of one record —
-  is a compile error.
+  position, `p.0 * p.1`. A variant's parenthesized list naming more than one payload
+  type, `Rect(Num, Num)`, is a compile error.
 - A **named record** payload lets a sum carry structured data — `Method = Get / Post(Body)`
   where `Body` is a record declared **above** the sum. A match arm binds it at its full
   type, so `Post(b) => b.payload` reads its fields and calls its methods. See
