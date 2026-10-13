@@ -110,11 +110,19 @@ impl Registry {
     }
 
     pub(crate) fn set_helpers(&self, handles: Vec<JoinHandle<()>>) {
-        *self.helpers.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = handles;
+        *self
+            .helpers
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = handles;
     }
 
     pub(crate) fn take_helpers(&self) -> Vec<JoinHandle<()>> {
-        std::mem::take(&mut *self.helpers.lock().unwrap_or_else(|poisoned| poisoned.into_inner()))
+        std::mem::take(
+            &mut *self
+                .helpers
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()),
+        )
     }
 
     fn handle(&self, index: usize) -> &WorkerHandle {

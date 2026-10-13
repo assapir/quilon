@@ -93,7 +93,11 @@ pub(crate) fn switch_enable() {
     // SAFETY: matches this thread's own switch_disable.
     unsafe { GC_enable() };
     SWITCH_DEPTH.with(|depth| {
-        debug_assert_eq!(depth.get(), 1, "gc::switch_enable: no matching switch_disable");
+        debug_assert_eq!(
+            depth.get(),
+            1,
+            "gc::switch_enable: no matching switch_disable"
+        );
         depth.set(0);
     });
 }
