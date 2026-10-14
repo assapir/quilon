@@ -396,6 +396,13 @@ pub struct QnSlice {
     pub(crate) len: i64,
 }
 
+// SAFETY: `data` points into the Boehm-managed heap (a single, process-wide allocator whose
+// own lock makes concurrent access from any thread safe) or is null; `QnSlice` carries no
+// thread-affine state of its own. Crossing threads inside a `Deferred<QnSlice>` (a value-
+// returning `@` primitive placed on another worker) is exactly what this unlocks — the
+// `Mutex` that guards it there is what actually serializes the read that follows.
+unsafe impl Send for QnSlice {}
+
 impl QnSlice {
     /// The empty slice (`{ null, 0 }`) — a zero-length `Text`/array. Returned when there
     /// is nothing to build (null/empty `argv`/`envp`).

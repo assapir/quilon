@@ -25,23 +25,19 @@
 use crate::report::RUNTIME_EXIT_CODE;
 use std::cell::Cell;
 use std::os::raw::{c_int, c_void};
-use std::sync::atomic::{AtomicUsize, Ordering};
 
-/// The currently running fiber's guard page, `[low, high)` — zero when no fiber is
-/// running. Plain atomics, not the GC's mutex-guarded registry (`crate::gc`): the handler
-/// runs on the thread it just interrupted and must never block on a lock that thread might
-/// already hold.
-static GUARD_LOW: AtomicUsize = AtomicUsize::new(0);
-static GUARD_HIGH: AtomicUsize = AtomicUsize::new(0);
-
-// `GUARD_LOW`/`GUARD_HIGH` are plain statics, not one of the seven per-thread cells this PR
-// moves into `crate::worker::Worker` — signal-safety (above) is why they stay off any
-// `RefCell`/`Worker` lookup at all, not just why they were thread-locals. That design is
-// single-worker-only, though: once a second worker OS thread exists, two workers each resuming
-// a fiber can call `set_current_guard` at once, and these process-wide statics let one clobber
-// the other's guard-page range right as a real fault checks it — a genuine race, not merely a
-// naming mismatch. Step 2 needs this made per-OS-thread (a `thread_local!`, the same as
-// `ALT_STACK_READY` below, for the identical signal-safety reason — never a `Worker` field).
+thread_local! {
+    /// The currently running fiber's guard page on THIS thread, `[low, high)` — zero when
+    /// no fiber is running on it. Plain `Cell`s, not the GC's lock-free registry
+    /// (`crate::gc`) or a `Worker` field: the handler runs on the thread it just
+    /// interrupted and must never block on a lock that thread might already hold, and a
+    /// signal handler cannot safely borrow a `RefCell`-guarded `Worker` either — a
+    /// `thread_local!` read of a plain `Cell` is the one access this signal-safety
+    /// contract allows. Per-thread rather than one shared pair: two workers each resuming
+    /// a fiber at once must never see or clobber each other's guard-page range.
+    static GUARD_LOW: Cell<usize> = const { Cell::new(0) };
+    static GUARD_HIGH: Cell<usize> = const { Cell::new(0) };
+}
 
 /// Record the running fiber's guard page before resuming it, returning whichever pair was
 /// current before this call — pass it to [`restore_guard`] once the resume returns. A
@@ -51,19 +47,16 @@ static GUARD_HIGH: AtomicUsize = AtomicUsize::new(0);
 /// code afterward, on its own stack, and a fault there is exactly the kind this module
 /// exists to catch.
 pub(crate) fn set_current_guard(low: usize, high: usize) -> (usize, usize) {
-    let previous = (
-        GUARD_LOW.load(Ordering::Relaxed),
-        GUARD_HIGH.load(Ordering::Relaxed),
-    );
-    GUARD_LOW.store(low, Ordering::Relaxed);
-    GUARD_HIGH.store(high, Ordering::Relaxed);
+    let previous = (GUARD_LOW.get(), GUARD_HIGH.get());
+    GUARD_LOW.set(low);
+    GUARD_HIGH.set(high);
     previous
 }
 
 /// Put back the guard page [`set_current_guard`] returned, once its resume is done.
 pub(crate) fn restore_guard(previous: (usize, usize)) {
-    GUARD_LOW.store(previous.0, Ordering::Relaxed);
-    GUARD_HIGH.store(previous.1, Ordering::Relaxed);
+    GUARD_LOW.set(previous.0);
+    GUARD_HIGH.set(previous.1);
 }
 
 /// The plain-text report a stack overflow gets: no location, no color — a compile-time
@@ -149,10 +142,11 @@ extern "C" fn handle_signal(signal: c_int, info: *mut libc::siginfo_t, _context:
     // SAFETY: `info` is the siginfo the kernel handed the handler; reading the faulting
     // address neither allocates nor blocks.
     let fault_address = unsafe { (*info).si_addr() } as usize;
-    let (low, high) = (
-        GUARD_LOW.load(Ordering::Relaxed),
-        GUARD_HIGH.load(Ordering::Relaxed),
-    );
+    // Async-signal-safe: this thread's `GUARD_LOW`/`GUARD_HIGH` are already initialized by
+    // the time any fiber (and so any guard-page fault) can run on it — `set_current_guard`
+    // runs at the start of every `resume_fiber` call, well before this handler could ever
+    // fire — so this is a plain, already-initialized TLS read, never the lazy-init path.
+    let (low, high) = (GUARD_LOW.get(), GUARD_HIGH.get());
 
     if low != 0 && fault_address >= low && fault_address < high {
         let _ = crate::io::write_to_fd(2, MESSAGE);

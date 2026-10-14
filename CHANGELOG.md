@@ -25,6 +25,12 @@ All notable changes to Quilon are documented here.
   `{ count :: Num, label :: Text }` through the shared type formatter; completion after
   `.` on a positional record now offers `0`/`1` in order, and on a named anonymous
   record offers its field names. Part of #490.
+- **The runtime is a real M:N scheduler: one worker OS thread per CPU** (`QUILON_WORKERS=<n>`
+  is a debugging override), **fibers pinned to the worker that created them.** A
+  freestanding launch and an accepted connection's handler fiber each go to the worker with
+  the shortest run queue. A launch's join and a deferred value's force work across workers.
+  A program with no launches behaves exactly as before; see `docs/concurrency/runtime.md`.
+  Part of #488.
 - **A TLS client, over `net.@tcpRequest` and `core.http`.** `net.ConnectOptions { transport
   :: Transport, certificates :: Certificates }` and the `net.@tcpRequest(address,
   requestBytes, options)` overload — `Transport = Plain / TLS`, `Certificates = Checked /
