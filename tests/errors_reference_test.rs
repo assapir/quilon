@@ -261,6 +261,11 @@ fn quilon_run(program: &Path, stdin: Stdio) -> (i32, String) {
 /// frame a compile error does — `stderr` carries `error[QNxxx]:` literally — so their
 /// reference examples are checked the same way the front-end ones are, just run instead of
 /// checked.
+///
+/// A fatal exit must also end the process cleanly: `code` is its documented exit status
+/// exactly (not merely nonzero), and `stderr` carries nothing past that one coded report —
+/// no `panic`/`aborting` line from a teardown that unwound or dropped something it should
+/// not have (see `tests/tcp_serve_test.rs`'s own live-server variant of this same check).
 #[test]
 fn runtime_examples_raise_their_own_code() {
     for code in [
@@ -278,10 +283,18 @@ fn runtime_examples_raise_their_own_code() {
             .unwrap_or_else(|| panic!("{code}: its reference section has no example"));
         let (_dir, program) = write_program(&code.to_string(), &example.source);
         let (exit, stderr) = quilon_run(&program, Stdio::null());
-        assert_ne!(exit, 0, "{code}: the example must fail, got: {stderr}");
+        assert_eq!(
+            exit,
+            code.family(),
+            "{code}: the example must exit with its documented code, got: {stderr}"
+        );
         assert!(
             stderr.contains(&format!("error[{code}]")),
             "{code}: stderr must carry its own code, got: {stderr}"
+        );
+        assert!(
+            !stderr.contains("panic") && !stderr.contains("aborting"),
+            "{code}: a fatal exit must not panic/abort while tearing down, got: {stderr}"
         );
     }
 }

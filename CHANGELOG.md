@@ -396,6 +396,17 @@ All notable changes to Quilon are documented here.
 - **Diagnostics now print an anonymous record type in Quilon syntax**, `{ name :: Text,
   age :: Num }`, instead of the compiler's internal `Record([("name", Text), ("age",
   Num)])` debug form.
+- **A fatal runtime check (a failing `assert`, an invalid `arr[i]`, a `net.@tcpServe` bind
+  failure, …) no longer aborts the process when a `net.@tcpServe` accept loop is still
+  running on the same worker.** The exit primitive every such check funnels through used
+  libc `exit(3)`, which also runs the calling thread's `thread_local!` destructors under
+  `quilon run`'s JIT (a normal, already-initialized Rust process) — dropping a still-parked
+  fiber's coroutine, which forces it to unwind its stack from inside that same teardown and
+  panics, printing `panic in a destructor during cleanup` / `thread caused non-unwinding
+  panic. aborting` instead of the diagnostic's own documented exit code. It now uses
+  `_exit(2)`, which skips destructors and `atexit` handlers entirely (every diagnostic is
+  already written through a raw `write(2)`, never buffered) — a fatal exit prints its
+  report and ends the process with its intended code, whatever else is still running.
 
 ## 0.11.0 "Rackham" — 2026-09-08
 
