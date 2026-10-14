@@ -295,6 +295,50 @@ test("numbers still tokenize", async () => {
   assert.equal(token.scope, "constant.numeric.quilon");
 });
 
+// --- Positional record access (`.0`, `.1`) -----------------------------------
+//
+// `p.0` reads a positional record's first field; without a dedicated rule the
+// `0` after the `.` falls to #numbers and is colored like a number literal.
+// A named field access (`p.width`) carries no scope at all, so a positional
+// one must not either — these tests pin "no scope" rather than some dedicated
+// member scope, since the grammar has no such scope for named fields.
+
+test("a positional access's digit carries no scope, like a named field access", async () => {
+  const tokens = await tokenizeLine("p.0");
+  const zero = tokens.find((t) => t.text === "0");
+  assert.ok(zero, `expected a "0" token, got ${JSON.stringify(tokens)}`);
+  assert.equal(zero?.scope, undefined);
+  // The named-field case it must match: no scope either.
+  const named = await tokenizeLine("p.width");
+  const width = named.find((t) => t.text === "width");
+  assert.equal(width?.scope, undefined);
+});
+
+test("grid.0.1 gives two unscoped positional-access digits, not a 0.1 number", async () => {
+  const tokens = await tokenizeLine("grid.0.1");
+  assert.equal(
+    tokens.filter((t) => t.text === "0.1" && t.scope === "constant.numeric.quilon").length,
+    0,
+    "0.1 must not be read as a single number literal",
+  );
+  const zero = tokens.find((t) => t.text === "0");
+  const one = tokens.find((t) => t.text === "1");
+  assert.ok(zero && one, `expected separate "0" and "1" tokens, got ${JSON.stringify(tokens)}`);
+  assert.equal(zero?.scope, undefined);
+  assert.equal(one?.scope, undefined);
+  // Each `.` is still the ordinary accessor punctuation.
+  const dots = tokens.filter((t) => t.text === ".");
+  assert.equal(dots.length, 2);
+  for (const dot of dots) {
+    assert.equal(dot.scope, "punctuation.accessor.quilon");
+  }
+});
+
+test("a leading decimal stays one number token, not split at its dot", async () => {
+  const token = await uniqueToken("x = 0.5", "0.5");
+  assert.equal(token.scope, "constant.numeric.quilon");
+});
+
 // --- Map/set literal fence `[| … |]` -----------------------------------------
 //
 // `[` alone is unscoped and `|` alone is the match operator, so without a

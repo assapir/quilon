@@ -23,21 +23,17 @@ use std::os::raw::{c_char, c_int, c_void};
 /// like `core.test`'s `failAt`, already reported through its own path), so the trap
 /// records no report text for it.
 ///
-/// Never returns. Uses libc `exit(3)` directly rather than `std::process::exit` for
-/// the same reason `write_to_fd` uses raw `write(2)`: an AOT-linked native binary
-/// enters through the LLVM-generated C `main`, so the Rust std runtime is never
-/// initialized.
+/// Never returns. Uses libc `_exit(2)` rather than `exit(3)`: `exit(3)` also runs the
+/// calling thread's `thread_local!` destructors, which drop any still-parked fiber (a
+/// live `net.@tcpServe` accept loop, say) and abort trying to unwind it. Every
+/// diagnostic is already a raw, unbuffered `write(2)`, so `_exit(2)` loses nothing.
 #[unsafe(no_mangle)]
 pub extern "C" fn __exit(code: c_int) -> ! {
     if crate::scheduler::abort_trap_active() {
         crate::scheduler::abort_current_trap(String::new());
     }
-    // SAFETY: libc `exit` is always available in a linked C runtime; it terminates
-    // the process and never returns.
-    unsafe extern "C" {
-        fn exit(code: c_int) -> !;
-    }
-    unsafe { exit(code) }
+    // SAFETY: `_exit(2)` neither allocates, locks, nor returns.
+    unsafe { libc::_exit(code) }
 }
 
 /// Build a Quilon `[]Text` from the C `argc`/`argv` the program's `main` received: one

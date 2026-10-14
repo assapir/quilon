@@ -68,7 +68,7 @@ quickTrack = () -> Num => <
 retrack = (incoming :: Parcel) -> Num => <
   p = incoming
   assert(p, not(is(Lost)))
-  reportDays = () => p ? | Delivered(days) => days | Delayed(days) => days
+  reportDays = () => < p ? | Delivered(days) => days | Delayed(days) => days >
   reportDays()
 >
 
