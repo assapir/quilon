@@ -113,6 +113,23 @@ sequenceDiagram
   `GC_set_stackbottom` — so a collection triggered by another fiber's allocation
   keeps a socket-parked fiber's live objects.
 
+## Atomic bindings across workers
+
+An atomic binding's (`@name := …`, `docs/concurrency/README.md#sharing-state-across-fibers`)
+reassignment and read each take a lock around the operation, implemented in
+`quilon-rt/src/atomic_binding.rs`: the code generator hashes the binding's NAME, at compile
+time, to an index into a small, fixed table of spin locks, and bakes that index in as the
+literal `id` argument of an `__atomic_begin(id)`/`__atomic_end(id)` call pair it wraps
+around the lowered reassignment (the whole right-side evaluation plus the store — the
+read-modify-write `hits := hits + 1` needs as one step) and around the lowered read (briefly,
+just the load). A spin lock, not a `Mutex`, because the checker already guarantees a
+reassignment's right side never parks, so the section it protects is always short and never
+blocks on I/O; two bindings whose names hash to the same slot share a lock, which only ever
+over-serializes, never a correctness problem. On a single-worker program every acquire finds
+its lock free (nothing else runs between `begin` and `end`), so the only cost there is the
+two atomic instructions themselves, paid only at atomic-binding sites — a program with none
+emits no calls here at all.
+
 ## Blocking calls
 
 This runtime routes two kinds of work through the blocking-call pool, off the reactor

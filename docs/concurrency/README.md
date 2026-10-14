@@ -102,6 +102,12 @@ rejects one that would (force it into a plain `=` binding first, then reassign).
 *inside* a bound record still follows the record's own rules; cross-field invariants belong
 to an atomic type `T = @{ … }`. (See `examples/atomic_binding.qn`.)
 
+Across workers, a reassignment's whole right-side evaluation and store run as one step with
+respect to every other worker — the read-modify-write `hits := hits + 1` above never loses
+an update to a sibling connection's handler on a different worker — and a plain read never
+observes a torn write, whatever the binding's own representation (see
+`docs/concurrency/runtime.md` for the mechanism).
+
 The checker enforces the sharing rule against `net.@tcpServe`'s and `http.@serve`'s
 `handler` argument — the first Quilon code that runs on more than one fiber: a non-atomic
 `:=` binding it reaches, directly or through a call, is rejected at the launching call

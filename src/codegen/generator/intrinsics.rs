@@ -383,6 +383,11 @@ impl<'ctx> CodeGenerator<'ctx> {
             // exits 5 if there was at least one. Emitted right before such a block's value is
             // produced.
             "__block_scope_join" => void.fn_type(&[], false),
+            // void __atomic_begin(i64 id) / __atomic_end(i64 id) — the critical section
+            // behind an atomic binding's reassignment and read (`docs/concurrency/runtime.md`):
+            // `id` is `atomic_lock_id`'s compile-time hash of the binding's name, picking its
+            // lock out of the runtime's small, fixed table.
+            "__atomic_begin" | "__atomic_end" => void.fn_type(&[i64t.into()], false),
             // i32 __run_fiber_main(ptr entry, i32 argc, ptr argv, ptr envp) — run the
             // generated entry thunk (the C `main` signature) on a scheduler fiber, so any
             // `@` primitive it reaches has a fiber to park on. Returns the exit code.
@@ -471,6 +476,68 @@ impl<'ctx> CodeGenerator<'ctx> {
             other => return Err(format!("Unknown runtime intrinsic: {}", other)),
         };
         Ok(self.module.add_function(name, fn_type, None))
+    }
+
+    /// An atomic binding's lock id: a compile-time hash of its NAME, matching
+    /// `quilon-rt/src/atomic_binding.rs`'s own `slot` indexing exactly (both sides must
+    /// agree bit-for-bit — this is the only place that computes it, baked into every
+    /// `__atomic_begin`/`__atomic_end` call as a literal `i64`). Plain FNV-1a: fast, and a
+    /// collision between two unrelated bindings only ever over-serializes (see that
+    /// module's doc), so no stronger hash is worth it.
+    fn atomic_lock_id(name: &str) -> i64 {
+        let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+        for byte in name.bytes() {
+            hash ^= u64::from(byte);
+            hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+        hash as i64
+    }
+
+    /// Whether a read or reassignment of `name` must take its atomic lock: `name` is a
+    /// known atomic binding, AND this is not the self-referential right side of its own
+    /// enclosing reassignment (`hits := hits + 1`) — that case already holds the very same
+    /// lock across the whole statement (see `atomic_reassignment_in_progress`), and
+    /// re-acquiring a non-reentrant spin lock against itself would deadlock.
+    pub(super) fn should_lock_atomic_binding(&self, name: &str) -> bool {
+        self.atomic_bindings.contains(name)
+            && self.atomic_reassignment_in_progress.as_deref() != Some(name)
+    }
+
+    /// Unconditionally emit a call to `intrinsic` (`"__atomic_begin"`/`"__atomic_end"`) with
+    /// `name`'s lock id — the raw instruction, with no gating of its own. A reassignment
+    /// already knows it must lock the moment it decides it IS one (see
+    /// `generate_variable_declaration`), so it calls this directly; a plain read goes
+    /// through [`Self::emit_atomic_begin`]/[`Self::emit_atomic_end`] instead, which gate it.
+    pub(super) fn emit_atomic_lock_call(&self, intrinsic: &str, name: &str) -> Result<(), String> {
+        let id = self
+            .context
+            .i64_type()
+            .const_int(Self::atomic_lock_id(name) as u64, false);
+        let function = self.get_intrinsic(intrinsic)?;
+        self.builder
+            .build_call(function, &[id.into()], "")
+            .map_err(ctx("Failed to call an atomic-binding lock intrinsic"))?;
+        Ok(())
+    }
+
+    /// Emit `__atomic_begin(id)` for `name`'s lock — a no-op (no call emitted at all) unless
+    /// [`Self::should_lock_atomic_binding`] says this site actually needs it, so a program
+    /// with no atomic bindings, or a read nested inside its own reassignment's lock, pays
+    /// nothing extra.
+    pub(super) fn emit_atomic_begin(&self, name: &str) -> Result<(), String> {
+        if !self.should_lock_atomic_binding(name) {
+            return Ok(());
+        }
+        self.emit_atomic_lock_call("__atomic_begin", name)
+    }
+
+    /// Release the lock [`Self::emit_atomic_begin`] took for `name`, under the same
+    /// condition.
+    pub(super) fn emit_atomic_end(&self, name: &str) -> Result<(), String> {
+        if !self.should_lock_atomic_binding(name) {
+            return Ok(());
+        }
+        self.emit_atomic_lock_call("__atomic_end", name)
     }
 
     /// Render `expression` through its `` ` `` operator and split the resulting `Text` into

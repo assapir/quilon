@@ -225,6 +225,109 @@ fn four_concurrent_sleeping_handlers_overlap_under_the_naive_sum() {
     );
 }
 
+/// A `net.@tcpServe` server whose handler bumps a shared atomic `@hits` by
+/// `increments_per_connection`, in a tight native `.each` loop with NO park point inside it
+/// at all — pure arithmetic — after a short synchronized pause so every concurrent
+/// connection's burst actually overlaps on real, parallel worker threads rather than merely
+/// running back to back. `"report"` reads the running total back as text; `"quit"` settles
+/// the server.
+fn atomic_counter_server_program(increments_per_connection: u64) -> String {
+    format!(
+        r#"
+<< core.net
+<< core.io
+<< core.time
+
+@server := net.Server {{ handle = 0 }}
+@hits := 0
+
+bump = (connection :: net.Connection) -> $ => <
+  time.@sleep(0.05)
+  (1 <- {increments_per_connection}).each(i => <
+    hits := hits + 1
+  >)
+  connection.@write("ok")
+>
+
+report = (connection :: net.Connection) -> $ => <
+  connection.@write("`hits`")
+>
+
+respond = (connection :: net.Connection) -> $ => <
+  line = connection.@read()
+  line == "quit" ? server.kill(1) : (line == "report" ? report(connection) : bump(connection))
+>
+
+^ = () -> Num => <
+  server := net.@tcpServe("127.0.0.1:0", connection => respond(connection))
+  io.print(server.address().port)
+  0
+>
+"#
+    )
+}
+
+#[test]
+fn atomic_binding_increments_never_lose_updates_across_workers() {
+    // The regression this test guards (PR 492's own body documents it): two handler
+    // fibers on two different WORKERS — genuine OS threads, genuine parallelism — both
+    // running `hits := hits + 1` at once can race on the non-atomic load/add/store a plain
+    // global reassignment used to lower to, losing an update. Several connections, each
+    // doing many increments with no park point between them (so a whole burst runs as one
+    // uninterrupted stretch on its worker), forced onto `QUILON_WORKERS=4` and started in
+    // near lockstep (`time.@sleep(0.05)`), make the race land reliably if the reassignment
+    // is not actually atomic across workers.
+    const CONNECTIONS: u64 = 8;
+    const PER_CONNECTION: u64 = 2_000_000;
+    let file = temp_ql(
+        "atomic_counter",
+        &atomic_counter_server_program(PER_CONNECTION),
+    );
+    let (child, port) = spawn_server(&file, Some("4"));
+
+    let clients: Vec<_> = (0..CONNECTIONS)
+        .map(|_| {
+            std::thread::spawn(move || {
+                let mut stream = connect_with_timeout("127.0.0.1", port).expect("connect to bump");
+                stream.write_all(b"bump").expect("write bump");
+                let mut reply = [0u8; 2];
+                stream.read_exact(&mut reply).expect("read the ok reply");
+                assert_eq!(&reply, b"ok");
+            })
+        })
+        .collect();
+    for client in clients {
+        client.join().expect("client thread panicked");
+    }
+
+    let mut report_stream = connect_with_timeout("127.0.0.1", port).expect("connect to report");
+    report_stream.write_all(b"report").expect("write report");
+    let mut reply = Vec::new();
+    report_stream
+        .read_to_end(&mut reply)
+        .expect("read the report reply");
+    let total: f64 = std::str::from_utf8(&reply)
+        .expect("report reply is UTF-8")
+        .trim()
+        .parse()
+        .expect("report reply is a number");
+
+    quit(port);
+    assert_eq!(
+        wait_bounded(child, Duration::from_secs(15)),
+        0,
+        "the server's own process exits 0 once kill has settled the accept loop"
+    );
+
+    assert_eq!(
+        total,
+        (CONNECTIONS * PER_CONNECTION) as f64,
+        "lost at least one update to the shared atomic binding across workers — expected \
+         every one of {} increments from {CONNECTIONS} connections to survive",
+        CONNECTIONS * PER_CONNECTION
+    );
+}
+
 #[test]
 fn quilon_workers_one_reproduces_the_default_programs_behavior() {
     // A program with no launches at all (`examples/sleep.qn`'s own self-assertions do use
