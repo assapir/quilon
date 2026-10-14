@@ -131,10 +131,9 @@ thread (a counter, incremented on `begin`, decremented on `end`, that acquires/r
 lock only at depth 0/1), so a read nested inside a reassignment's own right
 side — of the same binding or a different one — never re-acquires it. It is a spin lock, not
 a `Mutex`: the checker already guarantees a reassignment's right side never parks, so the
-section it protects is always short and never blocks on I/O. The cost of one shared lock
-rather than several is that every atomic reassignment and read in the process, across every
-binding, now serializes on it, even when two unrelated bindings are never touched by the
-same statement.
+section it protects is always short and never blocks on I/O. One shared lock means every
+atomic reassignment and read in the process, across every binding, serializes on it, even
+when two unrelated bindings are never touched by the same statement.
 
 ## Blocking calls
 
