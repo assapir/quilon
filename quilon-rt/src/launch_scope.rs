@@ -171,7 +171,10 @@ mod tests {
     /// this keeps each test independent of that.
     fn reset() {
         crate::worker::teardown();
-        crate::worker::install(crate::reactor::Reactor::new().expect("reactor for a test"));
+        let mut reactor = crate::reactor::Reactor::new().expect("reactor for a test");
+        let registry = std::sync::Arc::new(crate::placement::Registry::new(1));
+        registry.publish(0, &mut reactor);
+        crate::worker::install(0, registry, reactor);
     }
 
     /// The `None`-keyed scope this test's direct (outside-any-fiber) calls land in.

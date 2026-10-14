@@ -1,18 +1,20 @@
 // SPDX-License-Identifier: GPL-2.0-only WITH Classpath-exception-2.0
 
-//! A cooperative, single-threaded fiber scheduler — the bedrock of Quilon's
-//! concurrency model (colorless implicit futures). [`spawn`] creates a stackful
-//! `corosensei` fiber and enqueues it; [`run`] drives a ready-queue + reactor loop
-//! that resumes fibers until each finishes or parks, blocks the [`Reactor`] until
-//! the nearest wake deadline, and wakes due fibers. [`sleep`] is the first yield
-//! primitive: called from inside a fiber, it parks the fiber with a deadline and
-//! yields to the scheduler.
+//! An M:N fiber scheduler — the bedrock of Quilon's concurrency model (colorless implicit
+//! futures). [`run`] starts one worker per CPU (see its own doc), each cooperatively
+//! multiplexing its own stackful `corosensei` fibers over a ready-queue + reactor loop that
+//! resumes fibers until each finishes or parks, blocks the [`Reactor`] until the nearest
+//! wake deadline, and wakes due fibers; a fiber never moves off the worker [`spawn`] (or
+//! `spawn_placed`) put it on. [`sleep`] is the first yield primitive: called from inside a
+//! fiber, it parks the fiber with a deadline and yields to its own worker's scheduler.
 //!
-//! The subtle fiber-stack GC scanning lives in [`crate::gc`]. [`__run_fiber_main`] is the
-//! C-ABI wrapper the generated `main` calls to run a program's entry on this scheduler, so
-//! the `@` leaf IO primitives (e.g. `core.time`'s `@sleep`) have a fiber to park on.
+//! The subtle fiber-stack GC scanning lives in [`crate::gc`]; cross-worker placement in
+//! `crate::placement`. [`__run_fiber_main`] is the C-ABI wrapper the generated `main`
+//! calls to run a program's entry (on worker 0) on this scheduler, so the `@` leaf IO
+//! primitives (e.g. `core.time`'s `@sleep`) have a fiber to park on.
 
 use crate::gc;
+use crate::placement;
 use crate::reactor::{Reactor, ReactorWaker};
 use crate::stack_overflow;
 use crate::worker::{try_with_worker, with_worker};
@@ -25,6 +27,7 @@ use std::collections::{HashMap, VecDeque};
 use std::io;
 use std::os::raw::{c_char, c_int, c_void};
 use std::rc::Rc;
+use std::sync::{Arc, Barrier};
 use std::time::{Duration, Instant};
 
 /// Stack size for a spawned fiber. Small, because fibers are many and cheap.
@@ -54,7 +57,7 @@ const FIBER_STACK_SIZE: usize = 512 * 1024;
 const SEED_STACK_SIZE: usize = 8 * 1024 * 1024;
 
 /// What a fiber yields to the scheduler when it parks.
-enum Park {
+pub(crate) enum Park {
     /// Park until `Instant`, then become ready again.
     Sleep(Instant),
     /// Park until the reactor reports this token ready. The interest was already
@@ -69,12 +72,6 @@ enum Park {
     /// `crate::net::TcpStream::read_with_deadline`): resuming a coroutine carries no
     /// reason back, so there is no "was it the timer or the socket" to report here either.
     ReadinessOrDeadline(Token, Instant),
-    /// Park until another fiber wakes this address. A general one-fiber-waits-for-another
-    /// rendezvous keyed by an opaque `usize`: [`wake_address`] re-readies every fiber parked
-    /// on it. Backs both forcing a deferred value (the address is the deferred cell) and the
-    /// single-reader stdin gate (the address is a fixed sentinel). The scheduler only ever
-    /// compares the address; it never dereferences it.
-    Waiting(usize),
     /// A test case ended: yielded by [`abort_current_case`] from wherever a failing `expect`
     /// is reached, however deeply nested inside the case's own call tree. Only ever yielded
     /// by a coroutine [`run_case_guarded`] resumes, and only ever seen by that function's own
@@ -89,13 +86,10 @@ enum Park {
 }
 
 type FiberCoroutine = Coroutine<(), Park, (), DefaultStack>;
-type FiberYielder = Yielder<(), Park>;
+pub(crate) type FiberYielder = Yielder<(), Park>;
 
 struct Fiber {
     coroutine: FiberCoroutine,
-    /// The fiber's stack base (top of its GC-scannable range); set as Boehm's stack
-    /// bottom while this fiber runs. The full range is mirrored in the GC registry.
-    stack_high: usize,
     /// This fiber's guard page, `[guard_low, guard_high)` — the one page a stack
     /// overflow faults on. Recorded so [`stack_overflow`] can tell such a fault from
     /// any other while this fiber is the one running.
@@ -121,10 +115,6 @@ pub(crate) struct Scheduler {
     /// not try to wake the same fiber a second time. A plain [`Park::Readiness`] waiter
     /// never appears here.
     readiness_deadlines: Vec<(Instant, Token, usize)>,
-    /// Fibers parked on an address (a deferred cell, or the stdin gate). More than one
-    /// fiber may wait on the same address, so this is 1:many — every waiter is
-    /// re-readied when the address is woken.
-    address_waiters: HashMap<usize, Vec<usize>>,
     /// Readiness parks excluded from `run`'s own "is anything still going on?" test — the
     /// trap dispatcher parks here for the process's life, and without this a program that
     /// declares a trap could never exit on its own once `^` returns.
@@ -140,7 +130,6 @@ impl Scheduler {
             timers: Vec::new(),
             readiness_waiters: HashMap::new(),
             readiness_deadlines: Vec::new(),
-            address_waiters: HashMap::new(),
             background_tokens: std::collections::HashSet::new(),
         }
     }
@@ -163,16 +152,19 @@ impl Scheduler {
         self.fibers[id] = None;
         self.free.push(id);
     }
+
+    /// This worker's current run-queue length — read by `crate::worker::Worker::sync_ready_len`
+    /// after every push/pop, for another worker's shortest-queue placement decision.
+    pub(crate) fn ready_len(&self) -> usize {
+        self.ready.len()
+    }
 }
 
-/// The id of the fiber whose own code is executing right now, if this thread is inside a
-/// [`resume_fiber`] call at all (every fiber, including the seed one, is resumed through it).
-/// Per-worker state, kept as a SEPARATE stack from `gc::enter_fiber`/`leave_fiber`'s own
-/// nesting (pushed/popped in lockstep, inside [`resume_fiber`]) so other state that must live
-/// per FIBER rather than per worker (a `< >` block's open launch scopes — see
-/// `crate::launch_scope`) has a way to ask "which fiber is running right now" without
-/// reaching into the GC module's own bookkeeping. Several fibers interleave on one worker, so
-/// per-worker state alone conflates them; per-fiber state keyed by this id does not.
+/// The id of the fiber executing right now, if this thread is inside a [`resume_fiber`] call
+/// at all. Kept as its own stack (pushed/popped in lockstep with `gc::enter_fiber`/
+/// `leave_fiber`, but separate from them) so per-fiber state that is not the GC's business —
+/// a `< >` block's open launch scopes (`crate::launch_scope`) — has a way to ask which fiber
+/// is running without reaching into GC bookkeeping.
 pub(crate) fn current_fiber_id() -> Option<usize> {
     with_worker(|worker| worker.running_fibers.borrow().last().copied())
 }
@@ -187,50 +179,69 @@ fn with_scheduler<R>(f: impl FnOnce(&mut Scheduler) -> R) -> R {
 /// below, plus [`run_case_guarded`], starts this way rather than repeating the same
 /// get-and-assert; `name` names the caller for the panic message.
 fn current_yielder(name: &str) -> *const FiberYielder {
-    let yielder = with_worker(|worker| worker.current_yielder.get()) as *const FiberYielder;
+    let yielder = with_worker(|worker| worker.current_yielder.get());
     assert!(!yielder.is_null(), "{name}() called outside a fiber");
     yielder
 }
 
-/// Suspend `yielder` with `park`, then restore the worker's current-yielder cell to it:
-/// sibling fibers run between the suspend and its resume and clobber the shared cell (see
-/// `crate::worker::Worker::current_yielder`'s own doc), so later code on this fiber needs it
-/// put back.
+/// Suspend `yielder` with `park`: hold off collection for the jump away (`gc::switch_disable`)
+/// once the parked-fiber scan already covers this fiber's stack (`gc::leave_fiber`), jump,
+/// then on resume restore the worker's current-yielder cell (a sibling fiber running in
+/// between clobbers it) and reverse the GC bookkeeping before letting collection resume.
 fn suspend_on(yielder: *const FiberYielder, park: Park) {
+    let id = current_fiber_id().expect("suspend_on runs only from within a fiber");
+    gc::switch_disable();
+    gc::leave_fiber();
     // SAFETY: `yielder` points at the live `Yielder` for this fiber, valid for the whole
     // fiber body (it is a parameter of the corosensei closure we are inside).
     unsafe { (*yielder).suspend(park) };
     set_current_yielder(yielder);
+    gc::enter_fiber(id);
+    gc::switch_enable();
 }
 
-/// Set the worker's current-yielder cell, cast to the opaque `*const c_void` it stores (see
-/// `crate::worker`'s module doc for why it is untyped there).
+/// Suspend `yielder` with `park` and never return — the one-way trip
+/// [`abort_current_case`]/[`abort_current_trap`] take, whose coroutine its guard loop
+/// force-resets rather than resuming again. No matching `switch_enable` here: `resume_fiber`
+/// provides it once `coroutine.resume()` returns with this park.
+fn suspend_final(yielder: *const FiberYielder, park: Park) -> ! {
+    gc::switch_disable();
+    gc::leave_fiber();
+    // SAFETY: see `suspend_on`.
+    unsafe { (*yielder).suspend(park) };
+    unreachable!(
+        "run_case_guarded/run_fault_guarded force-reset this coroutine on the abort marker, \
+         so it is never resumed to reach here"
+    )
+}
+
+/// Set the worker's current-yielder cell.
 fn set_current_yielder(yielder: *const FiberYielder) {
-    with_worker(|worker| worker.current_yielder.set(yielder as *const c_void));
+    with_worker(|worker| worker.current_yielder.set(yielder));
 }
 
-/// Resume `coroutine` (fiber `id`, stack base `high`, guard page `[guard_low, guard_high)`)
-/// with Boehm's stack bottom pointed at it and its guard page recorded for
-/// [`stack_overflow`], both restored to whatever they covered before once the coroutine
-/// yields or returns. [`run`]'s ready-queue loop and [`run_case_guarded`]'s both resume
-/// this way — a fiber is a fiber to the collector and to stack-overflow reporting,
-/// whichever loop is driving it.
+/// Resume `coroutine` (fiber `id`, guard page `[guard_low, guard_high)`), with its guard
+/// page recorded for `stack_overflow`, `id` pushed onto `running_fibers` for the call, and
+/// collection held off (`gc::switch_disable`) across the `resume()` itself — matched by a
+/// `gc::switch_enable` either the fiber's own (`new_fiber`/`suspend_on`, landing on this same
+/// resume) or this function's own once `resume()` returns (see `crate::gc`'s module doc).
+/// `running_fibers` is plain caller-side bookkeeping, not GC state, so it is pushed/popped
+/// here rather than fiber-side.
 fn resume_fiber(
     id: usize,
-    high: usize,
     guard_low: usize,
     guard_high: usize,
     coroutine: &mut FiberCoroutine,
 ) -> CoroutineResult<Park, ()> {
-    gc::enter_fiber(id, high);
     with_worker(|worker| worker.running_fibers.borrow_mut().push(id));
     let previous_guard = stack_overflow::set_current_guard(guard_low, guard_high);
+    gc::switch_disable();
     let result = coroutine.resume(());
+    gc::switch_enable();
     stack_overflow::restore_guard(previous_guard);
     with_worker(|worker| {
         worker.running_fibers.borrow_mut().pop();
     });
-    gc::leave_fiber();
     result
 }
 
@@ -261,35 +272,80 @@ fn allocate_fiber_stack(stack_size: usize) -> FiberStackAllocation {
     }
 }
 
-/// Build a coroutine on `stack` that installs its own `Yielder` into the worker's
-/// current-yielder cell as its first act, then runs `body` — the entry every fiber shares,
-/// whether driven by the ready queue ([`spawn_with_stack`]) or resumed directly by its own
-/// guard ([`run_case_guarded`]).
+/// Build a coroutine on `stack`: install its own `Yielder`, tell the GC it has landed
+/// (`gc::enter_fiber`, which must run fiber-side — see `crate::gc`'s module doc) and let
+/// collection resume, run `body`, then reverse the GC bookkeeping before falling off the
+/// end. The entry every fiber shares, whether driven by the ready queue
+/// ([`spawn_with_stack`]) or resumed directly by its own guard ([`run_case_guarded`]).
 fn new_fiber(stack: DefaultStack, body: impl FnOnce() + 'static) -> FiberCoroutine {
     Coroutine::with_stack(stack, move |yielder, ()| {
         set_current_yielder(yielder as *const FiberYielder);
+        let id = current_fiber_id().expect("a fiber's own body runs only while its id is pushed");
+        gc::enter_fiber(id);
+        gc::switch_enable();
         body();
+        gc::switch_disable();
+        gc::leave_fiber();
     })
 }
 
-/// Spawn `f` as a new fiber and enqueue it, with a stack of `stack_size` bytes.
-fn spawn_with_stack<F: FnOnce() + 'static>(stack_size: usize, f: F) {
+/// A fiber built but not yet installed on any worker's scheduler. The stack allocation and
+/// coroutine construction ([`allocate_fiber_stack`], [`new_fiber`]) have no thread affinity
+/// of their own — only running the fiber does — so [`spawn_placed`] builds one on the
+/// calling thread and hands it to whichever worker will run it, via [`install_fiber`],
+/// before it is ever resumed.
+struct UnstartedFiber {
+    coroutine: FiberCoroutine,
+    low: usize,
+    high: usize,
+    guard_low: usize,
+}
+
+// SAFETY: `corosensei::Coroutine` is `!Send` by design (its own doc: safe to manually
+// implement `Send` only when every type the coroutine's own code touches is `Send`, and
+// nothing has executed on its stack yet when it crosses threads). Both hold here: `f` is
+// generic in [`spawn_placed`] and bounded `Send` there, and `Coroutine::with_stack` builds
+// this one fresh, never yet resumed — no fiber-side state of any kind exists on its stack
+// until the worker that receives it (per the scheduler's own "a fiber never moves"
+// invariant, the only worker that ever will) calls `install_fiber` and it first runs.
+unsafe impl Send for UnstartedFiber {}
+
+fn prepare_fiber(stack_size: usize, f: impl FnOnce() + 'static) -> UnstartedFiber {
     let allocation = allocate_fiber_stack(stack_size);
     let (low, high, guard_low) = (allocation.low, allocation.high, allocation.guard_low);
     let coroutine = new_fiber(allocation.stack, f);
+    UnstartedFiber {
+        coroutine,
+        low,
+        high,
+        guard_low,
+    }
+}
 
+/// Install `fiber` on the current thread's worker and ready-queue it. Call only from the
+/// worker thread that will actually run it — [`spawn_with_stack`]'s own tail and a placed
+/// job drained from `crate::placement::Registry::drain` both satisfy this.
+fn install_fiber(fiber: UnstartedFiber) {
     with_worker(|worker| {
-        let mut scheduler = worker.scheduler.borrow_mut();
-        let id = scheduler.reserve_id();
-        scheduler.fibers[id] = Some(Fiber {
-            coroutine,
-            stack_high: high,
-            guard_low,
-            guard_high: low,
-        });
-        scheduler.ready.push_back(id);
-        gc::register(id, low, high);
+        {
+            let mut scheduler = worker.scheduler.borrow_mut();
+            let id = scheduler.reserve_id();
+            scheduler.fibers[id] = Some(Fiber {
+                coroutine: fiber.coroutine,
+                guard_low: fiber.guard_low,
+                guard_high: fiber.low,
+            });
+            scheduler.ready.push_back(id);
+            gc::register(id, fiber.low, fiber.high);
+        }
+        worker.sync_ready_len();
     });
+}
+
+/// Spawn `f` as a new fiber and enqueue it, on the calling fiber's own worker, with a stack
+/// of `stack_size` bytes.
+fn spawn_with_stack<F: FnOnce() + 'static>(stack_size: usize, f: F) {
+    install_fiber(prepare_fiber(stack_size, f));
 }
 
 /// Spawn `f` as a child fiber, with the standard `FIBER_STACK_SIZE` stack. Call it from
@@ -297,6 +353,21 @@ fn spawn_with_stack<F: FnOnce() + 'static>(stack_size: usize, f: F) {
 /// `SEED_STACK_SIZE`. Panics if no scheduler is active.
 pub fn spawn<F: FnOnce() + 'static>(f: F) {
     spawn_with_stack(FIBER_STACK_SIZE, f);
+}
+
+/// Spawn `f` on the worker with the shortest run queue right now (see [`placement`]'s own
+/// doc) — `deferred::launch_placed` and an accepted connection's own handler fiber
+/// (`net::server`) both place this way. `f` must be `Send`: see [`UnstartedFiber`]'s own
+/// doc. Panics if no scheduler is active.
+pub(crate) fn spawn_placed<F: FnOnce() + Send + 'static>(f: F) {
+    let fiber = prepare_fiber(FIBER_STACK_SIZE, f);
+    with_worker(|worker| {
+        ensure_helpers_started(&worker.registry);
+        let target = worker.registry.shortest_queue();
+        worker
+            .registry
+            .place(target, Box::new(move || install_fiber(fiber)));
+    });
 }
 
 /// Run a test case's body — `function(environment)`, the raw parts of its `() -> $`
@@ -323,7 +394,7 @@ pub(crate) fn run_case_guarded(
     gc::register(id, low, high);
 
     let aborted = loop {
-        match resume_fiber(id, high, guard_low, low, &mut coroutine) {
+        match resume_fiber(id, guard_low, low, &mut coroutine) {
             CoroutineResult::Yield(Park::CaseAborted) => break true,
             CoroutineResult::Yield(park) => suspend_on(outer_yielder, park),
             CoroutineResult::Return(()) => break false,
@@ -360,9 +431,7 @@ pub(crate) fn run_case_guarded(
 /// failing `expect` only ever reaches this from inside one — the type checker enforces it).
 pub(crate) fn abort_current_case() -> ! {
     let yielder = current_yielder("abort_current_case");
-    // SAFETY: `yielder` points at the live `Yielder` for this fiber (see `sleep`).
-    unsafe { (*yielder).suspend(Park::CaseAborted) };
-    unreachable!("run_case_guarded force-resets this coroutine on the abort marker")
+    suspend_final(yielder, Park::CaseAborted)
 }
 
 /// Whether an `aborts()` trap is currently in progress on this thread — checked by
@@ -416,7 +485,7 @@ pub(crate) fn run_fault_guarded<T: 'static>(
                 .abort_trap_depth
                 .set(worker.abort_trap_depth.get() + 1)
         });
-        let result = resume_fiber(id, high, guard_low, low, &mut coroutine);
+        let result = resume_fiber(id, guard_low, low, &mut coroutine);
         with_worker(|worker| {
             worker
                 .abort_trap_depth
@@ -471,9 +540,7 @@ pub(crate) fn run_abort_trap_guarded(
 /// [`abort_trap_active`] is true).
 pub(crate) fn abort_current_trap(report: String) -> ! {
     let yielder = current_yielder("abort_current_trap");
-    // SAFETY: `yielder` points at the live `Yielder` for this fiber (see `sleep`).
-    unsafe { (*yielder).suspend(Park::AbortTrapped(report)) };
-    unreachable!("run_fault_guarded force-resets this coroutine on the abort marker")
+    suspend_final(yielder, Park::AbortTrapped(report))
 }
 
 /// Park the current fiber until `duration` elapses, yielding to the scheduler. Must
@@ -502,27 +569,6 @@ pub(crate) fn park_on_readiness(token: Token) {
 pub(crate) fn park_on_readiness_or_deadline(token: Token, deadline: Instant) {
     let yielder = current_yielder("park_on_readiness_or_deadline");
     suspend_on(yielder, Park::ReadinessOrDeadline(token, deadline));
-}
-
-/// Park the current fiber until another fiber wakes `address`. The caller re-checks its own
-/// condition after every wake (a wake is an invitation to look, never a guarantee), so a
-/// spurious or shared wake simply re-parks. Must be called from within a fiber (panics
-/// otherwise).
-pub(crate) fn park_on_address(address: usize) {
-    let yielder = current_yielder("park_on_address");
-    suspend_on(yielder, Park::Waiting(address));
-}
-
-/// Re-ready every fiber parked on `address`. Called from the fiber that just made the waited
-/// condition true (a deferred fulfilled, the stdin gate released). A no-op if nothing waits.
-pub(crate) fn wake_address(address: usize) {
-    with_scheduler(|scheduler| {
-        if let Some(waiters) = scheduler.address_waiters.remove(&address) {
-            for id in waiters {
-                scheduler.ready.push_back(id);
-            }
-        }
-    });
 }
 
 /// Parking on `token` alone never keeps `run`'s loop going.
@@ -578,154 +624,307 @@ fn with_reactor<R>(f: impl FnOnce(&mut Reactor) -> R) -> R {
     with_worker(|worker| f(&mut worker.reactor.borrow_mut()))
 }
 
-/// Run the scheduler until every fiber has finished. Seeds `main` as the first
-/// fiber, then loops: drain the ready queue (resuming each fiber until it finishes
-/// or parks), block the reactor until the nearest wake deadline, and move due
-/// fibers back to ready.
-///
-/// Must be called on a thread registered with the Boehm GC (the process main
-/// thread is registered by `GC_init`; tests register explicitly). Not re-entrant.
-pub fn run<F: FnOnce() + 'static>(main: F) {
-    gc::install_hooks();
-    gc::begin_run();
+/// Drain the ready queue: resume each ready fiber until it finishes or parks, filing a
+/// parked one under whichever wait it yielded. Shared by the leader's and every helper's
+/// own loop — a fiber is a fiber to this drain, whichever worker is running it.
+fn run_ready_queue() {
+    // Pop the next ready fiber AND move it out of the slab in one borrow, so no
+    // worker borrow is held across `resume` (the fiber may re-enter the
+    // scheduler, e.g. call `spawn`).
+    while let Some((id, mut fiber)) = with_worker(|worker| {
+        let mut scheduler = worker.scheduler.borrow_mut();
+        let popped = scheduler
+            .ready
+            .pop_front()
+            .map(|id| (id, scheduler.fibers[id].take().unwrap()));
+        drop(scheduler);
+        worker.sync_ready_len();
+        popped
+    }) {
+        let result = resume_fiber(id, fiber.guard_low, fiber.guard_high, &mut fiber.coroutine);
 
-    let reactor = Reactor::new().expect("failed to create reactor");
-    crate::worker::install(reactor); // asserts this thread has no worker yet ("not re-entrant")
-
-    spawn_with_stack(SEED_STACK_SIZE, main);
-
-    loop {
-        // Pop the next ready fiber AND move it out of the slab in one borrow, so no
-        // worker borrow is held across `resume` (the fiber may re-enter the
-        // scheduler, e.g. call `spawn`).
-        while let Some((id, mut fiber)) = with_scheduler(|scheduler| {
-            scheduler
-                .ready
-                .pop_front()
-                .map(|id| (id, scheduler.fibers[id].take().unwrap()))
-        }) {
-            let result = resume_fiber(
-                id,
-                fiber.stack_high,
-                fiber.guard_low,
-                fiber.guard_high,
-                &mut fiber.coroutine,
-            );
-
-            match result {
-                CoroutineResult::Yield(Park::Sleep(deadline)) => with_scheduler(|scheduler| {
-                    scheduler.fibers[id] = Some(fiber);
-                    scheduler.timers.push((deadline, id));
-                }),
-                CoroutineResult::Yield(Park::Readiness(token)) => with_scheduler(|scheduler| {
+        match result {
+            CoroutineResult::Yield(Park::Sleep(deadline)) => with_scheduler(|scheduler| {
+                scheduler.fibers[id] = Some(fiber);
+                scheduler.timers.push((deadline, id));
+            }),
+            CoroutineResult::Yield(Park::Readiness(token)) => with_scheduler(|scheduler| {
+                scheduler.fibers[id] = Some(fiber);
+                scheduler.readiness_waiters.insert(token, id);
+            }),
+            CoroutineResult::Yield(Park::ReadinessOrDeadline(token, deadline)) => {
+                with_scheduler(|scheduler| {
                     scheduler.fibers[id] = Some(fiber);
                     scheduler.readiness_waiters.insert(token, id);
-                }),
-                CoroutineResult::Yield(Park::ReadinessOrDeadline(token, deadline)) => {
-                    with_scheduler(|scheduler| {
-                        scheduler.fibers[id] = Some(fiber);
-                        scheduler.readiness_waiters.insert(token, id);
-                        scheduler.readiness_deadlines.push((deadline, token, id));
-                    })
-                }
-                CoroutineResult::Yield(Park::Waiting(address)) => with_scheduler(|scheduler| {
-                    scheduler.fibers[id] = Some(fiber);
-                    scheduler
-                        .address_waiters
-                        .entry(address)
-                        .or_default()
-                        .push(id);
-                }),
-                CoroutineResult::Yield(Park::CaseAborted) => unreachable!(
-                    "only a coroutine run_case_guarded resumes yields this, and only its own \
-                     loop ever resumes one — never the ready queue this loop drains"
-                ),
-                CoroutineResult::Yield(Park::AbortTrapped(..)) => unreachable!(
-                    "only a coroutine run_abort_trap_guarded resumes yields this, and only \
-                     its own loop ever resumes one — never the ready queue this loop drains"
-                ),
-                CoroutineResult::Return(()) => {
-                    // Unregister the stack range before dropping the fiber, which
-                    // unmaps its stack: never leave a range in the GC registry that
-                    // points at freed memory.
-                    gc::unregister(id);
-                    drop(fiber);
-                    with_scheduler(|scheduler| {
-                        scheduler.fibers[id] = None;
-                        scheduler.free.push(id);
-                    });
-                }
+                    scheduler.readiness_deadlines.push((deadline, token, id));
+                })
+            }
+            CoroutineResult::Yield(Park::CaseAborted) => unreachable!(
+                "only a coroutine run_case_guarded resumes yields this, and only its own \
+                 loop ever resumes one — never the ready queue this loop drains"
+            ),
+            CoroutineResult::Yield(Park::AbortTrapped(..)) => unreachable!(
+                "only a coroutine run_abort_trap_guarded resumes yields this, and only \
+                 its own loop ever resumes one — never the ready queue this loop drains"
+            ),
+            CoroutineResult::Return(()) => {
+                // Unregister the stack range before dropping the fiber, which
+                // unmaps its stack: never leave a range in the GC registry that
+                // points at freed memory.
+                gc::unregister(id);
+                drop(fiber);
+                with_scheduler(|scheduler| {
+                    scheduler.fibers[id] = None;
+                    scheduler.free.push(id);
+                });
             }
         }
+    }
+}
 
-        // Ready queue is empty: either everything finished, or fibers are parked on a timer,
-        // a source's readiness, or both. Compute the nearest timer as the poll timeout
-        // (`None` = block until a source fires); break only when nothing is parked.
-        //
-        // `address_waiters` (fibers forcing a deferred or waiting on the stdin gate) is
-        // deliberately NOT part of the termination test: a fiber only waits on an address
-        // when another fiber will wake it, and that other fiber makes progress by running or
-        // by parking on readiness/a timer — never solely on an address itself (a producing
-        // read fiber parks on readiness while it holds the stdin gate). So whenever an address
-        // waiter exists, `ready`/`timers`/`readiness_waiters` is non-empty too; reaching the
-        // break with address waiters left would be a genuine deadlock, and stopping is the
-        // right response to that rather than blocking forever.
-        let (next_deadline, readiness_parked) = with_scheduler(|scheduler| {
-            let next = scheduler
-                .timers
-                .iter()
-                .map(|(d, _)| *d)
-                .chain(scheduler.readiness_deadlines.iter().map(|(d, _, _)| *d))
-                .min();
-            let non_background_waiter = scheduler
-                .readiness_waiters
-                .keys()
-                .any(|token| !scheduler.background_tokens.contains(token));
-            (next, non_background_waiter)
-        });
-        match (next_deadline, readiness_parked) {
-            (None, false) => break, // nothing ready, nothing parked => all done
-            (Some(deadline), _) => {
-                let remaining = deadline.saturating_duration_since(Instant::now());
-                wait_and_wake(Some(remaining));
+/// What this worker should do next, once its ready queue is empty: `None` if it has
+/// nothing parked at all (everything it was ever asked to run has finished); otherwise the
+/// timeout its next reactor wait should use (`Some(None)` = block indefinitely — parked on
+/// readiness with no pending timer). A fiber forcing a deferred value or waiting on the
+/// stdin gate parks on ordinary reactor readiness (see `crate::deferred`), so it already
+/// shows up here as a `readiness_waiters` entry — no separate case needed. `None` means
+/// either this worker is genuinely idle (a helper: wait for more placed work) or the whole
+/// program is done (the leader: stop).
+fn idle_wait_plan() -> Option<Option<Duration>> {
+    let (next_deadline, readiness_parked) = with_scheduler(|scheduler| {
+        let next = scheduler
+            .timers
+            .iter()
+            .map(|(d, _)| *d)
+            .chain(scheduler.readiness_deadlines.iter().map(|(d, _, _)| *d))
+            .min();
+        let non_background_waiter = scheduler
+            .readiness_waiters
+            .keys()
+            .any(|token| !scheduler.background_tokens.contains(token));
+        (next, non_background_waiter)
+    });
+    match (next_deadline, readiness_parked) {
+        (None, false) => None,
+        (Some(deadline), _) => Some(Some(deadline.saturating_duration_since(Instant::now()))),
+        (None, true) => Some(None),
+    }
+}
+
+/// Move every due timer and readiness-with-deadline wait back to the ready queue.
+fn sweep_due() {
+    with_scheduler(|scheduler| {
+        let now = Instant::now();
+        let mut i = 0;
+        while i < scheduler.timers.len() {
+            if scheduler.timers[i].0 <= now {
+                let (_, id) = scheduler.timers.swap_remove(i);
+                scheduler.ready.push_back(id);
+            } else {
+                i += 1;
             }
-            (None, true) => wait_and_wake(None),
         }
-
-        // Move due timers back to ready.
-        with_scheduler(|scheduler| {
-            let now = Instant::now();
-            let mut i = 0;
-            while i < scheduler.timers.len() {
-                if scheduler.timers[i].0 <= now {
-                    let (_, id) = scheduler.timers.swap_remove(i);
-                    scheduler.ready.push_back(id);
-                } else {
-                    i += 1;
-                }
-            }
-        });
-
         // Move due readiness-with-deadline waits back to ready, the same way — clearing
         // each one's now-stale `readiness_waiters` entry too, so a readiness event for
         // that token arriving after this does not also try to wake the very fiber this
         // loop just re-readied.
-        with_scheduler(|scheduler| {
-            let now = Instant::now();
-            let mut i = 0;
-            while i < scheduler.readiness_deadlines.len() {
-                if scheduler.readiness_deadlines[i].0 <= now {
-                    let (_, token, id) = scheduler.readiness_deadlines.swap_remove(i);
-                    scheduler.readiness_waiters.remove(&token);
-                    scheduler.ready.push_back(id);
-                } else {
-                    i += 1;
-                }
+        let mut i = 0;
+        while i < scheduler.readiness_deadlines.len() {
+            if scheduler.readiness_deadlines[i].0 <= now {
+                let (_, token, id) = scheduler.readiness_deadlines.swap_remove(i);
+                scheduler.readiness_waiters.remove(&token);
+                scheduler.ready.push_back(id);
+            } else {
+                i += 1;
             }
-        });
+        }
+    });
+    with_worker(|worker| worker.sync_ready_len());
+}
+
+/// Run every job waiting in this worker's own inbox — a launch or an accepted connection
+/// placed here by another worker's (or this worker's own) shortest-queue decision. Each job
+/// installs and ready-queues its own fiber ([`install_fiber`]) as it runs.
+fn drain_inbox() {
+    with_worker(|worker| {
+        for job in worker.registry.drain(worker.index) {
+            job();
+        }
+    });
+}
+
+/// `QUILON_WORKERS`, read once at the start of every [`run`] call: overrides the worker
+/// count for chasing a scheduling bug (see `docs/concurrency/runtime.md`; not for
+/// production use). Invalid or `0` falls back to the CPU count, the same floor of `1` a
+/// count of `0` (a CPU count `available_parallelism` could not determine) also gets.
+fn resolve_worker_count() -> usize {
+    if let Ok(value) = std::env::var("QUILON_WORKERS")
+        && let Ok(parsed) = value.parse::<usize>()
+        && parsed > 0
+    {
+        return parsed;
+    }
+    std::thread::available_parallelism()
+        .map(std::num::NonZeroUsize::get)
+        .unwrap_or(1)
+}
+
+/// This thread's own share of every worker's startup: register it with the collector's
+/// fiber-scanning hooks, give it a fresh reactor, publish that reactor's inbox/waker into
+/// `registry` at `index`, and install the resulting [`crate::worker::Worker`]. Common to the
+/// leader and every helper; what they do once started (and how they end) differs.
+fn start_worker(index: usize, registry: &Arc<placement::Registry>) {
+    gc::install_hooks();
+    gc::begin_run();
+    let mut reactor = Reactor::new().expect("failed to create reactor");
+    registry.publish(index, &mut reactor);
+    crate::worker::install(index, Arc::clone(registry), reactor);
+}
+
+/// The leader's whole run: worker 0, the one `^`/`main` runs on. Publishes itself and runs
+/// alone — no helper exists yet (see [`ensure_helpers_started`]) — seeding `main` as the
+/// first fiber, then looping exactly as a single-worker scheduler always has until
+/// genuinely idle. The leader alone decides the program is done: every launch `main`'s call
+/// tree made, wherever it was placed, has already settled by the time its own queue and
+/// parked state are empty, since a join parks on the cross-worker mechanism
+/// `crate::deferred` uses rather than returning early. A helper never decides this on its
+/// own (see [`run_helper`]).
+fn run_leader(registry: Arc<placement::Registry>, main: impl FnOnce() + 'static) {
+    start_worker(0, &registry);
+    spawn_with_stack(SEED_STACK_SIZE, main);
+
+    loop {
+        drain_inbox();
+        run_ready_queue();
+        match idle_wait_plan() {
+            None => break,
+            Some(timeout) => wait_and_wake(timeout),
+        }
+        sweep_due();
     }
 
     crate::worker::teardown();
+}
+
+/// A helper worker's whole run: the leader's own loop, except idle means only that this
+/// worker has no work right now — it waits for more instead of stopping, until
+/// [`placement::Registry::request_shutdown`] asks it to. Registers with the collector like
+/// `crate::blocking`'s pool threads; releases its GC scan-registry slot ([`gc::end_thread`])
+/// once done, since unlike the leader's thread it is one-shot.
+fn run_helper(index: usize, registry: Arc<placement::Registry>, barrier: Arc<Barrier>) {
+    let _gc_thread = crate::mem::register_thread();
+    start_worker(index, &registry);
+    barrier.wait();
+
+    loop {
+        drain_inbox();
+        run_ready_queue();
+        match idle_wait_plan() {
+            None if registry.shutdown_requested() => break,
+            None => wait_and_wake(None),
+            Some(timeout) => wait_and_wake(timeout),
+        }
+        sweep_due();
+    }
+
+    crate::worker::teardown();
+    gc::end_thread();
+}
+
+/// Spawn every helper the first time any fiber places a launch — a program that never
+/// launches anything never pays for them. Runs once per `run` call no matter how many
+/// fibers race into it (`Registry::start_helpers_once`); blocks (a `Barrier` the spawned
+/// helpers also wait on) until every helper has published itself, so the placement decision
+/// that triggered this never reads an unpublished slot.
+fn ensure_helpers_started(registry: &Arc<placement::Registry>) {
+    let worker_count = registry.worker_count();
+    if worker_count <= 1 {
+        return;
+    }
+    registry.start_helpers_once(|| {
+        let barrier = Arc::new(Barrier::new(worker_count));
+        let handles: Vec<_> = (1..worker_count)
+            .map(|index| {
+                let registry = Arc::clone(registry);
+                let barrier = Arc::clone(&barrier);
+                spawn_worker_thread(index, move || {
+                    let registry = Arc::clone(&registry);
+                    let barrier = Arc::clone(&barrier);
+                    move || run_helper(index, registry, barrier)
+                })
+            })
+            .collect();
+        registry.set_helpers(handles);
+        barrier.wait();
+    });
+}
+
+/// Retries 40 times, 25ms apart, before giving up — a burst of other processes each
+/// starting their own workers at once (this crate's own test suite among them) clears
+/// within that; still failing means the machine is genuinely out of threads or memory.
+const WORKER_SPAWN_ATTEMPTS: u32 = 40;
+
+const WORKER_SPAWN_RETRY_DELAY: Duration = Duration::from_millis(25);
+
+/// Spawn helper worker `index`'s OS thread, calling `new_job` fresh for each retry
+/// (`Builder::spawn` consumes its closure even on failure). Panics after
+/// [`WORKER_SPAWN_ATTEMPTS`] — unwinding into a compiled program's own `main` would abort
+/// the process anyway (crossing that C-ABI boundary), so failing loudly here is no worse,
+/// and a worker that never starts would deadlock the barrier the others wait on.
+fn spawn_worker_thread<J: FnOnce() + Send + 'static>(
+    index: usize,
+    new_job: impl Fn() -> J,
+) -> std::thread::JoinHandle<()> {
+    for attempt in 1..=WORKER_SPAWN_ATTEMPTS {
+        match std::thread::Builder::new()
+            .name(format!("quilon-worker-{index}"))
+            .spawn(new_job())
+        {
+            Ok(handle) => return handle,
+            Err(error) if attempt < WORKER_SPAWN_ATTEMPTS => {
+                eprintln!(
+                    "quilon: spawning worker thread {index} failed ({error}), retrying \
+                     (attempt {attempt}/{WORKER_SPAWN_ATTEMPTS})"
+                );
+                std::thread::sleep(WORKER_SPAWN_RETRY_DELAY);
+            }
+            Err(error) => panic!(
+                "failed to spawn worker thread {index} after {WORKER_SPAWN_ATTEMPTS} \
+                 attempts: {error}"
+            ),
+        }
+    }
+    unreachable!("the loop above always returns or panics")
+}
+
+/// Run the program: worker 0 seeded with `main`, on the calling thread (`run_leader`). A
+/// helper worker (one per CPU, `QUILON_WORKERS` overrides the count — see
+/// `resolve_worker_count`) only starts once something is placed on it
+/// (`ensure_helpers_started`); a program that never launches anything spawns none and
+/// behaves exactly as a single-threaded scheduler always has.
+///
+/// Must be called on a thread registered with the Boehm GC (the process main thread is
+/// registered by `GC_init`; tests register explicitly). Not re-entrant.
+pub fn run<F: FnOnce() + 'static>(main: F) {
+    let worker_count = resolve_worker_count();
+    let registry = Arc::new(placement::Registry::new(worker_count));
+
+    run_leader(Arc::clone(&registry), main);
+
+    registry.request_shutdown();
+    // Propagate the first helper panic (if any) rather than swallow it: a bug in a placed
+    // fiber must fail the program/test loudly, exactly as a leader-side one already would.
+    let mut first_panic = None;
+    for helper in registry.take_helpers() {
+        if let Err(payload) = helper.join()
+            && first_panic.is_none()
+        {
+            first_panic = Some(payload);
+        }
+    }
+    if let Some(payload) = first_panic {
+        std::panic::resume_unwind(payload);
+    }
 }
 
 /// The C-ABI entry the generated `main` calls to run any program's `^` on this scheduler.
@@ -766,7 +965,8 @@ fn wait_and_wake(timeout: Option<Duration>) {
     if ready_tokens.is_empty() {
         return;
     }
-    with_scheduler(|scheduler| {
+    with_worker(|worker| {
+        let mut scheduler = worker.scheduler.borrow_mut();
         for token in ready_tokens {
             if let Some(id) = scheduler.readiness_waiters.remove(&token) {
                 // Clear any `ReadinessOrDeadline` entry riding along with this token too
@@ -779,6 +979,8 @@ fn wait_and_wake(timeout: Option<Duration>) {
                 scheduler.ready.push_back(id);
             }
         }
+        drop(scheduler);
+        worker.sync_ready_len();
     });
 }
 
