@@ -710,9 +710,8 @@ impl TypeChecker {
                     }
                 };
                 spread_count += 1;
-                // Two or more spreads where at least one is positional: which position
-                // wins where they overlap is undecided (named multi-spread already
-                // works — it always has — so only the new positional case is guarded).
+                // A positional record takes one spread; named multi-spread is unaffected
+                // (it has always worked).
                 if spread_count > 1 && any_positional_spread {
                     return Err(TypeError::MultiplePositionalSpreads {
                         span: value.span().clone(),

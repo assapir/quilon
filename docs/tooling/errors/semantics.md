@@ -856,8 +856,8 @@ one, the way a named override may.
 
 ### QN362 — more than one positional spread in a record literal
 
-A record literal with two or more `<-source` spreads, at least one positional, where
-they overlap, which position wins is undecided.
+A positional record takes one spread. A named source may still be spread more than
+once in one literal (that has always worked); this rule is only for a positional one.
 
 ```quilon ignore
 ^ = () -> Num => <
@@ -868,4 +868,4 @@ they overlap, which position wins is undecided.
 >
 ```
 
-Spread one source, then override specific positions afterward.
+Spread one source, then override positions after it: `{<-p, 0 = 9}`.

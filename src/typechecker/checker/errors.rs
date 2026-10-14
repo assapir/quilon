@@ -215,8 +215,9 @@ impl TypeError {
             }
             TypeError::RecordUpdatePositionOutOfRange { .. } => diagnostic
                 .help("a spread update only overrides an existing position, never adds one"),
-            TypeError::MultiplePositionalSpreads { .. } => diagnostic
-                .help("spread one source at a time, or override positions after a single spread"),
+            TypeError::MultiplePositionalSpreads { .. } => {
+                diagnostic.help("override positions after a single spread: `{<-p, 0 = 9}`")
+            }
             TypeError::InvalidPayloadType { .. } => diagnostic.help(
                 "a payload is Num, Text, Bool, $, a declared record, a declared sum, or an \
                  array/map of one of those"
@@ -817,11 +818,9 @@ impl std::fmt::Display for TypeError {
                     size.saturating_sub(1)
                 )
             }
-            TypeError::MultiplePositionalSpreads { .. } => write!(
-                f,
-                "this literal spreads more than one source, and at least one is positional \
-                 — which position wins is undecided"
-            ),
+            TypeError::MultiplePositionalSpreads { .. } => {
+                write!(f, "a positional record takes one spread")
+            }
             TypeError::InvalidPayloadType {
                 variant,
                 position,
