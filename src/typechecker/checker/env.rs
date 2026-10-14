@@ -47,6 +47,8 @@ impl Environment {
                 constant: false,
                 atomic: false,
                 result_parameter: None,
+                narrowable: false,
+                narrowed_variants: None,
             },
             span,
         )
@@ -72,6 +74,8 @@ impl Environment {
                 constant: true,
                 atomic: false,
                 result_parameter: None,
+                narrowable: false,
+                narrowed_variants: None,
             },
             span,
         )
@@ -118,6 +122,10 @@ impl Environment {
             atomic: false,
             // Set right after by `set_result_parameter`, with the caller's own index.
             result_parameter: None,
+            // A parameter's variant is the caller's news, not locally provable — never a
+            // narrowing source or target.
+            narrowable: false,
+            narrowed_variants: None,
         }
     }
 
@@ -134,6 +142,8 @@ impl Environment {
             constant: false,
             atomic: false,
             result_parameter: None,
+            narrowable: false,
+            narrowed_variants: None,
         };
         let root = self.scopes.first_mut().expect("the root scope exists");
         root.insert(name.to_string(), symbol);
@@ -162,6 +172,8 @@ impl Environment {
                 constant: false,
                 atomic: false,
                 result_parameter: None,
+                narrowable: false,
+                narrowed_variants: None,
             },
             span,
         )
@@ -191,6 +203,11 @@ impl Environment {
                 constant: false,
                 atomic: false,
                 result_parameter: None,
+                // The only path that produces a narrowable binding: a `=` (never `:=`)
+                // name, bound here whether by a `VariableDeclaration` or a match/trap
+                // pattern — both call this constructor and nothing else does.
+                narrowable: !mutable,
+                narrowed_variants: None,
             },
             span,
         )
@@ -293,6 +310,67 @@ impl Environment {
     ) {
         if let Some(symbol) = self.lookup_mut(name) {
             symbol.result_parameter = result_parameter;
+        }
+    }
+
+    /// Whether `name` is a binding the checker ever narrows — a plain `=` or pattern
+    /// binding, never a parameter, a receiver, a constant, or a `:=` binding.
+    pub(super) fn is_narrowable(&self, name: &str) -> bool {
+        self.lookup(name).is_some_and(|symbol| symbol.narrowable)
+    }
+
+    /// `name`'s currently proven variant set, or `None` when nothing has narrowed it (or
+    /// it is not a [narrowable](Self::is_narrowable) binding at all).
+    pub(super) fn narrowed_variants(&self, name: &str) -> Option<&BTreeSet<String>> {
+        self.lookup(name)
+            .filter(|symbol| symbol.narrowable)
+            .and_then(|symbol| symbol.narrowed_variants.as_ref())
+    }
+
+    /// Narrow `name` to exactly `variants` — a no-op for anything but a
+    /// [narrowable](Self::is_narrowable) binding, so a caller need not gate the call
+    /// itself (matching a parameter, say, simply proves nothing).
+    pub(super) fn narrow(&mut self, name: &str, variants: BTreeSet<String>) {
+        if let Some(symbol) = self.lookup_mut(name)
+            && symbol.narrowable
+        {
+            symbol.narrowed_variants = Some(variants);
+        }
+    }
+
+    /// A snapshot of every binding's [`Symbol::narrowed_variants`], taken before checking
+    /// a body the narrowing rule confines (a branch, a match/trap arm, a lambda): whatever
+    /// that body proves about a binding — including one captured from an outer scope — is
+    /// true only inside it, so [`Self::restore_narrowing`] undoes it once the body is
+    /// done, however many scopes still exist by then. Scoped to this one field rather than
+    /// the whole `Symbol`, so it cannot also roll back an unrelated effect of checking the
+    /// body.
+    pub(super) fn snapshot_narrowing(&self) -> Vec<Vec<(String, Option<BTreeSet<String>>)>> {
+        self.scopes
+            .iter()
+            .map(|scope| {
+                scope
+                    .iter()
+                    .map(|(name, symbol)| (name.clone(), symbol.narrowed_variants.clone()))
+                    .collect()
+            })
+            .collect()
+    }
+
+    /// Restore every binding present in `snapshot` to its narrowed set at the time the
+    /// snapshot was taken. A binding declared only inside the just-checked body is not in
+    /// `snapshot` and so is left as the body set it — moot once its own scope pops, and
+    /// otherwise not what this is for.
+    pub(super) fn restore_narrowing(
+        &mut self,
+        snapshot: Vec<Vec<(String, Option<BTreeSet<String>>)>>,
+    ) {
+        for (scope, entries) in self.scopes.iter_mut().zip(snapshot) {
+            for (name, narrowed) in entries {
+                if let Some(symbol) = scope.get_mut(&name) {
+                    symbol.narrowed_variants = narrowed;
+                }
+            }
         }
     }
 }

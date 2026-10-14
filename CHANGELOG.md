@@ -52,6 +52,22 @@ All notable changes to Quilon are documented here.
   arguments reuses the existing arity mismatch, `QN303`. See `docs/types/sum-types.md`.
   Step 2 of #490.
 
+- **Breaking: narrowing — a proven `=` binding needs no re-checking.** Once the checker
+  proves a binding's variant (construction, a provable `assert`/`expect`, or being inside
+  a match arm), a later match over it needs arms only for the variants it can still be —
+  and an arm, or an `assert`/`expect`, that can only cover an already-ruled-out variant is
+  now a compile error:
+  ```quilon ignore
+  v = Ok(21)
+  doubled = v ?
+    | Ok(x)    => x * 2
+    | NotOk(e) => 0        ~ before: required; after: QN364 — v is always Ok here
+  ```
+  The new matcher `is(Variant)` joins `isOk()`/`isNotOk()` (now `is(Ok)`/`is(NotOk)`'s
+  own names), for every sum type, `Result` included. A call's result is never a known
+  variant, and a `:=` binding is never narrowed — its exhaustiveness is unchanged. See
+  `docs/types/sum-types.md#narrowing--bindings`. `QN363`/`QN364`. Step 3 of #490.
+
 - **The signal trap (`!>`) — a top-level item, one per program, in the file that defines
   `^`, matching signals via a new `core.process` module.** `!>` followed by one or more
   `| Pattern => expression` arms over `process.Signal` — `Hangup` / `Interrupt` / `Quit` /

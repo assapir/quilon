@@ -58,7 +58,7 @@ There are **no keywords**: `if`/`return` etc. are expressed with symbols, and it
 letters (any Unicode letter), digits and `_`. These names are reserved — the
 built-in types `Num`, `Bool`, `Text`, `Result`, `Site`, `Map`, `Set`; the constructors `Ok`
 and `NotOk`; the receiver `it`; `assert`, `expect`, and the matchers `equals`, `contains`,
-`not`, `isOk`, `isNotOk` — and every other word is free to bind: `if = 5` and a function
+`not`, `isOk`, `isNotOk`, `is` — and every other word is free to bind: `if = 5` and a function
 named `while` are legal. A record field or method may carry a reserved name
 ([QN344](tooling/errors/semantics.md#qn344--reserved-name)).
 

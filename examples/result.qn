@@ -6,9 +6,7 @@
 
 ^ = () -> $ => <
   outcome = Ok(42)
-  doubled = outcome ?
-    | Ok(x)    => x * 2       ~ 42 * 2 = 84
-    | NotOk(e) => 0
+  doubled = outcome ? | Ok(x) => x * 2    ~ exhaustive: `outcome` is narrowed to `Ok`
   assert(doubled, equals(84))
   assert(outcome, isOk())
 >

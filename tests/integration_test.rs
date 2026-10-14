@@ -17,7 +17,6 @@ fn test_all_features_integration() {
             result = Ok(42)
             value = result ?
                 | Ok(v) => v * 2
-                | NotOk(e) => 0
             
             ~ Pattern matching on numbers
             check = 5 ?
@@ -53,8 +52,8 @@ fn test_all_features_integration() {
 fn test_result_pattern_extraction() {
     let source = r#"
         ^ = () -> Num => <
-            success = Ok(100)
-            failure = NotOk(404)
+            success := Ok(100)
+            failure := NotOk(404)
             
             v1 = success ?
                 | Ok(x) => x + 1
@@ -90,10 +89,9 @@ fn test_nested_pattern_matching() {
             
             ~ Create Result and match
             result = Ok(step1)
-            
+
             final = result ?
                 | Ok(v) => v * 2
-                | NotOk(e) => 0
             
             final
         >

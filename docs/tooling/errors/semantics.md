@@ -386,7 +386,7 @@ Declare one parameter: `+ = (other :: Point) -> Point => < … >`.
 ```
 
 Pass the value and a matcher: `assert(1, equals(1))`. The matchers are `equals`,
-`contains`, `not`, `isOk`, `isNotOk`.
+`contains`, `not`, `isOk`, `isNotOk`, `is`.
 
 ### QN333 — `expect` outside a test case
 
@@ -411,7 +411,8 @@ Pass the matcher's arguments: `equals(1)`.
 ### QN335 — matcher on a type outside its reach
 
 A matcher meets a type outside its reach: `equals` on a type without a `==` member,
-`contains` on anything but `Text` or an array, `isOk`/`isNotOk` on anything but a `Result`.
+`contains` on anything but `Text` or an array, `isOk`/`isNotOk`/`is` on anything but a
+sum type.
 
 ```quilon ignore
 ^ = () -> $ => < assert(1, contains(1)) >
@@ -869,3 +870,33 @@ once in one literal (that has always worked); this rule is only for a positional
 ```
 
 Spread one source, then override positions after it: `{<-p, 0 = 9}`.
+
+### QN363 — assertion a proven variant already rules out
+
+An `assert`/`expect` asks whether a binding is a variant that narrowing already proved
+it is not — the assertion could never hold. See
+[narrowing](../../types/sum-types.md#narrowing--bindings).
+
+```quilon ignore
+^ = () -> $ => <
+  v = Ok(5)
+  assert(v, isNotOk())
+>
+```
+
+Remove the assertion, or fix whichever earlier proof narrowed the binding this way.
+
+### QN364 — match arm a proven variant already rules out
+
+A match arm — a constructor pattern, or a `_`/bound catch-all — covers only a variant
+narrowing already proved the scrutinee is not. See
+[narrowing](../../types/sum-types.md#narrowing--bindings).
+
+```quilon ignore
+^ = () -> $ => <
+  v = Ok(5)
+  v ? | Ok(x) => x | NotOk(e) => 0
+>
+```
+
+Remove the arm — `v` is always `Ok` here — or fix whichever earlier proof narrowed it.

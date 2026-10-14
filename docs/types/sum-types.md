@@ -79,9 +79,7 @@ Result = Ok(...) / NotOk(...)    ~ predefined; `Ok` = success, `NotOk` = failure
 Use it exactly like any other sum type:
 ```quilon
 v = Ok(21)
-doubled = v ?
-  | Ok(x)    => x * 2
-  | NotOk(e) => 0
+doubled = v ? | Ok(x) => x * 2    ~ `v` is narrowed to `Ok` by its own construction
 ```
 Payloads work end-to-end for `Num`, `Bool`, and `Text` (e.g. `Ok("done")` /
 `NotOk("error")`). A **pattern-bound payload carries its concrete type**, so it is
@@ -124,6 +122,59 @@ A constructor pattern's argument must be **irrefutable** — a binding (`Ok(x)`)
 wildcard (`Ok(_)`). A literal or nested constructor there (`Ok(1)`, `Ok(Ok(x))`) is a
 compile error: such a pattern would silently match *any* payload of the variant. Bind the
 payload and compare it in the arm body instead (`Ok(n) => n == 1 ? … : …`).
+
+## Narrowing `=` bindings
+
+The checker tracks, for an `=` binding of a sum type, the set of variants it can still
+be — and a match over a narrowed binding needs arms only for those:
+```quilon
+v = Ok(5)
+doubled = v ? | Ok(x) => x * 2    ~ exhaustive: `v` is narrowed to `Ok`
+```
+The fact holds from the point it is established to the end of the enclosing block,
+including inside a lambda written after that point (a lambda written before it does not
+see it); narrowing established inside a branch or a match arm stays inside that body.
+
+**Three things narrow a binding:**
+- **construction** — `v = Ok(5)`, `s = Circle(5)`;
+- **`assert`/`expect`** with `isOk()`, `isNotOk()`, the variant matcher `is(Variant)`
+  (every sum type, `Result` included — see
+  [the matchers](../corelib/test/README.md#the-matchers)), or `not(...)` around any of
+  them;
+- **inside a match arm** — `s ? | Circle(r) => …` knows `s` is `Circle` for that arm's
+  body.
+
+A call's result is never a known variant, whatever the callee's body returns — the proof
+stays local to where it was made:
+```quilon ignore
+loadConfig = () -> Result => < Ok({ port = 8080 }) >
+config = loadConfig()
+config.port                   ~ `config` carries no narrowing yet — needs a proof below
+assert(config, isOk())
+```
+The binding keeps its sum type throughout: passing, returning, and storing it are
+unchanged. Only what a match over it needs to cover narrows.
+
+An arm — a constructor pattern, or a `_`/bound catch-all — that can only cover a variant
+already ruled out is a compile error
+([QN364](../tooling/errors/semantics.md#qn364--match-arm-a-proven-variant-already-rules-out)),
+and so is an `assert`/`expect` that could never hold
+([QN363](../tooling/errors/semantics.md#qn363--assertion-a-proven-variant-already-rules-out)):
+```quilon ignore
+v = Ok(21)
+v ? | Ok(x) => x | NotOk(e) => 0    ~ error: `v` is always `Ok` here
+assert(v, isNotOk())                 ~ error: `v` is always `Ok`
+```
+An assertion that always HOLDS stays legal — it is redundant, not an error.
+
+**A `:=` binding is never narrowed** — construction, `assert`/`expect`, and a match arm
+all leave it alone. Asserting on one stays legal, an ordinary runtime check; a match over
+one stays exhaustive over its full sum, as it does without narrowing at all:
+```quilon ignore
+m := Ok(5)
+assert(m, isOk())      ~ fine — an ordinary runtime assertion
+m ? | Ok(x) => x        ~ non-exhaustive — `m`'s variant is not tracked
+```
 
 ## `/` — sum-type separator vs. division
 `/` is the division operator **and** the sum-type variant separator. Quilon tells them

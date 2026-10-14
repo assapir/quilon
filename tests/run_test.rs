@@ -138,9 +138,10 @@ fn ternary_branch_may_be_a_reassignment() {
 #[test]
 fn match_arm_may_be_a_reassignment() {
     // Same bare-expression position as a ternary branch: a `?`/`|` match arm may be a
-    // reassignment of an outer `:=` binding.
+    // reassignment of an outer `:=` binding. `choice` is itself `:=`, so narrowing leaves
+    // it alone and both arms stay live.
     assert_exit(
-        "^ = () -> Num => <\n  n := 0\n  choice = Ok(7)\n  choice ?\n    | Ok(v) => n := v\n    | NotOk(_) => n := 0\n  n\n>",
+        "^ = () -> Num => <\n  n := 0\n  choice := Ok(7)\n  choice ?\n    | Ok(v) => n := v\n    | NotOk(_) => n := 0\n  n\n>",
         7,
     );
 }
@@ -1470,12 +1471,56 @@ fn run_overloaded_call_on_each_element_dispatches_by_element_type() {
 }
 
 #[test]
+fn run_narrowing_by_construction_allows_a_single_arm_match() {
+    // `v` is narrowed to `Ok` by its own construction, so a single-arm match over it is
+    // exhaustive at compile time, and the arm it runs at runtime matches that proof.
+    assert_exit(
+        "^ = () -> Num => <\n  v = Ok(21)\n  v ? | Ok(x) => x * 2\n>",
+        42,
+    );
+}
+
+#[test]
+fn run_narrowing_by_assert_allows_a_single_arm_match_after_a_call_result() {
+    // A call's result is never a known variant on its own — narrowing starts only once
+    // `assert`/`is` proves it, after which a single-arm match is exhaustive.
+    assert_exit(
+        "loadConfig = () -> Result => < Ok(21) >\n\
+         ^ = () -> Num => <\n  \
+           v = loadConfig()\n  \
+           assert(v, isOk())\n  \
+           v ? | Ok(x) => x * 2\n\
+         >",
+        42,
+    );
+}
+
+#[test]
+fn run_narrowing_inside_a_match_arm_allows_a_nested_single_arm_match() {
+    // Inside `| Circle(r) => …`, the scrutinee itself is known `Circle` — re-matching it
+    // needs only that one arm.
+    assert_exit(
+        "Shape = Circle(Num) / Square(Num)\n\
+         make = () -> Shape => < Circle(6) >\n\
+         ^ = () -> Num => <\n  \
+           s = make()\n  \
+           s ?\n    \
+             | Circle(_) => (s ? | Circle(r) => r * r)\n    \
+             | Square(side) => side * side\n\
+         >",
+        36,
+    );
+}
+
+#[test]
 fn run_numeric_sum_payload_through_operator_overload() {
     // A numeric sum payload flows through an operator overload set: `Ok(x) => x * 2`
     // — `x` is a (generic) Result payload that resolves as Num for `*`, so it picks the
-    // `(Num, Num)` member. (Guards the Generic-resolves-as-Num overload behavior.)
+    // `(Num, Num)` member. (Guards the Generic-resolves-as-Num overload behavior.) `:=`,
+    // so narrowing leaves `r` alone and both arms (the `NotOk` one still generic) stay
+    // live.
     assert_exit(
-        "^ = () -> Num => <\n  r = Ok(21)\n  r ? | Ok(x) => x * 2 | NotOk(e) => 0\n>",
+        "^ = () -> Num => <\n  r := Ok(21)\n  r ? | Ok(x) => x * 2 | NotOk(e) => 0\n>",
         42,
     );
 }
@@ -1501,8 +1546,9 @@ fn run_positional_field_access_chained_into_a_method_call() {
 fn run_user_sum_payload_dispatches_overload_by_concrete_type() {
     // A user sum type's payloads carry CONCRETE types (unlike Result's generic ones), so
     // a match arm's payload binding dispatches an overloaded call by that concrete type.
+    // `:=`, so narrowing leaves `s` alone and both arms stay live.
     assert_exit(
-        "Shape = Circle(Num) / Rect({ Num, Num })\narea = (n :: Num) -> Num => < n * 3 >\n^ = () -> Num => <\n  s = Circle(14)\n  s ? | Circle(n) => area(n) | Rect(p) => p.0 * p.1\n>",
+        "Shape = Circle(Num) / Rect({ Num, Num })\narea = (n :: Num) -> Num => < n * 3 >\n^ = () -> Num => <\n  s :: Shape := Circle(14)\n  s ? | Circle(n) => area(n) | Rect(p) => p.0 * p.1\n>",
         42,
     );
 }
@@ -1512,8 +1558,9 @@ fn run_user_sum_bool_payload_dispatches_to_bool_overload_member() {
     // Regression (review BUG3 family): a Bool payload binding must dispatch to the
     // `(Bool)` overload member — codegen tracks the binding's concrete type — not the
     // `(Num)` member (which previously produced an LLVM i1-into-f64 type mismatch).
+    // `:=`, so narrowing leaves `s` alone and both arms stay live.
     assert_exit(
-        "Flag = On(Bool) / Off(Bool)\nclassify = (n :: Num) -> Num => < n + 1 >\nclassify = (b :: Bool) -> Num => < b ? 100 : 7 >\n^ = () -> Num => <\n  s = On(true)\n  s ? | On(b) => classify(b) | Off(b) => classify(b)\n>",
+        "Flag = On(Bool) / Off(Bool)\nclassify = (n :: Num) -> Num => < n + 1 >\nclassify = (b :: Bool) -> Num => < b ? 100 : 7 >\n^ = () -> Num => <\n  s :: Flag := On(true)\n  s ? | On(b) => classify(b) | Off(b) => classify(b)\n>",
         100,
     );
 }
@@ -1642,11 +1689,12 @@ unwrap = (b :: Boxed) -> Num => <
 fn heterogeneous_record_and_num_payload_at_same_position_is_accepted() {
     // A record in one variant and a `Num` in another at the same payload position:
     // each variant reads its own field through its own typed view (`SumLayout::Union`).
+    // `:=`, so narrowing leaves `m` alone and both arms stay live.
     let src = r#"
 Point = { x :: Num, y :: Num }
 Mixed = Wrap(Point) / Plain(Num)
 ^ = () -> Num => <
-  m = Wrap(Point { x = 3, y = 4 })
+  m :: Mixed := Wrap(Point { x = 3, y = 4 })
   m ? | Wrap(p) => p.x + p.y | Plain(n) => n
 >
 "#;
@@ -1944,11 +1992,15 @@ fn aot_result_payload_pinned_through_an_overloaded_callee() {
 /// unaffected by whatever `outer`'s own parameter gets pinned to. `helper(5)` = 5.
 #[test]
 fn run_result_parameter_shadowed_by_a_local_reassignment_reads_its_own_value() {
+    // `:=` is not usable here: `result` already names the outer parameter, and `:=`
+    // resolves an existing name anywhere in scope as a REASSIGNMENT rather than a fresh
+    // shadowing binding — the single remaining `Ok` arm is what `result`'s own narrowing
+    // (by construction) leaves reachable.
     let src = r#"
         outer = (result :: Result) -> Num => <
           helper = (x :: Num) -> Num => <
             result = Ok(x)
-            result ? | Ok(n) => n | NotOk(_) => 0
+            result ? | Ok(n) => n
           >
           helper(5)
         >
@@ -2121,12 +2173,13 @@ test.describe("describe", () => <
 #[test]
 fn nested_sum_as_sum_payload_is_accepted() {
     // A declared sum may be another sum's payload, embedded by value (it is declared
-    // above, so its layout is already known).
+    // above, so its layout is already known). `:=`, so narrowing leaves `o` alone and
+    // both outer arms stay live.
     let src = r#"
 Inner = A / B
 Outer = Wrap(Inner) / Bare
 ^ = () -> Num => <
-  o = Wrap(B)
+  o :: Outer := Wrap(B)
   o ? | Wrap(inner) => (inner ? | A => 1 | B => 2) | Bare => 0
 >
 "#;
@@ -2171,8 +2224,9 @@ fn run_bool_equality_compares_values() {
 fn run_ok_dispatch_over_every_builtin_payload() {
     // `Ok` constructs over every built-in payload type, including `$` (zero-payload).
     // All four construct; the matched `Ok(Num)` extracts its payload as the exit code.
+    // `:=`, so narrowing leaves `n` alone and both arms stay live.
     assert_exit(
-        "^ = () -> Num => <\n  n = Ok(42)\n  t = Ok(\"hello\")\n  b = Ok(true)\n  u = Ok($)\n  n ? | Ok(x) => x | NotOk(e) => 0\n>",
+        "^ = () -> Num => <\n  n := Ok(42)\n  t = Ok(\"hello\")\n  b = Ok(true)\n  u = Ok($)\n  n ? | Ok(x) => x | NotOk(e) => 0\n>",
         42,
     );
 }
@@ -2181,9 +2235,10 @@ fn run_ok_dispatch_over_every_builtin_payload() {
 fn run_ok_text_payload_constructs_and_dispatches() {
     // `Ok(Text)` constructs and the match dispatches to the `Ok` arm by tag. (Using a
     // bound Text payload's fields is the separate, documented non-numeric-payload
-    // limitation; here we only require construction + tag dispatch to work.)
+    // limitation; here we only require construction + tag dispatch to work.) `:=`, so
+    // narrowing leaves `r` alone and both arms stay live.
     assert_exit(
-        "^ = () -> Num => <\n  r = Ok(\"abcd\")\n  r ? | Ok(s) => 42 | NotOk(e) => 0\n>",
+        "^ = () -> Num => <\n  r := Ok(\"abcd\")\n  r ? | Ok(s) => 42 | NotOk(e) => 0\n>",
         42,
     );
 }
@@ -2990,11 +3045,12 @@ fn run_nested_type_declared_inside_a_block_and_its_method_runs() {
 /// top-level sum's, so the constructor `Circle(6)` and the match both resolve.
 #[test]
 fn run_nested_sum_type_constructor_and_match_resolve() {
+    // `:=`, so narrowing leaves `s` alone and both arms stay live.
     assert_exit(
         r#"
 ^ = () -> Num => <
   Shape = Circle(Num) / Square(Num)
-  s = Circle(6)
+  s :: Shape := Circle(6)
   s ? | Circle(r) => r * r | Square(side) => side * side
 >
 "#,

@@ -2,9 +2,11 @@
 ~ nullary (`Red`) or carry built-in-typed payloads (`Rect({ Num, Num })`, `Ok($)`).
 ~ A variant carries at most one payload; several values travel together as one
 ~ record. Pattern-match with `?`/`|` to dispatch on the variant and bind its
-~ payload; the match must be exhaustive. `Result` (`Ok`/`NotOk`) is just a
-~ predefined sum type. `<< core.test` verifies every result; on success the
-~ program exits 0.
+~ payload; the match must be exhaustive — unless the checker has NARROWED an
+~ `=` binding's variant (construction, a provable `assert`, or being inside a
+~ match arm), in which case a match over it needs arms only for the variants
+~ it can still be. `Result` (`Ok`/`NotOk`) is just a predefined sum type.
+~ `<< core.test` verifies every result; on success the program exits 0.
 << core.test
 
 ~ A nullary enum.
@@ -47,6 +49,41 @@ status = (n :: Num) -> Num => <
     | NotOk(c) => c
 >
 
+~ --- Narrowing ------------------------------------------------------------
+~ A package tracker: once the checker proves a binding's variant, a match
+~ over it needs arms only for the variants left.
+Parcel = Delivered(Num) / Lost(Text) / Delayed(Num)
+
+~ Construction narrows `p` on the spot — the match below needs only the one
+~ arm `p` can still be.
+quickTrack = () -> Num => <
+  p = Delivered(3)
+  p ? | Delivered(days) => days
+>
+
+~ `assert`/`is(Variant)` narrows an `=` binding the same way construction
+~ does. This rules out `Lost`, so the match needs only the two variants
+~ still possible — and `reportDays`, a lambda written AFTER the `assert`,
+~ sees the proof too (one written before it would not).
+retrack = (incoming :: Parcel) -> Num => <
+  p = incoming
+  assert(p, not(is(Lost)))
+  reportDays = () => p ? | Delivered(days) => days | Delayed(days) => days
+  reportDays()
+>
+
+~ Inside `| Delivered(days) => …`, `p` itself is known `Delivered` — proven
+~ again here by re-matching it, now with only the one reachable arm. (`p`
+~ must be an `=` binding for this to narrow — a parameter never is, so
+~ `incoming` is copied into one first.)
+confirmDelivered = (incoming :: Parcel) -> Num => <
+  p = incoming
+  p ?
+    | Delivered(_)  => p ? | Delivered(same) => same
+    | Lost(reason)  => 0 - reason.size
+    | Delayed(days) => 0 - days
+>
+
 ^ = () -> $ => <
   assert(area(Rect({ 6, 7 })), equals(42))   ~ 6 * 7
   assert(rank(Green), equals(1))
@@ -54,4 +91,10 @@ status = (n :: Num) -> Num => <
   assert(payable(Discounted({ price = 80, percentOff = 25 })), equals(60))
   assert(status(50), equals(0))          ~ 50 <= 100 -> Ok($) -> 0
   assert(status(200), equals(200))       ~ 200 > 100 -> NotOk(200) -> 200
+  assert(quickTrack(), equals(3))
+  assert(retrack(Delivered(5)), equals(5))
+  assert(retrack(Delayed(2)), equals(2))
+  assert(confirmDelivered(Delivered(7)), equals(7))
+  assert(confirmDelivered(Lost("rain")), equals(0 - 4))
+  assert(confirmDelivered(Delayed(2)), equals(0 - 2))
 >

@@ -263,8 +263,14 @@ impl TypeChecker {
                 let condition_type = self.infer_expression(condition)?;
                 self.check_type_compatibility(&Type::Bool, &condition_type, span)?;
 
+                // Only one of `then`/`else_` ever runs, so a fact either proves (narrowing
+                // — see `Environment::snapshot_narrowing`) holds only inside it, not in its
+                // sibling or after the `?:` — the same confinement a match arm's body gets.
+                let narrowing_before = self.env.snapshot_narrowing();
                 let then_type = self.infer_expression(then)?;
+                self.env.restore_narrowing(narrowing_before.clone());
                 let else_type = self.infer_expression(else_)?;
+                self.env.restore_narrowing(narrowing_before);
 
                 self.check_type_compatibility(&then_type, &else_type, span)?;
                 // Merge the branch types so a `Result` gets the concrete payload from

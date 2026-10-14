@@ -98,6 +98,9 @@ impl TypeChecker {
 
             self.check_pattern(&resolved, &signal_type)?;
 
+            // Confined to this arm's own body, the same as a match arm's (see
+            // `Environment::snapshot_narrowing`).
+            let narrowing_before = self.env.snapshot_narrowing();
             self.env.push_scope();
             let enclosing_declaration = self.enter_declaration();
             self.bind_pattern_vars(&resolved, &signal_type, &ValueAliasing::default())?;
@@ -111,6 +114,7 @@ impl TypeChecker {
             self.infer_expression(&arm.body)?;
             self.leave_declaration(enclosing_declaration);
             self.env.pop_scope();
+            self.env.restore_narrowing(narrowing_before);
         }
 
         Ok(())

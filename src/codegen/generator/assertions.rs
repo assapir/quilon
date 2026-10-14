@@ -381,6 +381,16 @@ impl<'ctx> CodeGenerator<'ctx> {
                     .build_not(held, "matcher_not")
                     .map_err(ctx("Failed to negate a matcher"))
             }
+            // `is(Variant)`: the variant is the ARGUMENT, a bare name rather than a
+            // generated value — `isOk`/`isNotOk` reach the same tag test through the
+            // catch-all below, their variant fixed by the matcher's own name instead.
+            "is" => {
+                let Expression::Identifier { name: variant, .. } = &arguments[0] else {
+                    return Err("`is` takes a variant name".to_string());
+                };
+                wanted.push(Piece::Literal(variant.clone()));
+                self.variant_tag_matches(variant, actual)
+            }
             variant_matcher => {
                 let variant = crate::ast::matcher_variant(variant_matcher)
                     .ok_or_else(|| format!("`{variant_matcher}` is not a matcher"))?;

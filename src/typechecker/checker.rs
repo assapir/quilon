@@ -29,7 +29,7 @@ mod tests;
 mod trap;
 
 use aliasing::{ResultAliasing, ValueAliasing};
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use sums::{ResultScrutinee, is_unspecialized_result, result_of};
 
 /// Re-exported so the language server's completion (`src/lsp/analysis.rs`) reads the same
@@ -254,6 +254,27 @@ pub enum TypeError {
     NonExhaustiveMatch {
         scrutinee: Box<Type>,
         missing: Vec<String>,
+        /// Whether the scrutinee is a `:=` binding — never narrowed, so the diagnostic
+        /// adds a help line saying why, rather than leaving the reader to wonder why an
+        /// otherwise-identical `=` binding would need fewer arms.
+        mutable_binding: bool,
+        span: Span,
+    },
+    /// An `assert`/`expect` whose matcher asks about a variant the binding under test is
+    /// already known NOT to be — so the assertion could never hold. `known` is the
+    /// binding's currently proven variant set (what it "is always").
+    AssertionNeverHolds {
+        binding: String,
+        known: Vec<String>,
+        span: Span,
+    },
+    /// A match arm — a constructor pattern, a `_`, or a bound catch-all — that can only
+    /// cover a variant the scrutinee binding is already known not to be. `variant` is the
+    /// arm's own constructor name, or `None` for a catch-all ruled out entirely.
+    UnreachableMatchArm {
+        binding: String,
+        variant: Option<String>,
+        known: Vec<String>,
         span: Span,
     },
     /// A constructor pattern naming something the scrutinee's sum type has no variant for
@@ -604,6 +625,17 @@ pub struct Symbol {
     /// The still-generic `Result` parameter this value is, as (owning body span, index);
     /// carried through a bare `name = alias` copy, cleared by anything else.
     result_parameter: Option<(Span, usize)>,
+    /// Whether this is a binding whose proven variant the checker tracks: a plain `=`
+    /// binding or a pattern-bound name, never a parameter, a receiver, a nullary variant
+    /// constant, or a `:=` binding (see `docs/types/sum-types.md`'s narrowing section).
+    /// Set once, at the binding's own `define_binding` call, and read every time
+    /// `narrowed_variants` would otherwise answer for a name that was never eligible.
+    narrowable: bool,
+    /// The variant set this binding is currently proven to be one of, or `None` when
+    /// nothing has narrowed it from its full sum type. Only meaningful when `narrowable`.
+    /// Confined to the body it was established in by a snapshot/restore around every
+    /// branch, arm, and lambda (`Environment::snapshot_narrowing`/`restore_narrowing`).
+    narrowed_variants: Option<BTreeSet<String>>,
 }
 
 #[derive(Debug, Clone)]

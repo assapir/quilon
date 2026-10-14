@@ -76,9 +76,7 @@ from its own statement to the end of the enclosing body.
 ^ = () -> Num => <
   Weather = Sunny(Num) / Stormy(Num)
   forecast = Sunny(70)
-  forecast ?
-    | Sunny(degrees) => degrees
-    | Stormy(gustSpeed) => gustSpeed
+  forecast ? | Sunny(degrees) => degrees    ~ exhaustive: narrowed to `Sunny`
 >
 ```
 [`examples/nested_types.qn`](../../examples/nested_types.qn) declares a nested sum and a

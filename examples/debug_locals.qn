@@ -15,9 +15,7 @@ describe = (p :: Point) -> Num => <
   label = "point"
   nums = [1, 2, 3]
   outcome = Ok(count)
-  base = outcome ?
-    | Ok(v)    => v
-    | NotOk(e) => 0
+  base = outcome ? | Ok(v) => v    ~ exhaustive: `outcome` is narrowed to `Ok`
   p.x + p.y + base + nums.size + label.length
 >
 

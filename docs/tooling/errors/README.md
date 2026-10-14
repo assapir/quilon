@@ -185,6 +185,8 @@ its name relative to the first block (`` ```quilon title="lib/util.qn" ``).
 | [QN360](semantics.md#qn360--record-position-out-of-range) | record position out of range |
 | [QN361](semantics.md#qn361--record-update-overriding-a-position-past-the-spread-source) | record update overriding a position past the spread source |
 | [QN362](semantics.md#qn362--more-than-one-positional-spread-in-a-record-literal) | more than one positional spread in a record literal |
+| [QN363](semantics.md#qn363--assertion-a-proven-variant-already-rules-out) | assertion a proven variant already rules out |
+| [QN364](semantics.md#qn364--match-arm-a-proven-variant-already-rules-out) | match arm a proven variant already rules out |
 | [QN400](build.md#qn400--code-generation-failed) | code generation failed |
 | [QN401](build.md#qn401--native-build-failed) | native build failed |
 | [QN500](runtime.md#qn500--assertion-failed) | assertion failed |

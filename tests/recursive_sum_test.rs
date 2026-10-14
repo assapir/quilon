@@ -113,7 +113,7 @@ fn sum_nested_inside_a_different_sum() {
          area = (s :: Shape) -> Num => < s ? | Circle(r) => r * r | Square(n) => n * n >\n\
          ^ = () -> Num => <\n\
            w = Holds(Square(4))\n\
-           w ? | Empty => 0 | Holds(s) => area(s)\n\
+           w ? | Holds(s) => area(s)\n\
          >",
         16,
     );
