@@ -333,15 +333,10 @@ pub struct CodeGenerator<'ctx> {
     // reset per function like `boxed_vars`/`variables`): the declaring occurrence
     // (`declaration.atomic`, true only there) inserts its name here, and every later read
     // or reassignment of that name — wherever in the program it is lowered — consults this
-    // set to know whether to wrap itself in the binding's lock. See `atomic_binding.rs`.
+    // set to know whether to wrap itself in the single, process-wide atomic-binding lock.
+    // The runtime's own lock is re-entrant per thread (see `atomic_binding.rs`), so a read
+    // nested inside a reassignment's right side needs no special-casing here any more.
     atomic_bindings: std::collections::HashSet<String>,
-    // The atomic binding whose OWN lock is already held while its reassignment's right side
-    // is being generated, if any — so a self-referential reassignment (`hits := hits + 1`)
-    // does not try to re-acquire its own non-reentrant lock when the right side reads the
-    // very name being reassigned. `None` outside of that right-side evaluation; saved and
-    // restored around it, so a nested reassignment of a DIFFERENT atomic binding (reached
-    // through a call or a block on the right side) still locks normally.
-    atomic_reassignment_in_progress: Option<String>,
 }
 
 /// The loop-lowering context for self-tail-call optimization of one function. Present
@@ -473,7 +468,6 @@ impl<'ctx> CodeGenerator<'ctx> {
             init_block: None,
             trap_arms: Vec::new(),
             atomic_bindings: std::collections::HashSet::new(),
-            atomic_reassignment_in_progress: None,
         };
         codegen.register_builtin_sum_types();
         codegen.register_builtin_record_types();

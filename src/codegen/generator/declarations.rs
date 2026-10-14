@@ -335,31 +335,21 @@ impl<'ctx> CodeGenerator<'ctx> {
 
         // A REASSIGNMENT (not the declaring occurrence — `declaration.atomic` is set only
         // there) of a binding already known to be atomic. Its whole right side evaluates
-        // under the binding's own lock — the read-modify-write `docs/concurrency/README.md`
-        // promises as one step across workers (`hits := hits + 1`) — released only after
-        // the store below, whichever of the three paths performs it. The checker already
-        // guarantees this right side never parks, so the lock is never held across one.
+        // under the single, process-wide atomic-binding lock — the read-modify-write
+        // `docs/concurrency/README.md` promises as one step across workers
+        // (`hits := hits + 1`) — released only after the store below, whichever of the two
+        // paths performs it. The checker already guarantees this right side never parks, so
+        // the lock is never held across one. The right side may itself read this same
+        // binding, or a different atomic binding reached however indirectly — the runtime's
+        // lock is re-entrant per thread (`atomic_binding.rs`), so nothing here needs to
+        // suspend anything to avoid a self-deadlock.
         let is_atomic_reassignment = !declaration.atomic
             && declaration.mutable
             && self.atomic_bindings.contains(&declaration.name);
         if is_atomic_reassignment {
-            self.emit_atomic_lock_call("__atomic_begin", &declaration.name)?;
+            self.emit_atomic_lock_call("__atomic_begin")?;
         }
-        // While the right side evaluates, a bare read of the SAME name (the self-referential
-        // case above) must not re-acquire the lock it is already inside — see
-        // `atomic_reassignment_in_progress`'s own doc. A nested reassignment of a DIFFERENT
-        // atomic binding on the right side still locks normally once this is restored.
-        let suspended_in_progress = if is_atomic_reassignment {
-            self.atomic_reassignment_in_progress
-                .replace(declaration.name.clone())
-        } else {
-            None
-        };
-        let value = self.generate_expression(&declaration.value);
-        if is_atomic_reassignment {
-            self.atomic_reassignment_in_progress = suspended_in_progress;
-        }
-        let value = value?;
+        let value = self.generate_expression(&declaration.value)?;
         let var_type = value.get_type();
 
         // Reassignment of an already-bound mutable local (`counter := counter + 1`):
@@ -374,7 +364,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                 .build_store(slot, value)
                 .map_err(ctx("Failed to build store"))?;
             if is_atomic_reassignment {
-                self.emit_atomic_lock_call("__atomic_end", &declaration.name)?;
+                self.emit_atomic_lock_call("__atomic_end")?;
             }
             return Ok(());
         }
@@ -389,7 +379,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                 .build_store(global.as_pointer_value(), value)
                 .map_err(ctx("Failed to build store"))?;
             if is_atomic_reassignment {
-                self.emit_atomic_lock_call("__atomic_end", &declaration.name)?;
+                self.emit_atomic_lock_call("__atomic_end")?;
             }
             return Ok(());
         }

@@ -15,10 +15,11 @@ All notable changes to Quilon are documented here.
 - **An atomic binding (`@name := …`) is a real atomic across workers.** Its reassignment's
   whole right side runs as one step with respect to every other worker (`hits := hits + 1`
   never loses an update to a sibling connection's handler on a different worker), and a
-  plain read never observes a torn write. Implemented as a per-binding spin lock in
-  `quilon-rt`, keyed by a compile-time hash of the binding's name
-  (`docs/concurrency/runtime.md`); a single-worker program pays nothing beyond the lock
-  itself, and only at atomic-binding sites. Part of #488.
+  plain read never observes a torn write. Implemented as one process-wide, re-entrant spin
+  lock in `quilon-rt` covering every atomic binding (`docs/concurrency/runtime.md`) — a
+  per-binding lock can deadlock, since a reassignment's right side may read a different
+  atomic binding; a single-worker program pays nothing beyond the lock itself, and only at
+  atomic-binding sites. Part of #488.
 - **A TLS client, over `net.@tcpRequest` and `core.http`.** `net.ConnectOptions { transport
   :: Transport, certificates :: Certificates }` and the `net.@tcpRequest(address,
   requestBytes, options)` overload — `Transport = Plain / TLS`, `Certificates = Checked /

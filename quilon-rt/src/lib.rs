@@ -281,8 +281,8 @@ intrinsic_registry! {
     __abort_trap_run: extern "C" fn(*const c_void, *mut c_void) -> u8,
     __abort_trap_report: extern "C" fn() -> QnSlice,
     __trap_install: extern "C" fn(f64, *const c_void),
-    __atomic_begin: extern "C" fn(i64),
-    __atomic_end: extern "C" fn(i64),
+    __atomic_begin: extern "C" fn(),
+    __atomic_end: extern "C" fn(),
 }
 
 // Shared unit-test support. `GC_LOCK` is taken by GC-touching tests in more than one

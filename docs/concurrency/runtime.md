@@ -117,18 +117,24 @@ sequenceDiagram
 
 An atomic binding's (`@name := …`, `docs/concurrency/README.md#sharing-state-across-fibers`)
 reassignment and read each take a lock around the operation, implemented in
-`quilon-rt/src/atomic_binding.rs`: the code generator hashes the binding's NAME, at compile
-time, to an index into a small, fixed table of spin locks, and bakes that index in as the
-literal `id` argument of an `__atomic_begin(id)`/`__atomic_end(id)` call pair it wraps
-around the lowered reassignment (the whole right-side evaluation plus the store — the
-read-modify-write `hits := hits + 1` needs as one step) and around the lowered read (briefly,
-the load alone). It is a spin lock, not a `Mutex`: the checker already guarantees a
-reassignment's right side never parks, so the section it protects is always short and never
-blocks on I/O; two bindings whose names hash to the same slot share a lock, which only ever
-over-serializes, never a correctness problem. On a single-worker program every acquire finds
-its lock free (nothing else runs between `begin` and `end`), so the cost there is the two
-atomic instructions themselves, paid only at atomic-binding sites — a program with none
-emits no calls here at all.
+`quilon-rt/src/atomic_binding.rs`: ONE process-wide spin lock covers every atomic binding in
+the program, not a lock per binding — a reassignment's right side may read a different
+atomic binding (`a := b + 1`), and two workers doing that in opposite directions at the same
+instant would deadlock a per-binding scheme no fixed lock ordering closes off, since the
+nesting is dynamic (the right side may call a function that reads a third binding reached
+however indirectly). The code generator emits an argument-less `__atomic_begin()`/
+`__atomic_end()` call pair around the lowered reassignment (the whole right-side evaluation
+plus the store — the read-modify-write `hits := hits + 1` needs as one step) and around the
+lowered read (briefly, the load alone), gated on whether the name involved is a known
+atomic binding at all — a program with none emits no calls here. The lock is re-entrant per
+thread (a counter, incremented on `begin`, decremented on `end`, that acquires/releases the
+lock only at depth 0/1), so a read nested inside a reassignment's own right
+side — of the same binding or a different one — never re-acquires it. It is a spin lock, not
+a `Mutex`: the checker already guarantees a reassignment's right side never parks, so the
+section it protects is always short and never blocks on I/O. The cost of one shared lock
+rather than several is that every atomic reassignment and read in the process, across every
+binding, now serializes on it, even when two unrelated bindings are never touched by the
+same statement.
 
 ## Blocking calls
 
