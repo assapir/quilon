@@ -6,6 +6,17 @@ All notable changes to Quilon are documented here.
 
 ### Added
 
+- **Anonymous record types in annotations, and positional records.** A record type may
+  now be written directly in an annotation, named (`{ name :: Text, age :: Num }`) or
+  positional (`{ Num, Num }`, values `{ 6, 7 }`, read with `.0`/`.1`). Mixing named and
+  positional fields is `QN118`; `.0` on a named record is `QN359`; an out-of-range
+  position is `QN360`. See `docs/types/records.md`. Step 1 of #490.
+- **Positional record spread, field order, and position syntax, locked down further.**
+  `{<-p}` copies a positional record and `{<-p, 0 = 9}` overrides one of its positions
+  (never adds one); a numbered entry with no spread is `QN119`. A named anonymous
+  record's field order isn't part of its type — `f({ b = "x", a = 1 })` passes to a `{ a
+  :: Num, b :: Text }` parameter — and a diagnostic prints one canonical order. A
+  position with a leading zero (`p.01`) is `QN120`. See `docs/types/records.md`.
 - **The runtime is a real M:N scheduler: one worker OS thread per CPU** (`QUILON_WORKERS=<n>`
   is a debugging override), **fibers pinned to the worker that created them.** A
   freestanding launch and an accepted connection's handler fiber each go to the worker with
