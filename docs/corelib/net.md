@@ -176,7 +176,7 @@ version of the program above.
 | `Identity = None / Files(certificatePath :: Text, keyPath :: Text) / Base64(certificate :: Text, key :: Text)` | `None` for a `Plain` listener. `Files` reads two PEM files when the listener starts; the certificate file may hold a whole chain, leaf first. `Base64` is the base64 of each of those same two PEM files, one line each (`base64 -w0 fullchain.pem`), for an environment variable or a secrets manager — it decodes to PEM and goes through the same parser. Either way, the private key may be PKCS#8, SEC1, or PKCS#1. |
 
 `transport = TLS` with `identity = None`, or `transport = Plain` with an identity other
-than `None`, is a compile error ([QN359](../tooling/errors/semantics.md#qn359--mismatched-listener-transport-and-identity))
+than `None`, is a compile error ([QN363](../tooling/errors/semantics.md#qn363--mismatched-listener-transport-and-identity))
 on a `Listener` written as a literal; on one assembled another way (from a variable, a
 function's return value), it is fatal when the listener starts
 ([QN512](../tooling/errors/runtime.md#qn512--mismatched-listener-transport-and-identity-at-startup)).

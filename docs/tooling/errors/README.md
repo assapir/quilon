@@ -109,6 +109,9 @@ its name relative to the first block (`` ```quilon title="lib/util.qn" ``).
 | [QN115](syntax.md#qn115--a-line-final--closed-a-block-earlier-than-intended) | a line-final `>` closed a block earlier than intended |
 | [QN116](syntax.md#qn116--text-pattern-with-interpolation) | text pattern with interpolation |
 | [QN117](syntax.md#qn117--signal-trap-with-no-arms) | signal trap with no arms |
+| [QN118](syntax.md#qn118--mixed-named-and-positional-record-fields) | mixed named and positional record fields |
+| [QN119](syntax.md#qn119--numbered-record-field-without-a-spread) | numbered record field without a spread |
+| [QN120](syntax.md#qn120--record-position-with-a-leading-zero) | record position with a leading zero |
 | [QN200](modules.md#qn200---primitive-declared-outside-the-corelib) | `@` primitive declared outside the corelib |
 | [QN201](modules.md#qn201--missing-module) | missing module |
 | [QN202](modules.md#qn202--private-member-reached-through-its-module) | private member reached through its module |
@@ -177,7 +180,11 @@ its name relative to the first block (`` ```quilon title="lib/util.qn" ``).
 | [QN356](semantics.md#qn356--signal-trap-without-coreprocess) | signal trap without `core.process` |
 | [QN357](semantics.md#qn357--signal-trap-arm-without-a-signal-pattern) | signal trap arm without a signal pattern |
 | [QN358](semantics.md#qn358--duplicate-signal-trap-arm) | duplicate signal trap arm |
-| [QN359](semantics.md#qn359--mismatched-listener-transport-and-identity) | mismatched listener transport and identity |
+| [QN359](semantics.md#qn359--positional-access-on-a-named-record) | positional access on a named record |
+| [QN360](semantics.md#qn360--record-position-out-of-range) | record position out of range |
+| [QN361](semantics.md#qn361--record-update-overriding-a-position-past-the-spread-source) | record update overriding a position past the spread source |
+| [QN362](semantics.md#qn362--more-than-one-positional-spread-in-a-record-literal) | more than one positional spread in a record literal |
+| [QN363](semantics.md#qn363--mismatched-listener-transport-and-identity) | mismatched listener transport and identity |
 | [QN400](build.md#qn400--code-generation-failed) | code generation failed |
 | [QN401](build.md#qn401--native-build-failed) | native build failed |
 | [QN500](runtime.md#qn500--assertion-failed) | assertion failed |

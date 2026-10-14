@@ -28,6 +28,7 @@ sidebar:
 | Map/Set user-defined key types (via a `%` hash hook + `==` member) | ✅ |
 | Records + field access | ✅ |
 | Named record types + methods (`it`) | ✅ |
+| Anonymous record types in annotations (`{ name :: Text, age :: Num }`); positional records (`{ Num, Num }`, `{ 6, 7 }`, read with `.0`/`.1`); no implicit conversion between a named and an anonymous record either way | ✅ |
 | In-place mutation of `:=` records: field writes (`obj.f := v`) + setter methods | ✅ |
 | Deep immutability: `=` freezes the value — aliasing across the `=`/`:=` line (bindings, containers, escaping method/function results, parameter laundering) is a compile error | ✅ |
 | Functions, recursion, blocks, type inference | ✅ |

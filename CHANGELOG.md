@@ -6,6 +6,17 @@ All notable changes to Quilon are documented here.
 
 ### Added
 
+- **Anonymous record types in annotations, and positional records.** A record type may
+  now be written directly in an annotation, named (`{ name :: Text, age :: Num }`) or
+  positional (`{ Num, Num }`, values `{ 6, 7 }`, read with `.0`/`.1`). Mixing named and
+  positional fields is `QN118`; `.0` on a named record is `QN359`; an out-of-range
+  position is `QN360`. See `docs/types/records.md`. Step 1 of #490.
+- **Positional record spread, field order, and position syntax, locked down further.**
+  `{<-p}` copies a positional record and `{<-p, 0 = 9}` overrides one of its positions
+  (never adds one); a numbered entry with no spread is `QN119`. A named anonymous
+  record's field order isn't part of its type — `f({ b = "x", a = 1 })` passes to a `{ a
+  :: Num, b :: Text }` parameter — and a diagnostic prints one canonical order. A
+  position with a leading zero (`p.01`) is `QN120`. See `docs/types/records.md`.
 - **The runtime is a real M:N scheduler: one worker OS thread per CPU** (`QUILON_WORKERS=<n>`
   is a debugging override), **fibers pinned to the worker that created them.** A
   freestanding launch and an accepted connection's handler fiber each go to the worker with
@@ -49,7 +60,7 @@ All notable changes to Quilon are documented here.
   .idleTimeout` for `http.@serve`, the same 5-second default for `net.@tcpServe` — so a
   client that connects and sends nothing is closed once that passes rather than holding
   the connection forever. `transport = TLS` with `identity = None`, or
-  `transport = Plain` with an identity, is a compile error (`QN359`) on a literal
+  `transport = Plain` with an identity, is a compile error (`QN363`) on a literal
   `Listener`, fatal (`QN512`) on one built another way; an identity that fails to load
   (missing file, bad base64, bad PEM, a mismatched key) is fatal (`QN513`), naming the
   listener's address and a reason. See `docs/corelib/net.md#tls-listeners` and
@@ -406,6 +417,20 @@ All notable changes to Quilon are documented here.
   keeps reading its own value everywhere in its own arm regardless of what a nested match
   inside it binds. See `docs/expressions/pattern-matching.md` and
   `examples/nested_match.qn`. Closes #467.
+- **Diagnostics now print an anonymous record type in Quilon syntax**, `{ name :: Text,
+  age :: Num }`, instead of the compiler's internal `Record([("name", Text), ("age",
+  Num)])` debug form.
+- **A fatal runtime check (a failing `assert`, an invalid `arr[i]`, a `net.@tcpServe` bind
+  failure, …) no longer aborts the process when a `net.@tcpServe` accept loop is still
+  running on the same worker.** The exit primitive every such check funnels through used
+  libc `exit(3)`, which also runs the calling thread's `thread_local!` destructors under
+  `quilon run`'s JIT (a normal, already-initialized Rust process) — dropping a still-parked
+  fiber's coroutine, which forces it to unwind its stack from inside that same teardown and
+  panics, printing `panic in a destructor during cleanup` / `thread caused non-unwinding
+  panic. aborting` instead of the diagnostic's own documented exit code. It now uses
+  `_exit(2)`, which skips destructors and `atexit` handlers entirely (every diagnostic is
+  already written through a raw `write(2)`, never buffered) — a fatal exit prints its
+  report and ends the process with its intended code, whatever else is still running.
 
 ## 0.11.0 "Rackham" — 2026-09-08
 

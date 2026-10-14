@@ -17,8 +17,9 @@ use rustls::pki_types::{CertificateDer, ServerName};
 use rustls::{ClientConfig, ClientConnection, RootCertStore, StreamOwned};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::PathBuf;
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 fn fixture(name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -80,7 +81,7 @@ fn temp_ql(tag: &str, source: &str) -> tempfile::NamedTempFile {
 
 /// `quilon run <file>`, piping stdin from nothing and stdout/stderr as given — the shared
 /// shape every test below spawns the server-under-test with.
-fn spawn_server(file: &std::path::Path) -> std::process::Child {
+fn spawn_server(file: &std::path::Path) -> Child {
     Command::new(env!("CARGO_BIN_EXE_quilon"))
         .args(["run", file.to_str().unwrap()])
         .stdin(Stdio::null())
@@ -88,6 +89,25 @@ fn spawn_server(file: &std::path::Path) -> std::process::Child {
         .stderr(Stdio::null())
         .spawn()
         .expect("spawn quilon run")
+}
+
+/// Wait for `child` to exit, killing it and failing loudly instead of hanging the test run
+/// if it does not within `timeout` — the same helper `tests/tcp_serve_test.rs`/
+/// `http_serve_test.rs`/`multi_worker_test.rs` already use, so a server this file's own
+/// `quit` request fails to reach is reaped rather than left running indefinitely.
+fn wait_bounded(mut child: Child, timeout: Duration) -> i32 {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if let Some(status) = child.try_wait().expect("poll the child process") {
+            return status.code().expect("process exited with a code");
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!("the test server never exited within {timeout:?} — killed it");
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
 }
 
 /// A `net.@tcpServe` echo server over ONE `TLS` listener, `identity` filling its
@@ -138,12 +158,8 @@ fn a_tls_listener_with_a_files_identity_answers_a_rustls_client() {
     );
 
     rustls_round_trip(port, b"quit\r\n");
-    let status = child.wait().expect("wait for the server");
-    assert_eq!(
-        status.code(),
-        Some(0),
-        "the server exited cleanly after kill"
-    );
+    let exit_code = wait_bounded(child, Duration::from_secs(15));
+    assert_eq!(exit_code, 0, "the server exited cleanly after kill");
 }
 
 #[test]
@@ -164,8 +180,7 @@ fn a_tls_listener_with_a_base64_identity_serves_the_same_certificate_as_files() 
     );
 
     rustls_round_trip(port, b"quit\r\n");
-    let status = child.wait().expect("wait for the server");
-    assert_eq!(status.code(), Some(0));
+    assert_eq!(wait_bounded(child, Duration::from_secs(15)), 0);
 }
 
 #[test]
@@ -215,7 +230,7 @@ fn a_tls_listener_answers_the_quilon_client_over_tcp_request() {
     );
 
     rustls_round_trip(port, b"quit\r\n");
-    child.wait().expect("wait for the server");
+    wait_bounded(child, Duration::from_secs(15));
 }
 
 #[test]
@@ -306,10 +321,9 @@ hello = (request :: http.Request) -> http.Response => <
         .expect("write the quit request");
     drop(quitter);
 
-    let status = child.wait().expect("wait for the mixed server");
+    let exit_code = wait_bounded(child, Duration::from_secs(15));
     assert_eq!(
-        status.code(),
-        Some(0),
+        exit_code, 0,
         "kill on the one Server stopped both listeners"
     );
 }
@@ -342,14 +356,14 @@ mismatched = net.Listener { address = ":443", transport = net.TLS, identity = ne
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(
-        combined.contains("QN359"),
-        "the report names QN359:\n{combined}"
+        combined.contains("QN363"),
+        "the report names QN363:\n{combined}"
     );
 }
 
 /// Build a `net.Listener` whose `transport`/`identity` are NOT written as `net.TLS`/
 /// `net.None` literals at the construction site — through parameters instead, so the
-/// QN359 compile-time check (which only recognizes a literal's own written shape) cannot
+/// QN363 compile-time check (which only recognizes a literal's own written shape) cannot
 /// catch it, and the mismatch surfaces only when `net.@tcpServe` actually starts the
 /// listener.
 fn runtime_mismatch_program() -> String {
@@ -458,8 +472,7 @@ fn a_garbage_handshake_is_dropped_silently_while_the_server_keeps_serving() {
     );
 
     rustls_round_trip(port, b"quit\r\n");
-    let status = child.wait().expect("wait for the server");
-    assert_eq!(status.code(), Some(0));
+    assert_eq!(wait_bounded(child, Duration::from_secs(15)), 0);
 }
 
 #[test]
@@ -525,6 +538,5 @@ hello = (request :: http.Request) -> http.Response => <
         port,
         b"GET /quit HTTP/1.1\r\nHost: shop\r\nConnection: close\r\n\r\n",
     );
-    let status = child.wait().expect("wait for the server");
-    assert_eq!(status.code(), Some(0));
+    assert_eq!(wait_bounded(child, Duration::from_secs(15)), 0);
 }

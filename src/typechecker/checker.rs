@@ -373,6 +373,29 @@ pub enum TypeError {
         name: String,
         span: Span,
     },
+    /// `.0`/`.1`/… reached a NAMED record, whose fields are read by name.
+    PositionalAccessOnNamedRecord {
+        field: String,
+        span: Span,
+    },
+    /// A positional record access past the record's last field.
+    RecordPositionOutOfRange {
+        position: String,
+        size: usize,
+        span: Span,
+    },
+    /// A spread-update's numbered entry (`{<-p, 2 = 8}`) names a position the spread
+    /// source doesn't have — an override only, never an addition.
+    RecordUpdatePositionOutOfRange {
+        position: String,
+        size: usize,
+        span: Span,
+    },
+    /// A positional record takes one spread; a second one in the same literal is
+    /// rejected, named sources excepted (multi-spread has always worked for those).
+    MultiplePositionalSpreads {
+        span: Span,
+    },
     /// A sum-type variant payload outside the accepted set.
     InvalidPayloadType {
         variant: String,

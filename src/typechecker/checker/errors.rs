@@ -59,6 +59,12 @@ impl TypeError {
             TypeError::UnknownConstructorField { .. } => Code::UnknownConstructorField,
             TypeError::ReservedName { .. } => Code::ReservedName,
             TypeError::FunctionTypedField { .. } => Code::FunctionTypedField,
+            TypeError::PositionalAccessOnNamedRecord { .. } => Code::PositionalAccessOnNamedRecord,
+            TypeError::RecordPositionOutOfRange { .. } => Code::RecordPositionOutOfRange,
+            TypeError::RecordUpdatePositionOutOfRange { .. } => {
+                Code::RecordUpdatePositionOutOfRange
+            }
+            TypeError::MultiplePositionalSpreads { .. } => Code::MultiplePositionalSpreads,
             TypeError::InvalidPayloadType { .. } => Code::InvalidPayloadType,
             TypeError::AtomicBindingNotMutable { .. } => Code::AtomicBindingNotMutable,
             TypeError::AtomicBindingUsedBare { .. } => Code::AtomicBindingUsedBare,
@@ -200,6 +206,19 @@ impl TypeError {
             TypeError::FunctionTypedField { name, .. } => diagnostic.help(format!(
                 "write `{name}` as a method instead: `{name} = (…) -> R => < … >`"
             )),
+            TypeError::PositionalAccessOnNamedRecord { .. } => diagnostic.help(
+                "a position (`0`, `1`, …) reaches a POSITIONAL record's fields — one \
+                 written `{ T1, T2 }`, never a named one"
+                    .to_string(),
+            ),
+            TypeError::RecordPositionOutOfRange { .. } => {
+                diagnostic.help("use a position this record actually has")
+            }
+            TypeError::RecordUpdatePositionOutOfRange { .. } => diagnostic
+                .help("a spread update only overrides an existing position, never adds one"),
+            TypeError::MultiplePositionalSpreads { .. } => {
+                diagnostic.help("override positions after a single spread: `{<-p, 0 = 9}`")
+            }
             TypeError::InvalidPayloadType { .. } => diagnostic.help(
                 "a payload is Num, Text, Bool, $, a declared record, a declared sum, or an \
                  array/map of one of those"
@@ -303,6 +322,10 @@ impl TypeError {
             | TypeError::UnknownConstructorField { span, .. }
             | TypeError::ReservedName { span, .. }
             | TypeError::FunctionTypedField { span, .. }
+            | TypeError::PositionalAccessOnNamedRecord { span, .. }
+            | TypeError::RecordPositionOutOfRange { span, .. }
+            | TypeError::RecordUpdatePositionOutOfRange { span, .. }
+            | TypeError::MultiplePositionalSpreads { span }
             | TypeError::InvalidPayloadType { span, .. }
             | TypeError::AtomicBindingNotMutable { span, .. }
             | TypeError::AtomicBindingUsedBare { span, .. }
@@ -782,6 +805,32 @@ impl std::fmt::Display for TypeError {
                     "field `{name}` cannot have a function type; a function member of a \
                      record is a method"
                 )
+            }
+            TypeError::PositionalAccessOnNamedRecord { field, .. } => {
+                write!(
+                    f,
+                    "`{field}` names a position, and this record's fields are named — \
+                     reach them by name instead"
+                )
+            }
+            TypeError::RecordPositionOutOfRange { position, size, .. } => {
+                write!(
+                    f,
+                    "`.{position}` is out of range: this record has {size} field(s), \
+                     positions 0..{}",
+                    size.saturating_sub(1)
+                )
+            }
+            TypeError::RecordUpdatePositionOutOfRange { position, size, .. } => {
+                write!(
+                    f,
+                    "`{position}` overrides nothing: the spread source has {size} \
+                     position(s), 0..{}",
+                    size.saturating_sub(1)
+                )
+            }
+            TypeError::MultiplePositionalSpreads { .. } => {
+                write!(f, "a positional record takes one spread")
             }
             TypeError::InvalidPayloadType {
                 variant,

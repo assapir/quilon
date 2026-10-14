@@ -105,6 +105,168 @@ fn test_record() {
 }
 
 #[test]
+fn test_positional_record_field_access_types_by_position() {
+    assert!(check_ok("^ = () -> Num => <\n  pair = { 6, 7 }\n  pair.0 + pair.1\n>").is_ok());
+}
+
+#[test]
+fn test_positional_record_type_annotation_accepts_a_matching_literal() {
+    assert!(
+        check_ok(
+            "area = (p :: { Num, Num }) -> Num => < p.0 * p.1 >\n\
+             ^ = () -> Num => < area({ 6, 7 }) >"
+        )
+        .is_ok()
+    );
+}
+
+#[test]
+fn test_anonymous_named_record_type_annotation_accepts_a_matching_literal() {
+    assert!(
+        check_ok(
+            "greet = (p :: { name :: Text, age :: Num }) -> Text => < p.name >\n\
+             ^ = () -> Num => <\n  greet({ name = \"Wu\", age = 41 })\n  0\n>"
+        )
+        .is_ok()
+    );
+}
+
+#[test]
+fn test_named_type_does_not_implicitly_convert_to_an_anonymous_record_parameter() {
+    // LOCKED: no implicit conversion either way between a named record and an
+    // anonymous one, even when their fields line up exactly.
+    assert!(matches!(
+        check_ok(
+            "User = { name :: Text, age :: Num }\n\
+             greet = (p :: { name :: Text, age :: Num }) -> Text => < p.name >\n\
+             ^ = () -> Num => <\n  \
+               u = User { name = \"Wu\", age = 41 }\n  \
+               greet(u)\n  \
+               0\n\
+             >"
+        ),
+        Err(TypeError::TypeMismatch { .. })
+    ));
+}
+
+#[test]
+fn test_dot_zero_on_a_named_record_is_rejected() {
+    assert!(matches!(
+        check_ok("^ = () -> Num => <\n  user = { name = \"Alice\", age = 30 }\n  user.0\n>"),
+        Err(TypeError::PositionalAccessOnNamedRecord { .. })
+    ));
+}
+
+#[test]
+fn test_dot_zero_on_a_declared_named_type_is_rejected() {
+    assert!(matches!(
+        check_ok(
+            "User = { name :: Text, age :: Num }\n\
+             ^ = () -> Num => <\n  \
+               u = User { name = \"Alice\", age = 30 }\n  \
+               u.0\n\
+             >"
+        ),
+        Err(TypeError::PositionalAccessOnNamedRecord { .. })
+    ));
+}
+
+#[test]
+fn test_positional_record_position_out_of_range_is_rejected() {
+    assert!(matches!(
+        check_ok("^ = () -> Num => <\n  pair = { 6, 7 }\n  pair.2\n>"),
+        Err(TypeError::RecordPositionOutOfRange { .. })
+    ));
+}
+
+#[test]
+fn test_mixed_named_and_positional_record_type_annotation_is_a_parse_error() {
+    // Mixing is caught by the PARSER (it's syntactic), so `parse` itself fails —
+    // `check_program` never runs. Covered here too since it is part of the record
+    // annotation grammar this file otherwise exercises.
+    let tokens = Lexer::tokenize("f = (p :: { Num, label :: Text }) -> Num => < p.0 >").unwrap();
+    assert!(parse(&tokens).is_err());
+}
+
+#[test]
+fn test_spread_copies_a_positional_record() {
+    assert!(check_ok("^ = () -> Num => <\n  p = { 6, 7 }\n  q = {<-p}\n  q.0 + q.1\n>").is_ok());
+}
+
+#[test]
+fn test_numbered_spread_override_replaces_an_existing_position() {
+    assert!(
+        check_ok("^ = () -> Num => <\n  p = { 6, 7 }\n  r = {<-p, 0 = 9}\n  r.0 + r.1\n>").is_ok()
+    );
+}
+
+#[test]
+fn test_numbered_spread_override_past_the_source_is_rejected() {
+    assert!(matches!(
+        check_ok("^ = () -> Num => <\n  p = { 6, 7 }\n  r = {<-p, 2 = 8}\n  r.0\n>"),
+        Err(TypeError::RecordUpdatePositionOutOfRange { .. })
+    ));
+}
+
+#[test]
+fn test_numbered_spread_override_of_a_named_source_is_positional_access_on_named_record() {
+    assert!(matches!(
+        check_ok(
+            "User = { name :: Text, age :: Num }\n\
+             ^ = () -> Num => <\n  \
+               u = User { name = \"Alice\", age = 30 }\n  \
+               r = {<-u, 0 = 1}\n  \
+               0\n\
+             >"
+        ),
+        Err(TypeError::PositionalAccessOnNamedRecord { .. })
+    ));
+}
+
+#[test]
+fn test_two_positional_spreads_in_one_literal_is_rejected() {
+    assert!(matches!(
+        check_ok(
+            "^ = () -> Num => <\n  \
+               p = { 6, 7 }\n  \
+               q = { 8, 9 }\n  \
+               r = {<-p, <-q}\n  \
+               r.0\n\
+             >"
+        ),
+        Err(TypeError::MultiplePositionalSpreads { .. })
+    ));
+}
+
+#[test]
+fn test_two_named_spreads_still_work() {
+    // Pre-existing behavior: multi-spread has always worked for named sources (the new
+    // multiple-positional-spread guard must not catch this).
+    assert!(
+        check_ok(
+            "^ = () -> Num => <\n  \
+               a = { x = 1 }\n  \
+               b = { y = 2 }\n  \
+               c = {<-a, <-b}\n  \
+               c.x + c.y\n\
+             >"
+        )
+        .is_ok()
+    );
+}
+
+#[test]
+fn test_named_anonymous_record_type_field_order_does_not_matter() {
+    assert!(
+        check_ok(
+            "f = (r :: { a :: Num, b :: Text }) -> Num => < r.a >\n\
+             ^ = () -> Num => < f({ b = \"x\", a = 1 }) >"
+        )
+        .is_ok()
+    );
+}
+
+#[test]
 fn test_if_expression() {
     let tokens =
         Lexer::tokenize("^ = () -> Num => <\n  result = true ? 1 : 0\n  result\n>").unwrap();

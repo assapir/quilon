@@ -65,6 +65,9 @@ codes! {
     EarlyBlockClose = 115 => "a line-final `>` closed a block earlier than intended",
     InterpolatedTextPattern = 116 => "text pattern with interpolation",
     EmptyTrap = 117 => "signal trap with no arms",
+    MixedRecordFields = 118 => "mixed named and positional record fields",
+    NumberedRecordFieldWithoutSpread = 119 => "numbered record field without a spread",
+    LeadingZeroPosition = 120 => "record position with a leading zero",
 
     // Family 2 — module resolution and linking
     AtDeclarationOutsideCorelib = 200 => "`@` primitive declared outside the corelib",
@@ -137,7 +140,11 @@ codes! {
     TrapWithoutProcessImport = 356 => "signal trap without `core.process`",
     TrapArmNotASignalPattern = 357 => "signal trap arm without a signal pattern",
     DuplicateTrapArm = 358 => "duplicate signal trap arm",
-    ListenerIdentityMismatch = 359 => "mismatched listener transport and identity",
+    PositionalAccessOnNamedRecord = 359 => "positional access on a named record",
+    RecordPositionOutOfRange = 360 => "record position out of range",
+    RecordUpdatePositionOutOfRange = 361 => "record update overriding a position past the spread source",
+    MultiplePositionalSpreads = 362 => "more than one positional spread in a record literal",
+    ListenerIdentityMismatch = 363 => "mismatched listener transport and identity",
 
     // Family 4 — codegen and build
     CodegenFailed = 400 => "code generation failed",

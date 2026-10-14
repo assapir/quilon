@@ -23,21 +23,25 @@ use std::os::raw::{c_char, c_int, c_void};
 /// like `core.test`'s `failAt`, already reported through its own path), so the trap
 /// records no report text for it.
 ///
-/// Never returns. Uses libc `exit(3)` directly rather than `std::process::exit` for
-/// the same reason `write_to_fd` uses raw `write(2)`: an AOT-linked native binary
-/// enters through the LLVM-generated C `main`, so the Rust std runtime is never
-/// initialized.
+/// Never returns. Uses libc `_exit(2)` rather than `exit(3)` or `std::process::exit`:
+/// `exit(3)` also runs the calling thread's registered `thread_local!` destructors
+/// (glibc runs them for `exit`, not only for a genuine thread exit) — which, under
+/// `quilon run`'s JIT (a normal, already-initialized Rust process, unlike an AOT
+/// binary's C `main`), drops this thread's `crate::worker::Worker` and so every fiber
+/// still parked on it, including a live `net.@tcpServe` accept loop. Dropping a
+/// `corosensei` coroutine that has not returned forces it to unwind its stack, which
+/// panics because that unwind runs from inside TLS-destructor teardown — a panic in a
+/// destructor during cleanup, which aborts the process instead of exiting with `code`.
+/// `_exit(2)` skips destructors, `atexit` handlers, and stdio flushing entirely (every
+/// diagnostic is already written through `write_to_fd`'s raw `write(2)`, never
+/// buffered), the same way `stack_overflow`'s own signal handler already exits.
 #[unsafe(no_mangle)]
 pub extern "C" fn __exit(code: c_int) -> ! {
     if crate::scheduler::abort_trap_active() {
         crate::scheduler::abort_current_trap(String::new());
     }
-    // SAFETY: libc `exit` is always available in a linked C runtime; it terminates
-    // the process and never returns.
-    unsafe extern "C" {
-        fn exit(code: c_int) -> !;
-    }
-    unsafe { exit(code) }
+    // SAFETY: `_exit(2)` neither allocates, locks, nor returns.
+    unsafe { libc::_exit(code) }
 }
 
 /// Build a Quilon `[]Text` from the C `argc`/`argv` the program's `main` received: one

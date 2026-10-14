@@ -185,7 +185,7 @@ Pick an address nothing else on the machine is already bound to.
 A `Listener` whose `transport` and `identity` disagree — `TLS` with `identity = None`,
 or `Plain` with an identity other than `None` — reached `core.net.@tcpServe`/
 `http.@serve`'s listener-list form at run time (built some way other than a literal
-written in place, which [QN359](semantics.md#qn359--mismatched-listener-transport-and-identity)
+written in place, which [QN363](semantics.md#qn363--mismatched-listener-transport-and-identity)
 catches at compile time instead). The report names the listener's address and which
 side of the disagreement it is on.
 
