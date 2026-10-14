@@ -143,7 +143,7 @@ respond = (connection :: net.Connection) -> $ => <
 #[test]
 fn a_tls_listener_with_a_files_identity_answers_a_rustls_client() {
     let identity = format!(
-        "net.Files(\"{}\", \"{}\")",
+        "net.Files({{ certificate = \"{}\", key = \"{}\" }})",
         fixture("valid.crt").display(),
         fixture("valid.key").display()
     );
@@ -165,7 +165,7 @@ fn a_tls_listener_with_a_files_identity_answers_a_rustls_client() {
 #[test]
 fn a_tls_listener_with_a_base64_identity_serves_the_same_certificate_as_files() {
     let identity = format!(
-        "net.Base64(\"{}\", \"{}\")",
+        "net.Base64({{ certificate = \"{}\", key = \"{}\" }})",
         base64_of_fixture("valid.crt"),
         base64_of_fixture("valid.key")
     );
@@ -186,7 +186,7 @@ fn a_tls_listener_with_a_base64_identity_serves_the_same_certificate_as_files() 
 #[test]
 fn a_tls_listener_answers_the_quilon_client_over_tcp_request() {
     let identity = format!(
-        "net.Files(\"{}\", \"{}\")",
+        "net.Files({{ certificate = \"{}\", key = \"{}\" }})",
         fixture("valid.crt").display(),
         fixture("valid.key").display()
     );
@@ -261,7 +261,7 @@ hello = (request :: http.Request) -> http.Response => <
       net.Listener {{ address = "127.0.0.1:0", transport = net.Plain, identity = net.None }},
       net.Listener {{
         address = "127.0.0.1:0", transport = net.TLS,
-        identity = net.Files("{}", "{}")
+        identity = net.Files({{ certificate = "{}", key = "{}" }})
       }}
     ],
     request => hello(request))
@@ -413,7 +413,7 @@ fn an_identity_that_fails_to_load_is_fatal_naming_qn513() {
   server = net.@tcpServe(
     [net.Listener {
       address = "127.0.0.1:0", transport = net.TLS,
-      identity = net.Files("/definitely/does/not/exist.pem", "/definitely/does/not/exist.key")
+      identity = net.Files({ certificate = "/definitely/does/not/exist.pem", key = "/definitely/does/not/exist.key" })
     }],
     connection => $)
   0
@@ -442,7 +442,7 @@ fn an_identity_that_fails_to_load_is_fatal_naming_qn513() {
 #[test]
 fn a_garbage_handshake_is_dropped_silently_while_the_server_keeps_serving() {
     let identity = format!(
-        "net.Files(\"{}\", \"{}\")",
+        "net.Files({{ certificate = \"{}\", key = \"{}\" }})",
         fixture("valid.crt").display(),
         fixture("valid.key").display()
     );
@@ -498,7 +498,7 @@ hello = (request :: http.Request) -> http.Response => <
   shop := http.@serve(
     [net.Listener {{
       address = "127.0.0.1:0", transport = net.TLS,
-      identity = net.Files("{}", "{}")
+      identity = net.Files({{ certificate = "{}", key = "{}" }})
     }}],
     request => hello(request),
     http.ServerOptions {{ maxBodySize = 1024 * 1024, idleTimeout = 0.2 }})

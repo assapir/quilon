@@ -51,14 +51,14 @@ All notable changes to Quilon are documented here.
   #339. Part of #486.
 
 - **A TLS server, over `net.@tcpServe` and `http.@serve`.** `core.net.Identity = None /
-  Files(certificatePath, keyPath) / Base64(certificate, key)` and `Listener { address,
-  transport, identity }`: `Files` reads two PEM files when the listener starts (the
-  certificate file may hold a whole chain, leaf first); `Base64` is the base64 of those
-  same two files, one line each, for an environment variable or a secrets manager. Either
-  way the private key may be PKCS#8, SEC1, or PKCS#1. `net.@tcpServe(listeners ::
-  []Listener, handler)` and `http.@serve(listeners :: []Listener, handler[,
-  ServerOptions])` bind every listener in the list — `Plain` or `TLS` per its own
-  `transport`/`identity` — under ONE `net.Server`: `kill` stops all of them,
+  Files({ certificate, key }) / Base64({ certificate, key })` and `Listener { address,
+  transport, identity }`: `Files`'s fields are two PEM file paths read when the listener
+  starts (the certificate file may hold a whole chain, leaf first); `Base64`'s fields are
+  the base64 of those same two files, one line each, for an environment variable or a
+  secrets manager. Either way the private key may be PKCS#8, SEC1, or PKCS#1.
+  `net.@tcpServe(listeners :: []Listener, handler)` and `http.@serve(listeners ::
+  []Listener, handler[, ServerOptions])` bind every listener in the list — `Plain` or
+  `TLS` per its own `transport`/`identity` — under ONE `net.Server`: `kill` stops all of them,
   `addresses() -> []Address` reports every listener's bound address (`address()` stays
   the single-listener form, now fatal on a server with more than one listener). A `TLS`
   listener's `ServerConfig` is built once, when it starts; each accepted connection then

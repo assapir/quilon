@@ -38,7 +38,10 @@ checkReply = (reply :: http.Response, expectedStatus :: Num, expectedBody :: Tex
       net.Listener { address = "127.0.0.1:9048", transport = net.Plain, identity = net.None },
       net.Listener {
         address = "127.0.0.1:9049", transport = net.TLS,
-        identity = net.Files("examples/fixtures/http_server.crt", "examples/fixtures/http_server.key")
+        identity = net.Files({
+          certificate = "examples/fixtures/http_server.crt",
+          key = "examples/fixtures/http_server.key"
+        })
       }
     ],
     request => hummus(request),

@@ -18,8 +18,7 @@ members = ["quilon-rt"]
 # TLS (quilon-rt's net.@tcpRequest, and this crate's own TLS end-to-end test peer):
 # one version/feature set shared by every workspace member that needs it.
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
-# Base64 for core.net.Identity::Base64 (quilon-rt) and its own tests (tls_serve_test.rs,
-# base64-encoding its fixture certificate/key).
+# Base64 for core.net.Identity::Base64 (quilon-rt) and tls_serve_test.rs's own fixture.
 base64 = "0.22"
 
 [workspace.lints.rust]

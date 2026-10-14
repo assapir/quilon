@@ -10,13 +10,13 @@
 ~ any certificate, trusted or not.
 >> Certificates = Checked / Unchecked
 
-~ A `Listener`'s TLS identity: `None` (a `Plain` listener), `Files(certificatePath,
-~ keyPath)` — two PEM files read when the listener starts, the certificate file holding a
-~ whole chain, leaf first — or `Base64(certificate, key)`, the base64 of each of those same
+~ A `Listener`'s TLS identity: `None` (a `Plain` listener), `Files({ certificate, key })` —
+~ two PEM file paths read when the listener starts, the certificate file holding a whole
+~ chain, leaf first — or `Base64({ certificate, key })`, the base64 of each of those same
 ~ two PEM files, one line each (`base64 -w0 fullchain.pem`), for an environment variable or
 ~ a secrets manager. Either way the private key may be PKCS#8, SEC1, or PKCS#1. See
 ~ docs/corelib/net.md.
->> Identity = None / Files(Text, Text) / Base64(Text, Text)
+>> Identity = None / Files({ certificate :: Text, key :: Text }) / Base64({ certificate :: Text, key :: Text })
 
 ~ One socket a server binds: `address` (`host:port`, exactly the form `@tcpRequest`/
 ~ `@tcpServe` accept), `transport`, and the TLS `identity` a `TLS` listener serves —

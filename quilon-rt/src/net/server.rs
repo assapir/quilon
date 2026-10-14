@@ -21,12 +21,8 @@
 //! `crate::placement::Registry::servers`, shared by every worker of this run.
 //!
 //! A server may bind several listeners (`net.@tcpServe`/`http.@serve`'s listener-list
-//! overload) — `Plain` or `TLS` per listener, under one `ServerState`. Each gets its own
-//! accept loop, `launch_here` on the worker that started it, never moved; each accepted
-//! connection is then placed on the shortest-queue worker (`place_connection`), where a
-//! `TLS` listener's handshake runs before the handler ever sees it. `Server.kill` settles
-//! every listener's accept loop before returning, so the enclosing block's own join finds
-//! them all already done.
+//! overload), `Plain` or `TLS`, each with its own accept loop (`launch_here`, never moved);
+//! `Server.kill` settles every one before returning, so the enclosing join finds them done.
 
 use super::tls::{Identity as TLSIdentity, handshake_server, server_config};
 use super::{TcpListener, TcpStream, bytes_to_string, copy_bytes, resolve};
@@ -47,17 +43,14 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-/// Whether a listener is `Plain` or `TLS`, and — for `TLS` — the `ServerConfig` built once
-/// when it started, shared (`Arc`) by every connection this listener ever accepts.
+/// Whether a listener is `Plain` or `TLS`, carrying `TLS`'s shared `ServerConfig`.
 #[derive(Clone)]
 pub(crate) enum ListenerKind {
     Plain,
     Tls(Arc<ServerConfig>),
 }
 
-/// An accepted connection's transport: a plain stream, or a TLS session already past its
-/// handshake. `Connection.@read`/`@write` read/write through whichever this is with no
-/// other change to their own logic.
+/// An accepted connection's transport: a plain stream, or a TLS session past its handshake.
 enum ConnectionTransport {
     Plain(TcpStream),
     Tls {
@@ -76,15 +69,8 @@ impl ConnectionTransport {
         }
     }
 
-    /// [`Self::read`]'s timed counterpart. A TLS connection checks rustls's own buffered
-    /// plaintext FIRST — a pure in-memory read, no socket I/O at all — since a client's
-    /// first request can arrive bundled with its own last handshake flight: by the time
-    /// the handshake returns, that plaintext already sits decrypted and waiting, with
-    /// nothing further ever arriving at the socket for this read to wait on. Only once
-    /// that is empty (`WouldBlock`, rustls's own signal for "not yet, but still open") does
-    /// it check readiness against `deadline` BEFORE decrypting any new ciphertext — see
-    /// `TcpStream::wait_readable`'s own doc for why it checks first rather than threading
-    /// the deadline into rustls's own record I/O.
+    /// [`Self::read`]'s timed counterpart. Checks rustls's own buffered plaintext first (a
+    /// pure in-memory read) since a handshake's last flight can already carry a request.
     fn read_with_deadline(&mut self, buf: &mut [u8], deadline: Instant) -> io::Result<usize> {
         match self {
             Self::Plain(stream) => stream.read_with_deadline(buf, deadline),
@@ -111,10 +97,7 @@ impl ConnectionTransport {
     }
 }
 
-/// A connection's own state — see the module doc's ownership-rule paragraph. The accepted
-/// transport belongs to this worker alone; the shared open-connections map (id to raw
-/// descriptor) is both how closing tells `Server.kill` this id is gone and how `Server.kill`
-/// itself force-closes a still-open one without ever touching this `RefCell`.
+/// A connection's own state — see the module doc's ownership-rule paragraph.
 pub(crate) struct ConnectionState {
     stream: RefCell<Option<ConnectionTransport>>,
     open_connections: Arc<Mutex<HashMap<u64, RawFd>>>,
@@ -123,35 +106,23 @@ pub(crate) struct ConnectionState {
 /// One listener within a server: its own accept loop (dropped, deregistering the listener,
 /// once the loop returns) and where it actually bound.
 struct ListenerState {
-    /// The accept loop's own deferred cell, from the `deferred::launch_here` call that
-    /// started it — never exposed to Quilon; `Server.kill` [`settle`]s every listener's so
-    /// the enclosing block's own join (over those same cells) finds them already done.
+    /// The accept loop's own deferred cell; `Server.kill` [`settle`]s every listener's.
     accept_loop: *mut crate::deferred::Deferred<()>,
-    /// Where the listener is actually bound — used to wake its accept loop's own parked
-    /// `accept()` on `kill` (see [`wake_accept_loop`]).
+    /// Where the listener is bound — wakes its parked `accept()` on `kill`.
     local_addr: SocketAddr,
 }
 
-/// A server's own state — see the module doc's ownership-rule paragraph. In-flight handlers
-/// and open connections are counted/tracked in ONE set for the whole server, shared across
-/// every listener in it, so `kill` waits for and force-closes across all of them together.
+/// A server's own state, shared across every listener in it — see the module doc.
 pub(crate) struct ServerState {
     stopping: Arc<AtomicBool>,
     in_flight: Arc<AtomicUsize>,
-    /// Every currently open connection this server accepted, id to raw descriptor —
-    /// deliberately not the worker-owned `ConnectionState` table: `Server.kill` may run on
-    /// a different worker than any given connection's own, and this is all it needs to
-    /// force-close one (see `force_shutdown_connection`).
+    /// Every open connection's raw descriptor, for `Server.kill` to force-close from any worker.
     open_connections: Arc<Mutex<HashMap<u64, RawFd>>>,
     listeners: Vec<ListenerState>,
 }
 
-// SAFETY: every field above is itself `Send`/`Sync` except each `ListenerState`'s
-// `accept_loop`, a raw pointer to a `Deferred<()>` — which is `Send`/`Sync` in its own
-// right (its state is `Mutex`-guarded; see `deferred::Deferred`'s own doc) but a raw
-// pointer never auto-implements either. Every access to `accept_loop` goes through
-// `deferred::settle`, which locks that `Mutex` itself, so sharing the bare pointer across
-// threads here is exactly as sound as sharing the `Deferred` it points to already is.
+// SAFETY: `accept_loop` is a raw pointer only because raw pointers aren't auto Send/Sync;
+// every access goes through `deferred::settle`'s own `Mutex`, same as the `Deferred` itself.
 unsafe impl Send for ServerState {}
 unsafe impl Sync for ServerState {}
 
@@ -164,9 +135,7 @@ fn next_handle() -> u64 {
 /// `net.@tcpServe(address, handler)`: resolve `address` exactly as `resolve` resolves
 /// `@tcpRequest`'s own, bind and listen on it, and return the `Server` handle's id at once
 /// — codegen builds the `Server { handle = … }` record around it. A bind failure is fatal,
-/// reported at `site`, naming `address` as written. `handshake_timeout_seconds` bounds a
-/// `TLS` listener's handshake (unused here: this form is always `Plain`), threaded through
-/// so the listener-list overload and this one share `start_listener`.
+/// reported at `site`, naming `address` as written.
 ///
 /// # Safety contract (upheld by the compiler)
 /// `address_data` is null, or points to `address_len` readable bytes for the duration of

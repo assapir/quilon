@@ -384,7 +384,7 @@ hello = (request :: http.Request) -> http.Response => <
       net.Listener { address = "127.0.0.1:0", transport = net.Plain, identity = net.None },
       net.Listener {
         address = "127.0.0.1:0", transport = net.TLS,
-        identity = net.Files("cert.pem", "key.pem")
+        identity = net.Files({ certificate = "cert.pem", key = "key.pem" })
       }
     ],
     request => hello(request))

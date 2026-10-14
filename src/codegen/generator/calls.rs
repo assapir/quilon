@@ -692,6 +692,86 @@ impl<'ctx> CodeGenerator<'ctx> {
             .map_err(ctx("Failed to load a record field"))
     }
 
+    /// `identity`'s `Files`/`Base64` payload — one record, `{ certificate, key }` — as the two
+    /// `(ptr, len)` pairs `__tcp_serve_listeners_push` takes. Guarded by `has_payload`
+    /// (`identity_kind != None`'s tag): `None`'s own payload slot is `undef`
+    /// ([`Self::generate_sum_constructor`] never writes it), so loading through it
+    /// unconditionally would be a load off an undefined pointer — the `None` branch stores an
+    /// empty `Text` pair instead, which the Rust side already ignores for that tag.
+    fn identity_payload_fields(
+        &mut self,
+        identity: inkwell::values::StructValue<'ctx>,
+        has_payload: inkwell::values::IntValue<'ctx>,
+        text_ty: BasicTypeEnum<'ctx>,
+        label: &str,
+    ) -> Result<(BasicValueEnum<'ctx>, BasicValueEnum<'ctx>), String> {
+        let function = self
+            .current_function
+            .ok_or_else(|| format!("{label} outside of function"))?;
+        let certificate_slot =
+            self.create_entry_block_alloca(&format!("{label}_certificate"), text_ty)?;
+        let key_slot = self.create_entry_block_alloca(&format!("{label}_key"), text_ty)?;
+        let has_bb = self
+            .context
+            .append_basic_block(function, &format!("{label}_has"));
+        let none_bb = self
+            .context
+            .append_basic_block(function, &format!("{label}_none"));
+        let cont_bb = self
+            .context
+            .append_basic_block(function, &format!("{label}_cont"));
+        self.builder
+            .build_conditional_branch(has_payload, has_bb, none_bb)
+            .map_err(ctx("Failed to branch on an Identity payload"))?;
+
+        self.builder.position_at_end(has_bb);
+        let payload_ptr = self
+            .builder
+            .build_extract_value(identity, 1, "identity_payload_ptr")
+            .map_err(ctx("Failed to extract the Identity payload"))?
+            .into_pointer_value();
+        let record_fields = [
+            ("certificate".to_string(), Type::Text),
+            ("key".to_string(), Type::Text),
+        ];
+        let record_ty = self.record_struct_type(&record_fields)?;
+        let certificate =
+            self.load_struct_field(record_ty, payload_ptr, 0, text_ty, "identity_certificate")?;
+        let key = self.load_struct_field(record_ty, payload_ptr, 1, text_ty, "identity_key")?;
+        self.builder
+            .build_store(certificate_slot, certificate)
+            .map_err(ctx("Failed to store the Identity certificate"))?;
+        self.builder
+            .build_store(key_slot, key)
+            .map_err(ctx("Failed to store the Identity key"))?;
+        self.builder
+            .build_unconditional_branch(cont_bb)
+            .map_err(ctx("Failed to branch to cont"))?;
+
+        self.builder.position_at_end(none_bb);
+        let empty_text = text_ty.into_struct_type().const_zero();
+        self.builder
+            .build_store(certificate_slot, empty_text)
+            .map_err(ctx("Failed to store an empty certificate"))?;
+        self.builder
+            .build_store(key_slot, empty_text)
+            .map_err(ctx("Failed to store an empty key"))?;
+        self.builder
+            .build_unconditional_branch(cont_bb)
+            .map_err(ctx("Failed to branch to cont"))?;
+
+        self.builder.position_at_end(cont_bb);
+        let certificate = self
+            .builder
+            .build_load(text_ty, certificate_slot, "identity_certificate_value")
+            .map_err(ctx("Failed to load the Identity certificate"))?;
+        let key = self
+            .builder
+            .build_load(text_ty, key_slot, "identity_key_value")
+            .map_err(ctx("Failed to load the Identity key"))?;
+        Ok((certificate, key))
+    }
+
     /// Lower a leaf `@` IO primitive call to its runtime intrinsic. `site` is the span of the
     /// `@`-identifier — the call's launch site, which a fault in the launched work reports at.
     ///
@@ -1108,14 +1188,18 @@ impl<'ctx> CodeGenerator<'ctx> {
             let BasicValueEnum::StructValue(identity) = identity else {
                 return Err("core.net.Listener.identity must be a sum value".to_string());
             };
-            let first = this
+            let none_tag = this.context.i64_type().const_zero();
+            let has_identity = this
                 .builder
-                .build_extract_value(identity, 1, "identity_first")
-                .map_err(ctx("Failed to extract Identity payload 0"))?;
-            let second = this
-                .builder
-                .build_extract_value(identity, 2, "identity_second")
-                .map_err(ctx("Failed to extract Identity payload 1"))?;
+                .build_int_compare(
+                    inkwell::IntPredicate::NE,
+                    identity_kind,
+                    none_tag,
+                    "has_identity",
+                )
+                .map_err(ctx("Failed to compare the Identity tag"))?;
+            let (first, second) =
+                this.identity_payload_fields(identity, has_identity, text_ty, "identity")?;
             let (first_ptr, first_len) = this.text_fields(first)?;
             let (second_ptr, second_len) = this.text_fields(second)?;
 

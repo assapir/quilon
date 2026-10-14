@@ -220,7 +220,7 @@ the listener's address and a reason, exactly as a bind failure
   server = net.@tcpServe(
     [net.Listener {
       address = ":443", transport = net.TLS,
-      identity = net.Files("missing-cert.pem", "missing-key.pem")
+      identity = net.Files({ certificate = "missing-cert.pem", key = "missing-key.pem" })
     }],
     connection => $)
   0

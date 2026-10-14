@@ -173,7 +173,7 @@ version of the program above.
 | Type | Effect |
 |------|--------|
 | `Listener { address :: Text, transport :: Transport, identity :: Identity }` | `address` is `host:port`, exactly the form `net.@tcpServe` otherwise accepts. |
-| `Identity = None / Files(certificatePath :: Text, keyPath :: Text) / Base64(certificate :: Text, key :: Text)` | `None` for a `Plain` listener. `Files` reads two PEM files when the listener starts; the certificate file may hold a whole chain, leaf first. `Base64` is the base64 of each of those same two PEM files, one line each (`base64 -w0 fullchain.pem`), for an environment variable or a secrets manager — it decodes to PEM and goes through the same parser. Either way, the private key may be PKCS#8, SEC1, or PKCS#1. |
+| `Identity = None / Files({ certificate :: Text, key :: Text }) / Base64({ certificate :: Text, key :: Text })` | `None` for a `Plain` listener. `Files`'s `certificate`/`key` are PEM file paths read when the listener starts; the certificate file may hold a whole chain, leaf first. `Base64`'s fields are the base64 of each of those same two PEM files, one line each (`base64 -w0 fullchain.pem`), for an environment variable or a secrets manager — it decodes to PEM and goes through the same parser. Either way, the private key may be PKCS#8, SEC1, or PKCS#1. |
 
 `transport = TLS` with `identity = None`, or `transport = Plain` with an identity other
 than `None`, is a compile error ([QN363](../tooling/errors/semantics.md#qn363--mismatched-listener-transport-and-identity))
@@ -212,7 +212,7 @@ respond = (connection :: net.Connection) -> $ => <
       net.Listener { address = "127.0.0.1:0", transport = net.Plain, identity = net.None },
       net.Listener {
         address = "127.0.0.1:0", transport = net.TLS,
-        identity = net.Files("cert.pem", "key.pem")
+        identity = net.Files({ certificate = "cert.pem", key = "key.pem" })
       }
     ],
     connection => respond(connection))
