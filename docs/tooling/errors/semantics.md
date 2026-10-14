@@ -552,17 +552,17 @@ Write `scale` as a method: `scale = (n :: Num) -> Num => < n * 2 >`.
 
 ### QN346 — unsupported sum-type payload
 
-A sum-type variant payload of a type outside the accepted set: `Num`, `Text`, `Bool`, `$`,
-a declared record, a declared sum (the enclosing one included), or an array/map of one of
-those. The message names the variant, the payload's position, and the type it resolved to.
+A sum-type variant's payload is a type outside the accepted set: `Num`, `Text`, `Bool`,
+`$`, a declared record, a declared sum (the enclosing one included), an anonymous record
+(named or positional) of one of those, or an array/map of one of those. The message names
+the variant and the type it resolved to.
 
 ```quilon ignore
 Mystery = Wrap(Nope) / Empty
 ^ = () -> Num => < 0 >
 ```
 
-`Nope` names nothing declared above `Mystery`. A payload is Num, Text, Bool, $, a declared
-record, a declared sum, or an array/map of one of those.
+`Nope` names nothing declared above `Mystery`.
 
 ### QN347 — atomic binding declared without `:=`
 

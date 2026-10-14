@@ -17,6 +17,14 @@ All notable changes to Quilon are documented here.
   record's field order isn't part of its type — `f({ b = "x", a = 1 })` passes to a `{ a
   :: Num, b :: Text }` parameter — and a diagnostic prints one canonical order. A
   position with a leading zero (`p.01`) is `QN120`. See `docs/types/records.md`.
+- **Editor support for anonymous and positional records.** The VS Code grammar now
+  scopes a positional access's digits (`grid.0.1`'s `0` and `1`) the same as a named
+  field access — no scope, not a number literal — so `p.0` no longer colors like the
+  number `0` and `grid.0.1` no longer colors like `0.1`. The language server's hover,
+  completion, and signature displays already rendered `{ Num, Num }` and
+  `{ count :: Num, label :: Text }` through the shared type formatter; completion after
+  `.` on a positional record now offers `0`/`1` in order, and on a named anonymous
+  record offers its field names. Part of #490.
 - **The runtime is a real M:N scheduler: one worker OS thread per CPU** (`QUILON_WORKERS=<n>`
   is a debugging override), **fibers pinned to the worker that created them.** A
   freestanding launch and an accepted connection's handler fiber each go to the worker with
@@ -65,6 +73,15 @@ All notable changes to Quilon are documented here.
   (missing file, bad base64, bad PEM, a mismatched key) is fatal (`QN513`), naming the
   listener's address and a reason. See `docs/corelib/net.md#tls-listeners` and
   `docs/corelib/http.md#tls-listeners`. Part of #486.
+- **Breaking: a sum variant carries at most one payload.** Several values travel
+  together as one record instead of a longer payload list:
+  ```quilon ignore
+  Shape = Circle(Num) / Rect(Num, Num)        ~ before: two payload types
+  Shape = Circle(Num) / Rect({ Num, Num })    ~ after: one record payload
+  ```
+  Declaring more than one payload type is `QN121`; constructing or matching with several
+  arguments reuses the existing arity mismatch, `QN303`. See `docs/types/sum-types.md`.
+  Step 2 of #490.
 
 - **The signal trap (`!>`) — a top-level item, one per program, in the file that defines
   `^`, matching signals via a new `core.process` module.** `!>` followed by one or more
@@ -421,16 +438,9 @@ All notable changes to Quilon are documented here.
   age :: Num }`, instead of the compiler's internal `Record([("name", Text), ("age",
   Num)])` debug form.
 - **A fatal runtime check (a failing `assert`, an invalid `arr[i]`, a `net.@tcpServe` bind
-  failure, …) no longer aborts the process when a `net.@tcpServe` accept loop is still
-  running on the same worker.** The exit primitive every such check funnels through used
-  libc `exit(3)`, which also runs the calling thread's `thread_local!` destructors under
-  `quilon run`'s JIT (a normal, already-initialized Rust process) — dropping a still-parked
-  fiber's coroutine, which forces it to unwind its stack from inside that same teardown and
-  panics, printing `panic in a destructor during cleanup` / `thread caused non-unwinding
-  panic. aborting` instead of the diagnostic's own documented exit code. It now uses
-  `_exit(2)`, which skips destructors and `atexit` handlers entirely (every diagnostic is
-  already written through a raw `write(2)`, never buffered) — a fatal exit prints its
-  report and ends the process with its intended code, whatever else is still running.
+  failure, …) no longer aborts the process** — `panic in a destructor during cleanup` /
+  `thread caused non-unwinding panic. aborting` — **when a `net.@tcpServe` accept loop is
+  still running.** It now exits cleanly with the check's own documented code instead.
 
 ## 0.11.0 "Rackham" — 2026-09-08
 

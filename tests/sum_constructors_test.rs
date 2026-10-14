@@ -134,9 +134,9 @@ fn test_custom_sum_type_with_fields() {
     // User-defined sum type with payload variants, separated by `/`.
     let tokens = Lexer::tokenize(
         r#"
-        Point = Cartesian(Num, Num) / Polar(Num, Num)
+        Point = Cartesian({ Num, Num }) / Polar({ Num, Num })
         ^ = () -> Num => <
-          test = Cartesian(3, 4)
+          test = Cartesian({ 3, 4 })
           0
         >
     "#,

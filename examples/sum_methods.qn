@@ -5,12 +5,12 @@
 ~ `<< core.test` verifies every result; on success the program exits 0.
 << core.test
 
-Shape = Circle(Num) / Rect(Num, Num) {
-  ~ A named method that matches on `it`:
+Shape = Circle(Num) / Rect({ Num, Num }) {
+  ~ A named method that matches on `it`; Rect's one payload is a record, read by position.
   area = () -> Num => <
     it ?
-      | Circle(r)  => 3 * r * r         ~ ~pi*r^2 (pi ~= 3 here)
-      | Rect(w, h) => w * h
+      | Circle(r) => 3 * r * r         ~ ~pi*r^2 (pi ~= 3 here)
+      | Rect(p)   => p.0 * p.1
   >
 
   ~ A binary operator member: two shapes are equal when their areas match.
@@ -19,21 +19,21 @@ Shape = Circle(Num) / Rect(Num, Num) {
   ~ The render operator `` ` `` — a Shape's Text form:
   ` = () -> Text => <
     it ?
-      | Circle(r)  => "Circle(`r`)"
-      | Rect(w, h) => "Rect(`w`x`h`)"
+      | Circle(r) => "Circle(`r`)"
+      | Rect(p)   => "Rect(`p.0`x`p.1`)"
   >
 }
 
 ^ = () -> $ => <
   ~ A named method, dispatched on the receiver's type:
-  assert(Rect(6, 7).area(), equals(42))     ~ 6 * 7
-  assert(Circle(4).area(), equals(48))      ~ 3 * 4 * 4
+  assert(Rect({ 6, 7 }).area(), equals(42))     ~ 6 * 7
+  assert(Circle(4).area(), equals(48))          ~ 3 * 4 * 4
 
   ~ The `==` member, resolved from Shape's methods (equal areas):
-  assert(Rect(6, 7), equals(Rect(2, 21)))   ~ 42 == 42
-  assert(!(Rect(6, 7) == Circle(4)), equals(true))  ~ 42 != 48
+  assert(Rect({ 6, 7 }), equals(Rect({ 2, 21 })))   ~ 42 == 42
+  assert(!(Rect({ 6, 7 }) == Circle(4)), equals(true))  ~ 42 != 48
 
   ~ The `` ` `` member renders a Shape (interpolation takes the same path as `print`):
-  assert("`Rect(6, 7)`", equals("Rect(6x7)"))
+  assert("`Rect({ 6, 7 })`", equals("Rect(6x7)"))
   assert("`Circle(4)`", equals("Circle(4)"))
 >

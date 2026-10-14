@@ -448,14 +448,14 @@ fn set_user_record_key_dedup_and_remove_mutates_in_place() {
 #[test]
 fn map_user_sum_key() {
     assert_exit(
-        r#"Shape = Circle(Num) / Rect(Num, Num) {
-  area = () -> Num => < it ? | Circle(r) => 3 * r * r | Rect(w, h) => w * h >
+        r#"Shape = Circle(Num) / Rect({ Num, Num }) {
+  area = () -> Num => < it ? | Circle(r) => 3 * r * r | Rect(p) => p.0 * p.1 >
   == = (other :: Shape) -> Bool => < it.area() == other.area() >
   % = () -> Num => < it.area() >
 }
 ^ = () -> Num => <
-  m :: [|Shape => Num|] = [|Circle(4) => 10, Rect(6, 7) => 20|]
-  v :: Num = m.get(Rect(6, 7)) ? | Ok(n) => n | NotOk(_) => 0
+  m :: [|Shape => Num|] = [|Circle(4) => 10, Rect({ 6, 7 }) => 20|]
+  v :: Num = m.get(Rect({ 6, 7 })) ? | Ok(n) => n | NotOk(_) => 0
   m.size * 100 + v
 >"#,
         220,

@@ -147,7 +147,7 @@ pub struct TypeDeclaration {
 #[derive(Debug, Clone, PartialEq)]
 pub enum TypeDefinition {
     /// A user-defined sum type: `Color = Red / Green / Blue`,
-    /// `Shape = Circle(Num) / Rect(Num, Num)`. Variants are separated by `/`. An optional
+    /// `Shape = Circle(Num) / Rect({ Num, Num })`. Variants are separated by `/`. An optional
     /// trailing `{ }` block carries METHODS ONLY (named methods, the render `` ` ``, and
     /// operator members) — a sum has no fields, so a field-like entry there is rejected.
     Sum {

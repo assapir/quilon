@@ -262,10 +262,7 @@ fn quilon_run(program: &Path, stdin: Stdio) -> (i32, String) {
 /// reference examples are checked the same way the front-end ones are, just run instead of
 /// checked.
 ///
-/// A fatal exit must also end the process cleanly: `code` is its documented exit status
-/// exactly (not merely nonzero), and `stderr` carries nothing past that one coded report —
-/// no `panic`/`aborting` line from a teardown that unwound or dropped something it should
-/// not have (see `tests/tcp_serve_test.rs`'s own live-server variant of this same check).
+/// Also checks the exit is clean: the exact documented code, and no `panic`/`aborting` line.
 #[test]
 fn runtime_examples_raise_their_own_code() {
     for code in [

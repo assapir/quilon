@@ -194,16 +194,21 @@ fn jit_tcp_serve_binds_through_the_address_overload() {
     );
 }
 
-#[test]
-fn aot_tcp_serve_echoes_then_kill_stops_the_server() {
-    let Some(linker) = ["clang", "gcc"].into_iter().find(|tool| {
+/// The first of `clang`/`gcc` found on `PATH`, or `None` if neither is.
+fn available_linker() -> Option<&'static str> {
+    ["clang", "gcc"].into_iter().find(|tool| {
         Command::new(tool)
             .arg("--version")
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .status()
             .is_ok()
-    }) else {
+    })
+}
+
+#[test]
+fn aot_tcp_serve_echoes_then_kill_stops_the_server() {
+    let Some(linker) = available_linker() else {
         eprintln!("skipping AOT @tcpServe gate: need a linker (`clang` or `gcc`) on PATH");
         return;
     };
@@ -246,11 +251,7 @@ fn aot_tcp_serve_echoes_then_kill_stops_the_server() {
     );
 }
 
-/// A program that leaves one `net.@tcpServe` accept loop running forever, then hits a fatal
-/// bind failure on a second — the shape the fatal-exit-with-a-live-server regression needs:
-/// a still-parked, unfinished fiber on the scheduler at the moment `__exit` tears it down.
-/// Binding the first on port `0` and re-binding its own resolved `address()` guarantees the
-/// second collides, with no race on a hardcoded port.
+/// One `net.@tcpServe` left running forever, then a fatal bind failure on a second.
 fn program_with_a_fatal_bind_failure_and_a_live_server() -> String {
     r#"
 << core.net
@@ -264,10 +265,7 @@ fn program_with_a_fatal_bind_failure_and_a_live_server() -> String {
     .to_string()
 }
 
-/// `stderr`/`code` from running [`program_with_a_fatal_bind_failure_and_a_live_server`]: the
-/// bind failure's own coded report, its documented exit status (`QN5xx`'s family digit), and
-/// nothing else — no `panic`/`aborting` line from a teardown that unwound or dropped the
-/// still-live accept loop's suspended fiber instead of just ending the process.
+/// Asserts a clean exit: the bind failure's own code and report, no `panic`/`aborting`.
 fn assert_fatal_bind_failure_exited_cleanly(stderr: &str, code: Option<i32>) {
     assert_eq!(
         code,
@@ -307,14 +305,7 @@ fn jit_a_fatal_bind_failure_with_a_live_server_exits_cleanly() {
 
 #[test]
 fn aot_a_fatal_bind_failure_with_a_live_server_exits_cleanly() {
-    let Some(linker) = ["clang", "gcc"].into_iter().find(|tool| {
-        Command::new(tool)
-            .arg("--version")
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .is_ok()
-    }) else {
+    let Some(linker) = available_linker() else {
         eprintln!(
             "skipping AOT fatal-exit-with-a-live-server gate: need a linker (`clang` or \
              `gcc`) on PATH"
