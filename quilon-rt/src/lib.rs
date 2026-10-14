@@ -53,6 +53,7 @@ pub mod io;
 pub mod launch_scope;
 pub mod mem;
 pub mod net;
+pub(crate) mod placement;
 pub mod process;
 pub mod reactor;
 pub mod report;
@@ -205,7 +206,7 @@ intrinsic_registry! {
     __tcp_request_launch:
         extern "C" fn(*mut QnResult, *const u8, i64, *const u8, i64, i64, i64),
     __tcp_serve_launch:
-        extern "C" fn(*const u8, i64, *const c_void, *mut c_void, *const QnSite) -> f64,
+        extern "C" fn(*const u8, i64, *const c_void, *mut c_void, *const QnSite, f64) -> f64,
     __connection_read_launch: extern "C" fn(f64) -> QnSlice,
     __connection_read_with_timeout_launch: extern "C" fn(f64, f64) -> QnSlice,
     __connection_write: extern "C" fn(f64, *const u8, i64),
@@ -230,7 +231,7 @@ intrinsic_registry! {
         i64,
     ),
     __tcp_serve_listeners_launch:
-        extern "C" fn(*mut c_void, *const c_void, *mut c_void, *const QnSite) -> f64,
+        extern "C" fn(*mut c_void, *const c_void, *mut c_void, *const QnSite, f64) -> f64,
     __stream_file_run: extern "C" fn(*mut QnResult, *const u8, i64, f64, *const c_void, *mut c_void),
     __http_frame_body:
         extern "C" fn(*mut QnResult, *const u8, i64, i8, *const u8, i64, *const u8, i64),

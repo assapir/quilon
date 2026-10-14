@@ -2,28 +2,28 @@
 
 //! TLS for `core.net`: `net.@tcpRequest`'s `TLS` transport (the client half, below), and
 //! `net.@tcpServe`/`http.@serve`'s `TLS` listeners (the server half, at the end of this
-//! file).
-//!
-//! Both sides share the same shape: the connect/accept and the handshake's record I/O run
-//! on the reactor; only the CPU-bound step (`ClientConnection`/`ServerConnection::new`,
-//! `process_new_packets()` — signature verification, key exchange) goes to the
-//! blocking-call pool ([`run_blocking`]), so a slow or silent peer parks the calling
-//! fiber, not a pool thread, and record encryption/decryption afterward runs inline on
-//! the reactor.
+//! file). Both sides share one handshake loop ([`handshake`]): the connect/accept and the
+//! handshake's record I/O run on the reactor; only the CPU-bound step (building the
+//! connection, `process_new_packets()`) goes to the blocking-call pool ([`run_blocking`]),
+//! so a slow or silent peer parks the calling fiber, not a pool thread, and record
+//! encryption/decryption afterward runs inline on the reactor.
 
 use super::TcpStream;
 use crate::blocking::run_blocking;
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD as BASE64;
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
 use rustls::crypto::{CryptoProvider, verify_tls12_signature, verify_tls13_signature};
 use rustls::pki_types::pem::PemObject;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, ServerName, UnixTime};
 use rustls::{
-    CertificateError, ClientConfig, ClientConnection, DigitallySignedStruct, Error as TLSError,
-    RootCertStore, ServerConfig, ServerConnection, SignatureScheme,
+    CertificateError, ClientConfig, ClientConnection, Connection, DigitallySignedStruct,
+    Error as TLSError, RootCertStore, ServerConfig, ServerConnection, SignatureScheme,
 };
 use std::fs;
 use std::io;
 use std::sync::{Arc, OnceLock};
+use std::time::Instant;
 
 pub(super) fn tls_request(
     address: &str,
@@ -39,7 +39,7 @@ pub(super) fn tls_request(
     let mut stream = TcpStream::connect(target)
         .map_err(|error| super::client::request_error_text(address, "connect", &error))?;
 
-    let conn = handshake(client_config(unchecked), server_name, &mut stream)
+    let conn = handshake_client(client_config(unchecked), server_name, &mut stream)
         .map_err(|error| handshake_error_text(address, &curated_message(&error, &host)))?;
 
     let mut tls = rustls::StreamOwned::new(conn, stream);
@@ -49,17 +49,22 @@ pub(super) fn tls_request(
         .map_err(|error| super::client::request_error_text(address, "read", &error))
 }
 
-/// Build the `ClientConnection` and drive it to completion. `ClientConnection::new` already
-/// does crypto (the ClientHello's key share), so it runs on the blocking-call pool too, not
-/// just `process_new_packets` below; `write_tls`/`read_tls` move raw bytes over `stream`'s
-/// own park-on-readiness `read`/`write`, the only steps that stay on the reactor.
+/// Build a `rustls::Connection` and drive its handshake to completion — the one loop the
+/// client (`ClientConnection`) and server (`ServerConnection`) sides share, dispatching
+/// through `Connection`'s own `read_tls`/`write_tls`/`process_new_packets`/`wants_*`
+/// (`Deref<Target = CommonState>` and match-dispatched inherent methods) so neither side
+/// needs its own copy. `new_connection` builds the concrete connection — crypto already
+/// (a ClientHello's key share, or the certificate/key to sign with), wrapped as a
+/// `Connection` so the loop below never has to know which side it is — inside the FIRST
+/// `run_blocking`, not just `process_new_packets`'s own. `deadline`, when given, bounds a
+/// server's own wait for a slow or silent peer (see `TcpStream::wait_readable`); a client
+/// handshake passes `None`, unbounded as before.
 fn handshake(
-    config: Arc<ClientConfig>,
-    server_name: ServerName<'static>,
+    new_connection: impl FnOnce() -> Result<Connection, TLSError> + Send + 'static,
     stream: &mut TcpStream,
-) -> io::Result<ClientConnection> {
-    let mut conn =
-        run_blocking(move || ClientConnection::new(config, server_name))?.map_err(tls_io_error)?;
+    deadline: Option<Instant>,
+) -> io::Result<Connection> {
+    let mut conn = run_blocking(new_connection)?.map_err(tls_io_error)?;
     while conn.is_handshaking() {
         while conn.wants_write() {
             if conn.write_tls(stream)? == 0 {
@@ -68,6 +73,14 @@ fn handshake(
         }
         if !conn.wants_read() {
             continue;
+        }
+        if let Some(deadline) = deadline
+            && !stream.wait_readable(deadline)?
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "TLS handshake timed out",
+            ));
         }
         if conn.read_tls(stream)? == 0 {
             return Err(io::Error::new(
@@ -82,6 +95,22 @@ fn handshake(
         conn = returned;
         outcome.map_err(tls_io_error)?;
     }
+    Ok(conn)
+}
+
+fn handshake_client(
+    config: Arc<ClientConfig>,
+    server_name: ServerName<'static>,
+    stream: &mut TcpStream,
+) -> io::Result<ClientConnection> {
+    let Connection::Client(conn) = handshake(
+        move || ClientConnection::new(config, server_name).map(Connection::Client),
+        stream,
+        None,
+    )?
+    else {
+        unreachable!("new_connection above always returns Connection::Client")
+    };
     Ok(conn)
 }
 
@@ -282,10 +311,8 @@ impl ServerCertVerifier for AcceptAnyCertificate {
 // ---------------------------------------------------------------------------------------
 
 /// A `TLS` listener's identity, already split into its two PEM byte sources —
-/// `core.net.Identity`'s `Files`/`Base64` variants, read off a `Listener` record by
-/// codegen and reassembled by `super::server::__tcp_serve_listeners_push` into this, the
-/// `None` variant never reaching here (a `Plain` listener has no [`ListenerKind::Tls`],
-/// so nothing of this module's own runs for it at all).
+/// `core.net.Identity`'s `Files`/`Base64` variants. `None` never reaches here: a `Plain`
+/// listener has no `ListenerKind::Tls`.
 pub(super) enum Identity {
     Files {
         certificate_path: String,
@@ -315,10 +342,12 @@ impl Identity {
                 Ok((certificate, key))
             }
             Identity::Base64 { certificate, key } => {
-                let certificate = base64_decode(certificate)
+                let certificate = BASE64
+                    .decode(certificate.trim())
                     .map_err(|error| format!("the certificate's base64: {error}"))?;
-                let key =
-                    base64_decode(key).map_err(|error| format!("the key's base64: {error}"))?;
+                let key = BASE64
+                    .decode(key.trim())
+                    .map_err(|error| format!("the key's base64: {error}"))?;
                 Ok((certificate, key))
             }
         }
@@ -351,102 +380,23 @@ pub(super) fn server_config(identity: &Identity) -> Result<Arc<ServerConfig>, St
     Ok(Arc::new(config))
 }
 
-/// Build the `ServerConnection` and drive it to completion — this file's client-side
-/// `handshake`, mirrored: `ServerConnection::new` and `process_new_packets` both run on
-/// the blocking-call pool; `write_tls`/`read_tls` move raw bytes over `stream`'s own
-/// park-on-readiness `read`/`write`, the only steps that stay on the reactor. A client
-/// whose handshake fails this way is closed silently by the caller — see
-/// `super::server::spawn_connection_handler`'s own `ListenerKind::Tls` arm.
+/// The server side of [`handshake`]: bounded by `deadline` (`net.@tcpServe`/
+/// `http.@serve`'s own handshake timeout), so a client that connects and sends nothing
+/// times out rather than holding the connection's worker and fiber forever. A client
+/// whose handshake fails this way — including by timing out — is closed silently by the
+/// caller (`net::server::place_connection`'s own `ListenerKind::Tls` arm).
 pub(super) fn handshake_server(
     config: Arc<ServerConfig>,
     stream: &mut TcpStream,
+    deadline: Instant,
 ) -> io::Result<ServerConnection> {
-    let mut conn = run_blocking(move || ServerConnection::new(config))?.map_err(tls_io_error)?;
-    while conn.is_handshaking() {
-        while conn.wants_write() {
-            if conn.write_tls(stream)? == 0 {
-                break;
-            }
-        }
-        if !conn.wants_read() {
-            continue;
-        }
-        if conn.read_tls(stream)? == 0 {
-            return Err(io::Error::new(
-                io::ErrorKind::UnexpectedEof,
-                "connection closed during the TLS handshake",
-            ));
-        }
-        let (returned, outcome) = run_blocking(move || {
-            let outcome = conn.process_new_packets();
-            (conn, outcome)
-        })?;
-        conn = returned;
-        outcome.map_err(tls_io_error)?;
-    }
+    let Connection::Server(conn) = handshake(
+        move || ServerConnection::new(config).map(Connection::Server),
+        stream,
+        Some(deadline),
+    )?
+    else {
+        unreachable!("new_connection above always returns Connection::Server")
+    };
     Ok(conn)
-}
-
-/// Decode standard base64 (RFC 4648: `A`-`Z`, `a`-`z`, `0`-`9`, `+`, `/`, optional `=`
-/// padding) — `core.net.Identity::Base64`'s own encoding, `base64 -w0`'s output. Hand
-/// rolled rather than a dependency: the whole thing is a fixed lookup table and some bit
-/// shifting, the same call this file's own `format_date` already makes ("a date-handling
-/// dependency buys nothing a dozen lines of civil-calendar arithmetic don't already
-/// cover") for a comparably small, comparably fixed piece of arithmetic.
-fn base64_decode(text: &str) -> Result<Vec<u8>, String> {
-    fn sextet(byte: u8) -> Option<u8> {
-        match byte {
-            b'A'..=b'Z' => Some(byte - b'A'),
-            b'a'..=b'z' => Some(byte - b'a' + 26),
-            b'0'..=b'9' => Some(byte - b'0' + 52),
-            b'+' => Some(62),
-            b'/' => Some(63),
-            _ => None,
-        }
-    }
-    let input: Vec<u8> = text
-        .bytes()
-        .filter(|byte| !byte.is_ascii_whitespace())
-        .collect();
-    let unpadded = input
-        .strip_suffix(b"==")
-        .or_else(|| input.strip_suffix(b"="))
-        .unwrap_or(input.as_slice());
-
-    let mut bits: u32 = 0;
-    let mut bit_count: u32 = 0;
-    let mut decoded = Vec::with_capacity(unpadded.len() * 3 / 4);
-    for &byte in unpadded {
-        let value = sextet(byte).ok_or_else(|| format!("invalid base64 character {byte:#x}"))?;
-        bits = (bits << 6) | u32::from(value);
-        bit_count += 6;
-        if bit_count >= 8 {
-            bit_count -= 8;
-            decoded.push((bits >> bit_count) as u8);
-        }
-    }
-    Ok(decoded)
-}
-
-#[cfg(test)]
-mod server_tests {
-    use super::*;
-
-    #[test]
-    fn base64_decode_round_trips_known_text() {
-        // `echo -n 'Quilon TLS' | base64` — a known-good vector, not a round trip through
-        // an encoder this crate does not have (nothing here ever encodes base64).
-        assert_eq!(base64_decode("UXVpbG9uIFRMUw==").unwrap(), b"Quilon TLS");
-    }
-
-    #[test]
-    fn base64_decode_accepts_unpadded_input_and_embedded_newlines() {
-        assert_eq!(base64_decode("UXVpbG9u").unwrap(), b"Quilon");
-        assert_eq!(base64_decode("UXVp\nbG9uIFRMUw==").unwrap(), b"Quilon TLS");
-    }
-
-    #[test]
-    fn base64_decode_rejects_an_invalid_character() {
-        assert!(base64_decode("not valid base64!").is_err());
-    }
 }

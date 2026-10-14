@@ -189,10 +189,13 @@ certificate — is fatal the same way, naming the listener's address and a reaso
 when the listener starts, from its `identity` — never rebuilt per connection. Each
 accepted connection then runs rustls's server-side handshake — the same split as the
 client's own TLS (crypto on the runtime's blocking-call pool, record I/O on the reactor,
-encryption/decryption inline afterward) — before `handler` ever sees it; a client whose
-handshake fails is closed silently, with `handler` never called. Past the handshake, a
-`TLS` connection is handed to `handler` as the very same `Connection` every `Plain` one
-is: `@read`/`@write`/`close` work unchanged.
+encryption/decryption inline afterward) — before `handler` ever sees it. The handshake is
+bounded by 5 seconds (`http.@serve`'s own listener-list form uses `ServerOptions
+.idleTimeout` instead — see [the HTTP server](http.md#tls-listeners)): a client that
+connects and sends nothing is closed once that passes, the same as any other failed
+handshake, with `handler` never called. Past the handshake, a `TLS` connection is handed
+to `handler` as the very same `Connection` every `Plain` one is: `@read`/`@write`/`close`
+work unchanged.
 
 ```quilon
 << core.net

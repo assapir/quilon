@@ -363,8 +363,11 @@ hummus = (request :: http.Request) -> http.Response => <
 [`core.net`'s own TLS listeners](net.md#tls-listeners) for `Listener`/`Identity`, the
 `transport`/`identity` mismatch errors, and the identity-loading failure — all the same
 for an HTTP server, since `http.@serve` lowers to the exact runtime entry
-`net.@tcpServe`'s listener-list form does. A client's failed TLS handshake is closed
-silently, the same way a malformed request line would be; `handler` never runs either way.
+`net.@tcpServe`'s listener-list form does. The handshake is bounded by `ServerOptions
+.idleTimeout` — the same seconds a slow request head or body is already allowed — so a
+client that connects and sends nothing is closed once that passes. A client's failed
+(or timed-out) TLS handshake is closed silently, the same way a malformed request line
+would be; `handler` never runs either way.
 
 ```quilon
 << core.http

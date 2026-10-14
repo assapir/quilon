@@ -267,17 +267,20 @@ impl<'ctx> CodeGenerator<'ctx> {
                 false,
             ),
             // double __tcp_serve_launch(i8* address, i64 addressLen, ptr handlerFn, ptr
-            // handlerEnv, Site* site) — `net.@tcpServe`: resolve `address` (`host:port`,
-            // exactly as `@tcpRequest` accepts it), bind and listen, launch the accept loop
-            // in the background (registered with the calling block's launch scope directly,
-            // never exposed as a deferred value — this call's own return is ready at once),
-            // and return the `Server` handle's id. `handlerFn` is the code generator's
-            // fixed-shape trampoline over the caller's `(Connection) -> $` closure (see
-            // `emit_tcp_serve_handler_thunk`), called with `handlerEnv` (the bundled
-            // `{ptr,ptr}` closure) as its second argument. A bind failure is fatal, reported
-            // at `site`, naming `address` as written.
+            // handlerEnv, Site* site, double handshakeTimeoutSeconds) — `net.@tcpServe`:
+            // resolve, bind, listen, launch the accept loop, and return the `Server`
+            // handle's id at once. `handshakeTimeoutSeconds` bounds a `TLS` listener's own
+            // handshake (unused by this always-`Plain` form, but `start_listener` shares
+            // it with the listener-list overload below).
             "__tcp_serve_launch" => f64t.fn_type(
-                &[ptr.into(), i64t.into(), ptr.into(), ptr.into(), ptr.into()],
+                &[
+                    ptr.into(),
+                    i64t.into(),
+                    ptr.into(),
+                    ptr.into(),
+                    ptr.into(),
+                    f64t.into(),
+                ],
                 false,
             ),
             // void __trap_install(double signalIndex, ptr armFn) — signalIndex is an index
@@ -353,12 +356,12 @@ impl<'ctx> CodeGenerator<'ctx> {
                 false,
             ),
             // double __tcp_serve_listeners_launch(ptr list, ptr handlerFn, ptr handlerEnv,
-            // Site* site) — consume `list` and start every listener it named, sharing one
-            // `Server` across all of them, exactly as `__tcp_serve_launch`'s own single
-            // listener otherwise.
-            "__tcp_serve_listeners_launch" => {
-                f64t.fn_type(&[ptr.into(), ptr.into(), ptr.into(), ptr.into()], false)
-            }
+            // Site* site, double handshakeTimeoutSeconds) — consume `list` and start every
+            // listener it named, sharing one `Server` across all of them.
+            "__tcp_serve_listeners_launch" => f64t.fn_type(
+                &[ptr.into(), ptr.into(), ptr.into(), ptr.into(), f64t.into()],
+                false,
+            ),
             // void __stream_file_run({i8,{ptr,i64}}* out, i8* path,i64, double chunkSize,
             // ptr onChunk, ptr environment) — the `@streamFile` leaf IO primitive: runs on the
             // calling fiber, parking between reads, calling the code generator's fixed-shape

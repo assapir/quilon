@@ -6,6 +6,12 @@ All notable changes to Quilon are documented here.
 
 ### Added
 
+- **The runtime is a real M:N scheduler: one worker OS thread per CPU** (`QUILON_WORKERS=<n>`
+  is a debugging override), **fibers pinned to the worker that created them.** A
+  freestanding launch and an accepted connection's handler fiber each go to the worker with
+  the shortest run queue. A launch's join and a deferred value's force work across workers.
+  A program with no launches behaves exactly as before; see `docs/concurrency/runtime.md`.
+  Part of #488.
 - **A TLS client, over `net.@tcpRequest` and `core.http`.** `net.ConnectOptions { transport
   :: Transport, certificates :: Certificates }` and the `net.@tcpRequest(address,
   requestBytes, options)` overload — `Transport = Plain / TLS`, `Certificates = Checked /
@@ -39,7 +45,10 @@ All notable changes to Quilon are documented here.
   listener's `ServerConfig` is built once, when it starts; each accepted connection then
   runs rustls's server-side handshake — the same crypto-on-the-blocking-pool,
   record-I/O-on-the-reactor split as the client's — before `handler` ever sees it, handed
-  the same `Connection` a `Plain` one is. `transport = TLS` with `identity = None`, or
+  the same `Connection` a `Plain` one is. The handshake itself is bounded — `ServerOptions
+  .idleTimeout` for `http.@serve`, the same 5-second default for `net.@tcpServe` — so a
+  client that connects and sends nothing is closed once that passes rather than holding
+  the connection forever. `transport = TLS` with `identity = None`, or
   `transport = Plain` with an identity, is a compile error (`QN359`) on a literal
   `Listener`, fatal (`QN512`) on one built another way; an identity that fails to load
   (missing file, bad base64, bad PEM, a mismatched key) is fatal (`QN513`), naming the

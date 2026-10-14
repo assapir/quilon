@@ -634,10 +634,62 @@ impl<'ctx> CodeGenerator<'ctx> {
         variant: &str,
     ) -> Result<inkwell::values::IntValue<'ctx>, String> {
         let value = self.generate_field_access(options, field)?;
+        self.variant_flag(value, variant, "flag")
+    }
+
+    /// Whether a sum `value` IS `variant`, as the `i64` flag an FFI call takes in place of
+    /// the sum itself ([`Self::variant_tag_matches`], widened).
+    fn variant_flag(
+        &mut self,
+        value: BasicValueEnum<'ctx>,
+        variant: &str,
+        label: &str,
+    ) -> Result<inkwell::values::IntValue<'ctx>, String> {
         let matches = self.variant_tag_matches(variant, value)?;
         self.builder
-            .build_int_z_extend(matches, self.context.i64_type(), "flag")
-            .map_err(|e| e.to_string())
+            .build_int_z_extend(matches, self.context.i64_type(), label)
+            .map_err(ctx("Failed to widen a variant flag"))
+    }
+
+    /// A sum `value`'s own tag, as the `i64` an FFI call takes in place of the sum itself
+    /// — [`Self::variant_flag`]'s counterpart for a call that wants the real discriminant
+    /// rather than a single variant's own yes/no.
+    fn sum_tag_as_i64(
+        &mut self,
+        value: BasicValueEnum<'ctx>,
+        label: &str,
+    ) -> Result<inkwell::values::IntValue<'ctx>, String> {
+        let BasicValueEnum::StructValue(sum) = value else {
+            return Err(format!("{label} needs a sum value"));
+        };
+        let tag = self
+            .builder
+            .build_extract_value(sum, 0, &format!("{label}_tag"))
+            .map_err(ctx("Failed to extract a sum tag"))?
+            .into_int_value();
+        self.builder
+            .build_int_z_extend(tag, self.context.i64_type(), label)
+            .map_err(ctx("Failed to widen a sum tag"))
+    }
+
+    /// GEP and load field `index` of a loaded record pointer `element` — the array-element
+    /// counterpart of [`Self::record_field_pointer`], which re-evaluates an `Expression`
+    /// the element here, a runtime loop variable, does not have.
+    fn load_struct_field(
+        &mut self,
+        struct_ty: inkwell::types::StructType<'ctx>,
+        element: PointerValue<'ctx>,
+        index: u32,
+        field_ty: BasicTypeEnum<'ctx>,
+        label: &str,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let field_ptr = self
+            .builder
+            .build_struct_gep(struct_ty, element, index, &format!("{label}_field"))
+            .map_err(ctx("Failed to GEP a record field"))?;
+        self.builder
+            .build_load(field_ty, field_ptr, label)
+            .map_err(ctx("Failed to load a record field"))
     }
 
     /// Lower a leaf `@` IO primitive call to its runtime intrinsic. `site` is the span of the
@@ -790,6 +842,11 @@ impl<'ctx> CodeGenerator<'ctx> {
                 let thunk = self.emit_tcp_serve_handler_thunk()?;
                 let thunk_ptr = thunk.as_global_value().as_pointer_value();
 
+                // No `ServerOptions` at this layer: a `TLS` listener's handshake is
+                // bounded by the same 5-second default `ServerOptions.default()` gives
+                // `http.@serve`'s own `idleTimeout`.
+                let handshake_timeout = self.context.f64_type().const_float(5.0);
+
                 if matches!(
                     self.oracle.expression_type(&arguments[0]),
                     Some(Type::Array(_))
@@ -798,6 +855,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                         &arguments[0],
                         thunk_ptr,
                         bundle.into(),
+                        handshake_timeout,
                         site,
                         CALL_FAILED,
                     );
@@ -817,6 +875,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                             thunk_ptr.into(),
                             bundle.into(),
                             launch_site.into(),
+                            handshake_timeout.into(),
                         ],
                         "tcp_serve",
                     )
@@ -885,6 +944,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                         &arguments[0],
                         thunk_ptr,
                         bundle.into(),
+                        idle_timeout,
                         site,
                         CALL_FAILED,
                     );
@@ -904,6 +964,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                             thunk_ptr.into(),
                             bundle.into(),
                             launch_site.into(),
+                            idle_timeout.into(),
                         ],
                         "http_serve",
                     )
@@ -971,22 +1032,20 @@ impl<'ctx> CodeGenerator<'ctx> {
     }
 
     /// `net.@tcpServe(listeners, handler)` / `http.@serve(listeners, handler[, options])`:
-    /// the listener-list lowering both call sites share, parameterized only by which
-    /// `handler_fn`/`handler_env` built the fixed-shape call behind it (`net.@tcpServe`'s
-    /// own handler thunk, or `core.http`'s `serveConnection` thunk wrapping it) — the
-    /// same split their single-`Listener` forms already have. Loops over `listeners` (via
+    /// the listener-list lowering both call sites share, parameterized by which
+    /// `handler_fn`/`handler_env` built the fixed-shape call behind it and by
+    /// `handshake_timeout` (a `TLS` listener's own handshake bound — `ServerOptions
+    /// .idleTimeout`, or `@tcpServe`'s 5-second constant). Loops over `listeners` (via
     /// [`Self::array_loop`]) pushing one `__tcp_serve_listeners_push` call per element,
-    /// reading each `Listener`'s `address`/`transport`/`identity` fields with a raw
-    /// struct GEP rather than [`Self::generate_field_access`]: the array ELEMENT is a
-    /// runtime loop variable, not an `Expression` that call could re-evaluate.
-    /// `transport`/`identity`'s sum tags flatten to the `i64` flags the push intrinsic
-    /// takes, exactly as [`Self::tcp_request_option_flag`]'s own flattening of
-    /// `ConnectOptions`.
+    /// reading each `Listener`'s fields with [`Self::load_struct_field`] rather than
+    /// [`Self::generate_field_access`]: the array ELEMENT is a runtime loop variable, not
+    /// an `Expression` that call could re-evaluate.
     fn generate_tcp_serve_listeners(
         &mut self,
         listeners: &Expression,
         handler_fn: PointerValue<'ctx>,
         handler_env: BasicValueEnum<'ctx>,
+        handshake_timeout: inkwell::values::FloatValue<'ctx>,
         site: &Span,
         call_failed: &'static str,
     ) -> Result<BasicValueEnum<'ctx>, String> {
@@ -1001,9 +1060,9 @@ impl<'ctx> CodeGenerator<'ctx> {
         };
         let listener_struct_ty = self.record_struct_type(&listener_fields)?;
         let listener_elem_ty: BasicTypeEnum = self.context.ptr_type(AddressSpace::default()).into();
-        let text_ty = self.ptr_len_struct_type();
-        let transport_ty = self.sum_struct_type("core.net.Transport");
-        let identity_ty = self.sum_struct_type("core.net.Identity");
+        let text_ty: BasicTypeEnum = self.ptr_len_struct_type().into();
+        let transport_ty: BasicTypeEnum = self.sum_struct_type("core.net.Transport").into();
+        let identity_ty: BasicTypeEnum = self.sum_struct_type("core.net.Identity").into();
 
         let (_, data_ptr, size) = self.extract_array(listeners)?;
 
@@ -1020,92 +1079,45 @@ impl<'ctx> CodeGenerator<'ctx> {
                 .load_element(data_ptr, listener_elem_ty, index)?
                 .into_pointer_value();
 
-            let address_field = this
-                .builder
-                .build_struct_gep(listener_struct_ty, element, 0, "listener_address_field")
-                .map_err(ctx("Failed to GEP Listener.address"))?;
-            let BasicValueEnum::StructValue(address) = this
-                .builder
-                .build_load(text_ty, address_field, "listener_address")
-                .map_err(ctx("Failed to load Listener.address"))?
-            else {
-                return Err("core.net.Listener.address must be a Text".to_string());
-            };
-            let address_ptr = this
-                .builder
-                .build_extract_value(address, 0, "address_ptr")
-                .map_err(ctx("Failed to extract Text ptr"))?
-                .into_pointer_value();
-            let address_len = this
-                .builder
-                .build_extract_value(address, 1, "address_len")
-                .map_err(ctx("Failed to extract Text len"))?
-                .into_int_value();
+            let address = this.load_struct_field(
+                listener_struct_ty,
+                element,
+                0,
+                text_ty,
+                "listener_address",
+            )?;
+            let (address_ptr, address_len) = this.text_fields(address)?;
 
-            let transport_field = this
-                .builder
-                .build_struct_gep(listener_struct_ty, element, 1, "listener_transport_field")
-                .map_err(ctx("Failed to GEP Listener.transport"))?;
-            let transport = this
-                .builder
-                .build_load(transport_ty, transport_field, "listener_transport")
-                .map_err(ctx("Failed to load Listener.transport"))?;
-            let is_tls = this.variant_tag_matches("core.net.TLS", transport)?;
-            let is_tls = this
-                .builder
-                .build_int_z_extend(is_tls, this.context.i64_type(), "is_tls")
-                .map_err(ctx("Failed to widen is_tls"))?;
+            let transport = this.load_struct_field(
+                listener_struct_ty,
+                element,
+                1,
+                transport_ty,
+                "listener_transport",
+            )?;
+            let is_tls = this.variant_flag(transport, "core.net.TLS", "is_tls")?;
 
-            let identity_field = this
-                .builder
-                .build_struct_gep(listener_struct_ty, element, 2, "listener_identity_field")
-                .map_err(ctx("Failed to GEP Listener.identity"))?;
-            let BasicValueEnum::StructValue(identity) = this
-                .builder
-                .build_load(identity_ty, identity_field, "listener_identity")
-                .map_err(ctx("Failed to load Listener.identity"))?
-            else {
+            let identity = this.load_struct_field(
+                listener_struct_ty,
+                element,
+                2,
+                identity_ty,
+                "listener_identity",
+            )?;
+            let identity_kind = this.sum_tag_as_i64(identity, "identity_kind")?;
+            let BasicValueEnum::StructValue(identity) = identity else {
                 return Err("core.net.Listener.identity must be a sum value".to_string());
             };
-            let identity_kind = this
-                .builder
-                .build_extract_value(identity, 0, "identity_tag")
-                .map_err(ctx("Failed to extract Identity tag"))?
-                .into_int_value();
-            let identity_kind = this
-                .builder
-                .build_int_z_extend(identity_kind, this.context.i64_type(), "identity_kind")
-                .map_err(ctx("Failed to widen identity_kind"))?;
             let first = this
                 .builder
                 .build_extract_value(identity, 1, "identity_first")
-                .map_err(ctx("Failed to extract Identity payload 0"))?
-                .into_struct_value();
+                .map_err(ctx("Failed to extract Identity payload 0"))?;
             let second = this
                 .builder
                 .build_extract_value(identity, 2, "identity_second")
-                .map_err(ctx("Failed to extract Identity payload 1"))?
-                .into_struct_value();
-            let first_ptr = this
-                .builder
-                .build_extract_value(first, 0, "identity_first_ptr")
-                .map_err(ctx("Failed to extract Text ptr"))?
-                .into_pointer_value();
-            let first_len = this
-                .builder
-                .build_extract_value(first, 1, "identity_first_len")
-                .map_err(ctx("Failed to extract Text len"))?
-                .into_int_value();
-            let second_ptr = this
-                .builder
-                .build_extract_value(second, 0, "identity_second_ptr")
-                .map_err(ctx("Failed to extract Text ptr"))?
-                .into_pointer_value();
-            let second_len = this
-                .builder
-                .build_extract_value(second, 1, "identity_second_len")
-                .map_err(ctx("Failed to extract Text len"))?
-                .into_int_value();
+                .map_err(ctx("Failed to extract Identity payload 1"))?;
+            let (first_ptr, first_len) = this.text_fields(first)?;
+            let (second_ptr, second_len) = this.text_fields(second)?;
 
             this.builder
                 .build_call(
@@ -1138,6 +1150,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                     handler_fn.into(),
                     handler_env.into(),
                     launch_site.into(),
+                    handshake_timeout.into(),
                 ],
                 "tcp_serve_listeners",
             )
