@@ -313,8 +313,22 @@ half = (shape :: { Num, label :: Text }) -> Num => < shape.0 / 2 >
 
 Write every field named (`{ size :: Num, label :: Text }`), or drop the names and write
 every field positional (`{ Num, Text }`). The same rule applies to a record literal:
-`{ 1, "x" }`. A spread update's own override entries are one shape too: `{<-p, name = 1,
-0 = 2}` mixes a named override with a numbered one.
+`{ 1, label = "x" }` is the same error — write `{ size = 1, label = "x" }` or
+`{ 1, "x" }`.
+
+A spread update's own override entries are one shape too — a named override (`name =
+value`) and a numbered one (`position = value`) don't mix in the same literal:
+
+```quilon ignore
+^ = () -> Num => <
+  p = { 6, 7 }
+  bad = {<-p, name = 1, 0 = 2}
+  0
+>
+```
+
+Override `p`'s positions numbered (`{<-p, 0 = 2, 1 = 1}`), or spread a named source and
+override its fields by name instead.
 
 ### QN119 — numbered record field without a spread
 

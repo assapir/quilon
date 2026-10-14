@@ -391,9 +391,8 @@ pub enum TypeError {
         size: usize,
         span: Span,
     },
-    /// A record literal spreads more than one source and at least one is positional —
-    /// which position wins where they overlap is undecided, so this is rejected rather
-    /// than guessed.
+    /// A positional record takes one spread; a second one in the same literal is
+    /// rejected, named sources excepted (multi-spread has always worked for those).
     MultiplePositionalSpreads {
         span: Span,
     },
