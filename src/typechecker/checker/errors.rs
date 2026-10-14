@@ -77,6 +77,7 @@ impl TypeError {
             TypeError::TrapWithoutProcessImport { .. } => Code::TrapWithoutProcessImport,
             TypeError::TrapArmNotASignalPattern { .. } => Code::TrapArmNotASignalPattern,
             TypeError::DuplicateTrapArm { .. } => Code::DuplicateTrapArm,
+            TypeError::ListenerIdentityMismatch { .. } => Code::ListenerIdentityMismatch,
             TypeError::AssertionNeverHolds { .. } => Code::AssertionNeverHolds,
             TypeError::UnreachableMatchArm { .. } => Code::UnreachableMatchArm,
         }
@@ -281,6 +282,15 @@ impl TypeError {
             TypeError::UnreachableMatchArm { .. } => diagnostic.help(
                 "remove the catch-all arm — every variant it would cover already has its own",
             ),
+            TypeError::ListenerIdentityMismatch { has_identity, .. } => {
+                diagnostic.help(if *has_identity {
+                    "set identity = None, or change transport to TLS".to_string()
+                } else {
+                    "set identity = Files(certificatePath, keyPath) or Base64(certificate, key), \
+                     or change transport to Plain"
+                        .to_string()
+                })
+            }
             _ => diagnostic,
         }
     }
@@ -350,6 +360,7 @@ impl TypeError {
             | TypeError::TrapWithoutProcessImport { span }
             | TypeError::TrapArmNotASignalPattern { span }
             | TypeError::DuplicateTrapArm { span, .. }
+            | TypeError::ListenerIdentityMismatch { span, .. }
             | TypeError::AssertionNeverHolds { span, .. }
             | TypeError::UnreachableMatchArm { span, .. } => span,
         }
@@ -936,6 +947,13 @@ impl std::fmt::Display for TypeError {
                  it would otherwise cover is already covered",
                 fmt_name_list(known)
             ),
+            TypeError::ListenerIdentityMismatch { has_identity, .. } => {
+                if *has_identity {
+                    write!(f, "a Plain listener's identity must be None")
+                } else {
+                    write!(f, "a TLS listener needs an identity other than None")
+                }
+            }
         }
     }
 }

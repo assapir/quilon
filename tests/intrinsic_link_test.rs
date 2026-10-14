@@ -103,9 +103,23 @@ linkedGreeting = "linked " + "again"
   >
   smokeServer = net.@tcpServe("127.0.0.1:0", connection => respondSmoke(connection))
   ~ __server_address_host / __server_address_port, via `Address.text()`'s own composed use
-  ~ of both fields.
+  ~ of both fields, and __server_address_guard (every `.address()` call reaches it, win
+  ~ or fatal) on a server it does not trip here (exactly one listener).
   assert(smokeServer.address().text().size > 0, equals(true))
   smokeServer.kill(0.01)
+
+  ~ __tcp_serve_listeners_new/push/launch (the listener-list overload) and
+  ~ __server_listener_count/__server_address_host_at/__server_address_port_at (from
+  ~ `.addresses()`) — two Plain listeners, so neither trips __server_address_guard's own
+  ~ fatal path (that only reaches `codes::AMBIGUOUS_SERVER_ADDRESS`, never emitted here).
+  smokeListenerServer = net.@tcpServe(
+    [
+      net.Listener { address = "127.0.0.1:0", transport = net.Plain, identity = net.None },
+      net.Listener { address = "127.0.0.1:0", transport = net.Plain, identity = net.None }
+    ],
+    connection => respondSmoke(connection))
+  assert(smokeListenerServer.addresses().size, equals(2))
+  smokeListenerServer.kill(0.01)
 
   ~ __http_body_progress, via the compiled body of `core.http.serveConnection` (and the
   ~ functions it calls: `receiveBody`, `answer`) — reached because `http.@serve` calls it,

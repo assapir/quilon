@@ -157,9 +157,9 @@ unchanged. Only what a match over it needs to cover narrows.
 
 An arm — a constructor pattern, or a `_`/bound catch-all — that can only cover a variant
 already ruled out is a compile error
-([QN364](../tooling/errors/semantics.md#qn364--match-arm-a-proven-variant-already-rules-out)),
+([QN365](../tooling/errors/semantics.md#qn365--match-arm-a-proven-variant-already-rules-out)),
 and so is an `assert`/`expect` that could never hold
-([QN363](../tooling/errors/semantics.md#qn363--assertion-a-proven-variant-already-rules-out)):
+([QN364](../tooling/errors/semantics.md#qn364--assertion-a-proven-variant-already-rules-out)):
 ```quilon ignore
 v = Ok(21)
 v ? | Ok(x) => x | NotOk(e) => 0    ~ error: `v` is always `Ok` here

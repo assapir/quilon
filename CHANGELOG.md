@@ -50,6 +50,29 @@ All notable changes to Quilon are documented here.
   text otherwise. See `docs/corelib/net.md#tls` and `docs/corelib/http.md#tls`. Closes
   #339. Part of #486.
 
+- **A TLS server, over `net.@tcpServe` and `http.@serve`.** `core.net.Identity = None /
+  Files({ certificate, key }) / Base64({ certificate, key })` and `Listener { address,
+  transport, identity }`: `Files`'s fields are two PEM file paths read when the listener
+  starts (the certificate file may hold a whole chain, leaf first); `Base64`'s fields are
+  the base64 of those same two files, one line each, for an environment variable or a
+  secrets manager. Either way the private key may be PKCS#8, SEC1, or PKCS#1.
+  `net.@tcpServe(listeners :: []Listener, handler)` and `http.@serve(listeners ::
+  []Listener, handler[, ServerOptions])` bind every listener in the list — `Plain` or
+  `TLS` per its own `transport`/`identity` — under ONE `net.Server`: `kill` stops all of them,
+  `addresses() -> []Address` reports every listener's bound address (`address()` stays
+  the single-listener form, now fatal on a server with more than one listener). A `TLS`
+  listener's `ServerConfig` is built once, when it starts; each accepted connection then
+  runs rustls's server-side handshake — the same crypto-on-the-blocking-pool,
+  record-I/O-on-the-reactor split as the client's — before `handler` ever sees it, handed
+  the same `Connection` a `Plain` one is. The handshake itself is bounded — `ServerOptions
+  .idleTimeout` for `http.@serve`, the same 5-second default for `net.@tcpServe` — so a
+  client that connects and sends nothing is closed once that passes rather than holding
+  the connection forever. `transport = TLS` with `identity = None`, or
+  `transport = Plain` with an identity, is a compile error (`QN363`) on a literal
+  `Listener`, fatal (`QN512`) on one built another way; an identity that fails to load
+  (missing file, bad base64, bad PEM, a mismatched key) is fatal (`QN513`), naming the
+  listener's address and a reason. See `docs/corelib/net.md#tls-listeners` and
+  `docs/corelib/http.md#tls-listeners`. Part of #486.
 - **Breaking: a sum variant carries at most one payload.** Several values travel
   together as one record instead of a longer payload list:
   ```quilon ignore
@@ -69,12 +92,12 @@ All notable changes to Quilon are documented here.
   v = Ok(21)
   doubled = v ?
     | Ok(x)    => x * 2
-    | NotOk(e) => 0        ~ before: required; after: QN364 — v is always Ok here
+    | NotOk(e) => 0        ~ before: required; after: QN365 — v is always Ok here
   ```
   The new matcher `is(Variant)` joins `isOk()`/`isNotOk()` (now `is(Ok)`/`is(NotOk)`'s
   own names), for every sum type, `Result` included. A call's result is never a known
   variant, and a `:=` binding is never narrowed — its exhaustiveness is unchanged. See
-  `docs/types/sum-types.md#narrowing--bindings`. `QN363`/`QN364`. Step 3 of #490.
+  `docs/types/sum-types.md#narrowing--bindings`. `QN364`/`QN365`. Step 3 of #490.
 
 - **The signal trap (`!>`) — a top-level item, one per program, in the file that defines
   `^`, matching signals via a new `core.process` module.** `!>` followed by one or more

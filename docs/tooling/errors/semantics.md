@@ -871,7 +871,27 @@ once in one literal (that has always worked); this rule is only for a positional
 
 Spread one source, then override positions after it: `{<-p, 0 = 9}`.
 
-### QN363 — assertion a proven variant already rules out
+### QN363 — mismatched listener transport and identity
+
+A literal `core.net.Listener { ... }` whose `transport` and `identity` are written as
+one of `core.net`'s own constructors disagree: `transport = TLS` with `identity =
+None`, or `transport = Plain` with an identity other than `None`.
+
+```quilon ignore
+<< core.net
+
+listener = net.Listener { address = ":443", transport = net.TLS, identity = net.None }
+
+^ = () -> Num => < 0 >
+```
+
+Set `identity = net.Files({ certificate, key })` (or `net.Base64({ certificate, key })`)
+for a `TLS` listener, or `identity = net.None` for a `Plain` one. The same
+disagreement on a `Listener` built another way — assembled from a variable, say, rather
+than written out in place — is not caught here; it is fatal when that listener starts
+(see [QN512](runtime.md#qn512--mismatched-listener-transport-and-identity-at-startup)).
+
+### QN364 — assertion a proven variant already rules out
 
 An `assert`/`expect` asks whether a binding is a variant that narrowing already proved
 it is not — the assertion could never hold. See
@@ -886,7 +906,7 @@ it is not — the assertion could never hold. See
 
 Remove the assertion, or fix whichever earlier proof narrowed the binding this way.
 
-### QN364 — match arm a proven variant already rules out
+### QN365 — match arm a proven variant already rules out
 
 A match arm — a constructor pattern, or a `_`/bound catch-all — covers only a variant
 narrowing already proved the scrutinee is not. See

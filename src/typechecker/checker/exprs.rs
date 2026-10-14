@@ -616,6 +616,15 @@ impl TypeChecker {
                                 }
                             }
 
+                            if name == "core.net.Listener"
+                                && let Some(has_identity) = listener_identity_mismatch(fields)
+                            {
+                                return Err(TypeError::ListenerIdentityMismatch {
+                                    has_identity,
+                                    span: span.clone(),
+                                });
+                            }
+
                             Ok(Type::Named {
                                 name,
                                 fields: type_fields,
@@ -1176,4 +1185,35 @@ fn literal_key_label(key: &Expression) -> String {
         Expression::Bool { value, .. } => value.to_string(),
         _ => String::new(),
     }
+}
+
+/// Whether a `core.net.Listener { ... }` literal's `transport`/`identity` fields are
+/// STATICALLY written as one of `core.net`'s own constructors — a bare `Plain`/`TLS` for
+/// `transport`, a bare `None` or a `Files(...)`/`Base64(...)` call for `identity` — and, if
+/// so, whether those two disagree (`TLS` with `None`, or `Plain` with an identity other
+/// than `None`). `None` either when a field is missing (`MissingConstructorField` already
+/// covers that) or when either side is written some other way (a variable, a call, a
+/// spread) — a disagreement there is still possible, but only `core.net.@tcpServe`/
+/// `@serve`'s own fatal check at listener start can tell, not this literal's shape alone.
+fn listener_identity_mismatch(fields: &[(String, Expression)]) -> Option<bool> {
+    let transport = fields.iter().find(|(name, _)| name == "transport")?;
+    let identity = fields.iter().find(|(name, _)| name == "identity")?;
+    let is_tls = match &transport.1 {
+        Expression::Identifier { name, .. } if name == "core.net.Plain" => false,
+        Expression::Identifier { name, .. } if name == "core.net.TLS" => true,
+        _ => return None,
+    };
+    let has_identity = match &identity.1 {
+        Expression::Identifier { name, .. } if name == "core.net.None" => false,
+        Expression::Call { function, .. } => match function.as_ref() {
+            Expression::Identifier { name, .. }
+                if name == "core.net.Files" || name == "core.net.Base64" =>
+            {
+                true
+            }
+            _ => return None,
+        },
+        _ => return None,
+    };
+    (is_tls != has_identity).then_some(has_identity)
 }
