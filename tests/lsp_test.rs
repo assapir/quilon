@@ -253,6 +253,50 @@ fn hover_over_a_failing_cases_own_callee_still_answers() {
     assert_eq!(label, "(Num) -> Num");
 }
 
+#[test]
+fn hover_over_a_positional_record_binding_shows_its_positional_type() {
+    let text = "^ = () -> Num => <\n  loot = { 6, 7 }\n  loot.0\n>\n";
+    let checked = check_text(Path::new("buffer.qn"), text).expect("checks clean");
+    let (label, _) = hover_at(
+        &checked.types,
+        &checked.matcher_hovers,
+        offset_of(text, "loot.0", 0),
+    )
+    .expect("a hover");
+    assert_eq!(label, "{ Num, Num }");
+}
+
+#[test]
+fn hover_over_a_named_anonymous_record_parameter_shows_its_field_list() {
+    // Field order in the annotation already matches canonical (ascending) order, so this
+    // also pins that the checker's own canonicalization doesn't reorder what was already
+    // sorted.
+    let text = "describe = (r :: { count :: Num, label :: Text }) -> Text => < r.label >\n\
+                ^ = () -> Num => < describe({ count = 1, label = \"a\" })\n0 >\n";
+    let checked = check_text(Path::new("buffer.qn"), text).expect("checks clean");
+    let (label, _) = hover_at(
+        &checked.types,
+        &checked.matcher_hovers,
+        offset_of(text, "r.label", 0),
+    )
+    .expect("a hover");
+    assert_eq!(label, "{ count :: Num, label :: Text }");
+}
+
+#[test]
+fn hover_over_a_call_to_a_function_taking_a_positional_record_shows_its_signature() {
+    let text = "carry = (loot :: { Num, Num }) -> Num => < loot.0 + loot.1 >\n\
+                ^ = () -> Num => < carry({ 6, 7 }) >\n";
+    let checked = check_text(Path::new("buffer.qn"), text).expect("checks clean");
+    let (label, _) = hover_at(
+        &checked.types,
+        &checked.matcher_hovers,
+        offset_of(text, "carry({ 6, 7 })", 1),
+    )
+    .expect("a hover");
+    assert_eq!(label, "({ Num, Num }) -> Num");
+}
+
 // --- Go-to-definition -------------------------------------------------------
 
 #[test]
@@ -1798,6 +1842,38 @@ p = Point { x = 1 }\n  p.HERE\n  0\n>\n";
     let labels: std::collections::HashSet<&str> =
         items.iter().map(|item| item.label.as_str()).collect();
     assert_eq!(labels, std::collections::HashSet::from(["x", "sum"]));
+}
+
+/// Case 3 on a positional anonymous record: fields are offered by position, in order —
+/// a positional record's fields are stored under their decimal index
+/// ([`quilon::ast::nodes::positional_field_name`]).
+#[test]
+fn completions_after_a_positional_record_expression_list_its_positions_in_order() {
+    let text = "^ = () -> Num => <\n  p = { 6, 7 }\n  p.HERE\n  0\n>\n";
+    let offset = offset_of(text, "HERE", 4);
+    let items = completions_at(Path::new("buffer.qn"), text, offset);
+    let labels: Vec<&str> = items.iter().map(|item| item.label.as_str()).collect();
+    assert_eq!(labels, vec!["0", "1"]);
+    for item in &items {
+        assert_eq!(item.kind, CompletionKind::Field);
+        assert_eq!(item.detail.as_deref(), Some("Num"));
+    }
+}
+
+/// Case 3 on a named anonymous record (no declared type name): its field names, exactly
+/// like a declared record's.
+#[test]
+fn completions_after_a_named_anonymous_record_expression_list_its_field_names() {
+    let text = "describe = (r :: { count :: Num, label :: Text }) -> Num => <\n  r.HERE\n  0\n>\n\
+                ^ = () -> Num => < describe({ count = 1, label = \"a\" }) >\n";
+    let offset = offset_of(text, "HERE", 4);
+    let items = completions_at(Path::new("buffer.qn"), text, offset);
+    let labels: std::collections::HashSet<&str> =
+        items.iter().map(|item| item.label.as_str()).collect();
+    assert_eq!(labels, std::collections::HashSet::from(["count", "label"]));
+    let count = items.iter().find(|item| item.label == "count").unwrap();
+    assert_eq!(count.kind, CompletionKind::Field);
+    assert_eq!(count.detail.as_deref(), Some("Num"));
 }
 
 // --- The parse helper -------------------------------------------------------
