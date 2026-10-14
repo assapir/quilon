@@ -242,6 +242,7 @@ or `server.kill()` for its 5-second default.
 | Function | Effect |
 |----------|--------|
 | `http.@serve(address :: net.Address, handler :: (Request) -> Response) -> net.Server` | As above, given the `net.Address` a `server.address()` reported. |
+| `http.@serve(listeners :: []net.Listener, handler :: (Request) -> Response) -> net.Server` | `net.@tcpServe`'s listener-list form, each listener's accepted connections served over HTTP — see [TLS listeners](#tls-listeners). |
 
 ### Keep-alive
 
@@ -352,6 +353,45 @@ hummus = (request :: http.Request) -> http.Response => <
 | `ServerOptions.default() -> ServerOptions` | `{ maxBodySize = 16 * 1024 * 1024, idleTimeout = 5 }` (static) — 16 MiB and 5 seconds, the same idle default Node uses for its own server sockets. |
 | `http.@serve(address, handler, options :: ServerOptions) -> net.Server` | As the two-argument form, with `options.maxBodySize`/`options.idleTimeout` in place of the defaults. |
 | `http.@serve(address :: net.Address, handler, options :: ServerOptions) -> net.Server` | As above, given the `net.Address` a `server.address()` reported. |
+| `http.@serve(listeners :: []net.Listener, handler, options :: ServerOptions) -> net.Server` | As the listener-list form above, with `options.maxBodySize`/`options.idleTimeout` in place of the defaults. |
+
+### TLS listeners
+
+`http.@serve`'s listener-list form takes the same `net.Listener`s `net.@tcpServe` does —
+`Plain` or `TLS`, per listener, with a `TLS` listener's `identity` loaded and its
+`ServerConfig` built once when the listener starts. See
+[`core.net`'s own TLS listeners](net.md#tls-listeners) for `Listener`/`Identity`, the
+`transport`/`identity` mismatch errors, and the identity-loading failure — all the same
+for an HTTP server, since `http.@serve` lowers to the exact runtime entry
+`net.@tcpServe`'s listener-list form does. The handshake is bounded by `ServerOptions
+.idleTimeout` — the same seconds a slow request head or body is already allowed — so a
+client that connects and sends nothing is closed once that passes. A client's failed
+(or timed-out) TLS handshake is closed silently, the same way a malformed request line
+would be; `handler` never runs either way.
+
+```quilon
+<< core.http
+<< core.net
+<< core.test
+
+hello = (request :: http.Request) -> http.Response => <
+  http.Response.reply(http.OK, "hello")
+>
+
+^ = () -> $ => <
+  shop = http.@serve(
+    [
+      net.Listener { address = "127.0.0.1:0", transport = net.Plain, identity = net.None },
+      net.Listener {
+        address = "127.0.0.1:0", transport = net.TLS,
+        identity = net.Files({ certificate = "cert.pem", key = "key.pem" })
+      }
+    ],
+    request => hello(request))
+  assert(shop.addresses().size, equals(2))
+  shop.kill(1)
+>
+```
 
 `Response` gains one constructor, `reply`, over six overloads, plus `wire()`:
 

@@ -179,3 +179,75 @@ afterward stays inside the running server instead.
 ```
 
 Pick an address nothing else on the machine is already bound to.
+
+### QN512 — mismatched listener transport and identity at startup
+
+A `Listener` whose `transport` and `identity` disagree — `TLS` with `identity = None`,
+or `Plain` with an identity other than `None` — reached `core.net.@tcpServe`/
+`http.@serve`'s listener-list form at run time (built some way other than a literal
+written in place, which [QN363](semantics.md#qn363--mismatched-listener-transport-and-identity)
+catches at compile time instead). The report names the listener's address and which
+side of the disagreement it is on.
+
+```quilon ignore
+<< core.net
+
+mismatched = (transport :: net.Transport, identity :: net.Identity) -> net.Listener => <
+  net.Listener { address = ":443", transport = transport, identity = identity }
+>
+
+^ = () -> Num => <
+  server = net.@tcpServe([mismatched(net.TLS, net.None)], connection => $)
+  0
+>
+```
+
+Give a `TLS` listener a `Files`/`Base64` identity, or give a `Plain` listener `None`.
+
+### QN513 — TLS identity failed to load
+
+A `TLS` listener's identity could not be turned into a certificate and a private key:
+`Files`'s path named no readable file, `Base64`'s text did not decode, the decoded or
+read bytes were not a PEM certificate chain or private key in an accepted encoding
+(PKCS#8, SEC1, or PKCS#1), or the key did not match the certificate. The report names
+the listener's address and a reason, exactly as a bind failure
+([QN511](#qn511--bind-failed)) does.
+
+```quilon ignore
+<< core.net
+
+^ = () -> Num => <
+  server = net.@tcpServe(
+    [net.Listener {
+      address = ":443", transport = net.TLS,
+      identity = net.Files({ certificate = "missing-cert.pem", key = "missing-key.pem" })
+    }],
+    connection => $)
+  0
+>
+```
+
+Point `Files`/`Base64` at a certificate chain (leaf first) and a matching private key.
+
+### QN514 — address() on a server with more than one listener
+
+`Server.address()` reports one bound address, which only a server with exactly one
+listener has. A server `net.@tcpServe`/`http.@serve` started from a listener LIST, with
+more than one entry, has no single address to report — `Server.addresses()` reports
+every listener's bound address instead.
+
+```quilon ignore
+<< core.net
+
+^ = () -> Num => <
+  server = net.@tcpServe(
+    [
+      net.Listener { address = "127.0.0.1:0", transport = net.Plain, identity = net.None },
+      net.Listener { address = "127.0.0.1:0", transport = net.Plain, identity = net.None }
+    ],
+    connection => $)
+  server.address().port
+>
+```
+
+Call `addresses()` instead, and pick the entry for the listener in question.

@@ -1,8 +1,12 @@
 ~ A chickpea stand over `http.@serve`: `hummus` answers a GET with what's on the counter, a
-~ POST with what got stocked, and anything else with 405. `^` opens the stand, places one
-~ order of each kind with `core.http`'s own client, asserts both replies, then closes the
-~ stand before returning. A signal trap closes the stand from outside `^` too: `Interrupt`
-~ (Ctrl-C) gives in-flight orders 2 seconds to finish, `Terminate` closes at once.
+~ POST with what got stocked, and anything else with 405. The stand opens on TWO listeners
+~ sharing one `Server` — `Plain` on 9048, `TLS` on 9049 over the self-signed, committed
+~ `examples/fixtures/http_server.crt`/`.key` — so one `stand.kill` closes both. `^` places
+~ one order of each kind over the plain listener, then the same GET again over the TLS one
+~ (`certificates = Unchecked`, since nothing trusts a self-signed example certificate),
+~ asserts every reply, then closes the stand before returning. A signal trap closes the
+~ stand from outside `^` too: `Interrupt` (Ctrl-C) gives in-flight orders 2 seconds to
+~ finish, `Terminate` closes at once.
 << core.http
 << core.net
 << core.process
@@ -30,7 +34,17 @@ checkReply = (reply :: http.Response, expectedStatus :: Num, expectedBody :: Tex
 ^ = () -> Num => <
   ~ A 1 MiB request body cap and a 2-second idle timeout, down from the 16 MiB/5-second defaults.
   stand := http.@serve(
-    "127.0.0.1:9048", request => hummus(request),
+    [
+      net.Listener { address = "127.0.0.1:9048", transport = net.Plain, identity = net.None },
+      net.Listener {
+        address = "127.0.0.1:9049", transport = net.TLS,
+        identity = net.Files({
+          certificate = "examples/fixtures/http_server.crt",
+          key = "examples/fixtures/http_server.key"
+        })
+      }
+    ],
+    request => hummus(request),
     http.ServerOptions { maxBodySize = 1024 * 1024, idleTimeout = 2 })
 
   http.Request.get("http://127.0.0.1:9048/counter").send() ?
@@ -41,6 +55,13 @@ checkReply = (reply :: http.Response, expectedStatus :: Num, expectedBody :: Tex
     "http://127.0.0.1:9048/counter", http.Body { content = "beans", contentType = "text/plain" }
   ).send() ?
     | Ok(reply)    => checkReply(reply, 201, "stocked beans")
+    | NotOk(error) => test.failAt(error)
+
+  tlsOptions = http.RequestOptions {
+    headers = http.Headers.empty(), transport = net.TLS, certificates = net.Unchecked
+  }
+  http.Request.get("127.0.0.1:9049/counter", tlsOptions).send() ?
+    | Ok(reply)    => checkReply(reply, 200, "chickpeas: plenty")
     | NotOk(error) => test.failAt(error)
 
   stand.kill(1)

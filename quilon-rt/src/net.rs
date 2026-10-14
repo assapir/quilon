@@ -37,8 +37,10 @@ mod tls;
 pub use client::__tcp_request_launch;
 pub use server::{
     __connection_close, __connection_read_launch, __connection_read_with_timeout_launch,
-    __connection_write, __server_address_host, __server_address_port, __server_kill,
-    __tcp_serve_launch,
+    __connection_write, __server_address_guard, __server_address_host, __server_address_host_at,
+    __server_address_port, __server_address_port_at, __server_kill, __server_listener_count,
+    __tcp_serve_launch, __tcp_serve_listeners_launch, __tcp_serve_listeners_new,
+    __tcp_serve_listeners_push,
 };
 
 fn would_block(e: &io::Error) -> bool {
@@ -139,6 +141,29 @@ impl TcpStream {
                 Err(e) => return Err(e),
             }
         }
+    }
+
+    /// Park until this stream is readable, or `deadline` passes with nothing arriving —
+    /// a server-side TLS connection's own timed `@read` uses this AHEAD of decrypting,
+    /// rather than threading `deadline` into the byte-level read the way
+    /// [`Self::read_with_deadline`] does for a plain connection: feeding rustls's own
+    /// record decoder a `WouldBlock`-turned-`Ok(0)` on a bare timeout is indistinguishable,
+    /// from inside it, from the peer actually closing the connection, which would wrongly
+    /// mark the whole TLS session over rather than merely idle. Consumes no bytes either
+    /// way — a caller that gets `Ok(true)` still does its own read afterward.
+    ///
+    /// ponytail: once readable, the caller's own read may still need a second round trip
+    /// (a TLS record split across two socket reads) with no deadline of its own, parking
+    /// past `deadline` in that rare case. A reader that threads the deadline all the way
+    /// into rustls's own I/O loop, instead of stopping at its own door, would close that
+    /// gap — worth it once a real idle connection trips over it.
+    pub fn wait_readable(&mut self, deadline: Instant) -> io::Result<bool> {
+        if Instant::now() >= deadline {
+            return Ok(false);
+        }
+        reregister_readiness(&mut self.inner, self.token, Interest::READABLE)?;
+        park_on_readiness_or_deadline(self.token, deadline);
+        Ok(Instant::now() < deadline)
     }
 
     /// Write once, parking until writable. May write fewer bytes than offered; use
