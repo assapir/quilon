@@ -53,6 +53,7 @@ pub mod io;
 pub mod launch_scope;
 pub mod mem;
 pub mod net;
+pub(crate) mod placement;
 pub mod process;
 pub mod reactor;
 pub mod report;

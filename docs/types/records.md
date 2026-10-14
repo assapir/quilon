@@ -168,8 +168,8 @@ betterLoot = {<-loot, 0 = 20}   ~ { 20, 3 }
 ```
 A numbered entry only overrides a position the spread already has — it never adds one,
 and it needs a spread to override at all: `{ 0 = 6, 1 = 7 }` with no spread is a compile
-error (write `{ 6, 7 }`). A positional record takes one spread — override further
-positions after it (`{<-loot, 0 = 20, 1 = 30}`) rather than spreading a second source.
+error (write `{ 6, 7 }`). A positional record takes one spread; override further
+positions after it (`{<-loot, 0 = 20, 1 = 30}`).
 (See `examples/records.qn`.)
 
 ### Static methods
