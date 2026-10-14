@@ -79,7 +79,7 @@ retrack = (incoming :: Parcel) -> Num => <
 confirmDelivered = (incoming :: Parcel) -> Num => <
   p = incoming
   p ?
-    | Delivered(_)  => p ? | Delivered(same) => same
+    | Delivered(_)  => (p ? | Delivered(same) => same)
     | Lost(reason)  => 0 - reason.size
     | Delayed(days) => 0 - days
 >
