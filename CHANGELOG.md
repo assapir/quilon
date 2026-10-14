@@ -42,6 +42,16 @@ All notable changes to Quilon are documented here.
   text otherwise. See `docs/corelib/net.md#tls` and `docs/corelib/http.md#tls`. Closes
   #339. Part of #486.
 
+- **Breaking: a sum variant carries at most one payload.** Several values travel
+  together as one record instead of a longer payload list:
+  ```quilon ignore
+  Shape = Circle(Num) / Rect(Num, Num)        ~ before: two payload types
+  Shape = Circle(Num) / Rect({ Num, Num })    ~ after: one record payload
+  ```
+  Declaring more than one payload type is `QN121`; constructing or matching with several
+  arguments reuses the existing arity mismatch, `QN303`. See `docs/types/sum-types.md`.
+  Step 2 of #490.
+
 - **The signal trap (`!>`) — a top-level item, one per program, in the file that defines
   `^`, matching signals via a new `core.process` module.** `!>` followed by one or more
   `| Pattern => expression` arms over `process.Signal` — `Hangup` / `Interrupt` / `Quit` /

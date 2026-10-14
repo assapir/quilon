@@ -112,6 +112,7 @@ its name relative to the first block (`` ```quilon title="lib/util.qn" ``).
 | [QN118](syntax.md#qn118--mixed-named-and-positional-record-fields) | mixed named and positional record fields |
 | [QN119](syntax.md#qn119--numbered-record-field-without-a-spread) | numbered record field without a spread |
 | [QN120](syntax.md#qn120--record-position-with-a-leading-zero) | record position with a leading zero |
+| [QN121](syntax.md#qn121--sum-type-variant-with-more-than-one-payload) | sum-type variant with more than one payload |
 | [QN200](modules.md#qn200---primitive-declared-outside-the-corelib) | `@` primitive declared outside the corelib |
 | [QN201](modules.md#qn201--missing-module) | missing module |
 | [QN202](modules.md#qn202--private-member-reached-through-its-module) | private member reached through its module |

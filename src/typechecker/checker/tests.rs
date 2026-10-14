@@ -958,6 +958,48 @@ fn test_constructor_arity() {
 }
 
 #[test]
+fn test_user_sum_variant_with_several_pattern_bindings_is_rejected() {
+    // A variant's one record payload binds one sub-pattern, not several — `Rect(w, h)`
+    // over `Rect({ Num, Num })` reuses the same arity mismatch `Ok(x, y)` does above.
+    assert!(matches!(
+        check_ok(
+            "Shape = Circle(Num) / Rect({ Num, Num })\n\
+             ^ = () -> Num => <\n  s = Rect({ 6, 7 })\n  s ? | Circle(r) => r | Rect(w, h) => w + h\n>"
+        ),
+        Err(TypeError::WrongNumberOfArguments { .. })
+    ));
+}
+
+#[test]
+fn test_user_sum_positional_record_payload_is_accepted() {
+    assert!(
+        check_ok(
+            "Shape = Circle(Num) / Rect({ Num, Num })\n\
+         ^ = () -> Num => <\n  s = Rect({ 6, 7 })\n  s ? | Circle(r) => r | Rect(p) => p.0 * p.1\n>"
+        )
+        .is_ok()
+    );
+}
+
+#[test]
+fn test_user_sum_named_record_payload_is_accepted() {
+    assert!(check_ok(
+        "Shape = Circle(Num) / Rect({ width :: Num, height :: Num })\n\
+         ^ = () -> Num => <\n  s = Rect({ width = 6, height = 7 })\n  s ? | Circle(r) => r | Rect(p) => p.width * p.height\n>"
+    )
+    .is_ok());
+}
+
+#[test]
+fn test_invalid_payload_type_inside_a_record_payload_is_rejected() {
+    // `acceptable_payload_type` recurses into a record payload's own fields.
+    assert!(matches!(
+        check_ok("Mystery = Wrap({ Num, Nope }) / Empty"),
+        Err(TypeError::InvalidPayloadType { .. })
+    ));
+}
+
+#[test]
 fn test_builtin_sum_types() {
     let checker = TypeChecker::new();
     assert!(checker.env.get_type("Result").is_some());

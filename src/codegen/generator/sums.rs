@@ -109,12 +109,12 @@ impl<'ctx> CodeGenerator<'ctx> {
             None => None,
         };
 
-        // Tagged-union value: { i8 tag, slot0, slot1, ... }. Every sum type has a registered
-        // canonical layout (`sum_layouts`), so EVERY value of the type shares one struct shape
-        // and a match arm can extract any variant's slots without going out of range:
-        //  - USER sum types are sized to the widest variant, one slot per payload position:
-        //      Rect(3, 4) -> { i8 1, double 3.0, double 4.0 }
-        //      Circle(9)  -> { i8 0, double 9.0, double <undef> }   (slot 1 unused)
+        // Tagged-union value: { i8 tag, slot }. Every sum type has a registered canonical
+        // layout (`sum_layouts`), so EVERY value of the type shares one struct shape and a
+        // match arm can extract the payload without going out of range:
+        //  - USER sum types are sized to the widest variant's one payload:
+        //      Pending(9) -> { i8 1, double 9.0 }
+        //      Done($)    -> { i8 0, double <zeroed> }   (no payload to carry)
         //  - `Result` has ONE canonical `{ptr,i64}` slot into which ANY payload is PACKED
         //    (`pack_result_payload`), so its heterogeneous, generic variants still share the
         //    single shape `{ i8, {ptr,i64} }`:

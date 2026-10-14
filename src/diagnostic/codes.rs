@@ -68,6 +68,7 @@ codes! {
     MixedRecordFields = 118 => "mixed named and positional record fields",
     NumberedRecordFieldWithoutSpread = 119 => "numbered record field without a spread",
     LeadingZeroPosition = 120 => "record position with a leading zero",
+    VariantMultiplePayloads = 121 => "sum-type variant with more than one payload",
 
     // Family 2 — module resolution and linking
     AtDeclarationOutsideCorelib = 200 => "`@` primitive declared outside the corelib",

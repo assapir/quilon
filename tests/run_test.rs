@@ -1481,11 +1481,28 @@ fn run_numeric_sum_payload_through_operator_overload() {
 }
 
 #[test]
+fn run_positional_field_access_chained_into_a_method_call() {
+    // Regression: the lexer's number regex allows a trailing `.` with no digit after
+    // it, so `p.0.sum()` lexes `0.` as one NUMBER token with no `.` token left before
+    // `sum` — the parser must still read it as a method call on `p.0`, not drop `sum`.
+    assert_exit(
+        "Shape = Circle(Num) / Rect({ Num, Num }) {\n\
+           sum = () -> Num => < it ? | Circle(r) => r | Rect(p) => p.0 + p.1 >\n\
+         }\n\
+         ^ = () -> Num => <\n\
+           p = { Rect({ 3, 4 }), 10 }\n\
+           p.0.sum() + p.1\n\
+         >",
+        17,
+    );
+}
+
+#[test]
 fn run_user_sum_payload_dispatches_overload_by_concrete_type() {
     // A user sum type's payloads carry CONCRETE types (unlike Result's generic ones), so
     // a match arm's payload binding dispatches an overloaded call by that concrete type.
     assert_exit(
-        "Shape = Circle(Num) / Rect(Num, Num)\narea = (n :: Num) -> Num => < n * 3 >\n^ = () -> Num => <\n  s = Circle(14)\n  s ? | Circle(n) => area(n) | Rect(w, h) => w * h\n>",
+        "Shape = Circle(Num) / Rect({ Num, Num })\narea = (n :: Num) -> Num => < n * 3 >\n^ = () -> Num => <\n  s = Circle(14)\n  s ? | Circle(n) => area(n) | Rect(p) => p.0 * p.1\n>",
         42,
     );
 }
@@ -2228,13 +2245,13 @@ fn result_bool_payload_round_trips() {
 fn result_user_sum_payload_boxes_crosses_and_extracts() {
     // A payload wider than the uniform `{ptr,i64}` slot — a user sum value `Circle(5)` — is
     // BOXED into the slot, so `Ok(Circle(5))` still crosses a generic `(r :: Result)` parameter
-    // (okTag), and the caller extracts the sum value and matches it: `Rect(3,4)` -> 12.
+    // (okTag), and the caller extracts the sum value and matches it: `Rect({3,4})` -> 12.
     assert_exit(
-        "Shape = Circle(Num) / Rect(Num, Num)\n\
+        "Shape = Circle(Num) / Rect({ Num, Num })\n\
          okTag = (r :: Result) -> Num => < r ? | Ok(_) => 1 | NotOk(_) => 0 >\n\
          ^ = () -> Num => <\n\
          \x20 a = okTag(Ok(Circle(5)))\n\
-         \x20 area = Ok(Rect(3, 4)) ? | Ok(sh) => (sh ? | Circle(r) => r * r | Rect(w, h) => w * h) | NotOk(_) => 0\n\
+         \x20 area = Ok(Rect({ 3, 4 })) ? | Ok(sh) => (sh ? | Circle(r) => r * r | Rect(p) => p.0 * p.1) | NotOk(_) => 0\n\
          \x20 a + area\n\
          >",
         13,

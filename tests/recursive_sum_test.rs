@@ -87,18 +87,18 @@ fn record_with_direct_self_field_chained_twice() {
 }
 
 #[test]
-fn heterogeneous_positions_matched_on_every_variant() {
-    // Three variants disagree on their payload types position-by-position:
-    // `C(Num, Text)` shares neither of `A`/`B`'s positions.
+fn heterogeneous_payloads_matched_on_every_variant() {
+    // Three variants disagree on their one payload's type: `C`'s record payload shares
+    // neither `A`'s nor `B`'s.
     assert_exit(
-        "Mixed = A(Num) / B(Text) / C(Num, Text)\n\
+        "Mixed = A(Num) / B(Text) / C({ Num, Text })\n\
          describe = (m :: Mixed) -> Num => <\n\
            m ?\n\
-             | A(n)    => n\n\
-             | B(t)    => t.length\n\
-             | C(n, t) => n + t.length\n\
+             | A(n) => n\n\
+             | B(t) => t.length\n\
+             | C(c) => c.0 + c.1.length\n\
          >\n\
-         ^ = () -> Num => < describe(A(2)) + describe(B(\"abc\")) + describe(C(1, \"xy\")) >",
+         ^ = () -> Num => < describe(A(2)) + describe(B(\"abc\")) + describe(C({ 1, \"xy\" })) >",
         8,
     );
 }
@@ -133,7 +133,7 @@ fn record_referencing_a_sum_declared_above() {
 }
 
 #[test]
-fn invalid_payload_type_names_variant_position_and_type() {
+fn invalid_payload_type_names_variant_and_type() {
     // A payload naming nothing declared reports `InvalidPayloadType`, pointing at that
     // field's own span (not the whole declaration).
     let source = "Mystery = Wrap(Nope) / Empty\n^ = () -> Num => < 0 >";
@@ -145,7 +145,7 @@ fn invalid_payload_type_names_variant_position_and_type() {
     assert_eq!(error.code(), Code::InvalidPayloadType);
     assert_eq!(
         error.to_string(),
-        "`Wrap`'s payload 1 is Nope, which a sum type cannot carry"
+        "`Wrap`'s payload is Nope, which a sum type cannot carry"
     );
     let field_start = source.find("Nope").unwrap() as u32;
     assert_eq!(error.span().start, field_start);
@@ -153,25 +153,27 @@ fn invalid_payload_type_names_variant_position_and_type() {
 }
 
 #[test]
-fn a_method_on_a_self_referencing_sum_may_call_itself_on_the_payload() {
+fn a_method_on_a_self_referencing_sum_may_call_itself_through_a_record_payload() {
     // An annotated method is registered under its own name before its body is
     // checked, so a self-call through a payload of the same type (or the render
-    // member reached via interpolation) resolves instead of "no such member".
+    // member reached via interpolation) resolves instead of "no such member" — here
+    // the self-reference sits inside the variant's RECORD payload (`Node({ Tree, Num,
+    // Tree })`), not a bare payload slot.
     assert_exit(
-        "Tree = Leaf / Node(Tree, Num, Tree) {\n\
+        "Tree = Leaf / Node({ Tree, Num, Tree }) {\n\
            sum = () -> Num => <\n\
              it ?\n\
-               | Leaf => 0\n\
-               | Node(left, value, right) => left.sum() + value + right.sum()\n\
+               | Leaf    => 0\n\
+               | Node(n) => n.0.sum() + n.1 + n.2.sum()\n\
            >\n\
            ` = () -> Text => <\n\
              it ?\n\
-               | Leaf                => \"Leaf\"\n\
-               | Node(left, value, _) => \"Node(`left`, `value`)\"\n\
+               | Leaf    => \"Leaf\"\n\
+               | Node(n) => \"Node(`n.0`, `n.1`)\"\n\
            >\n\
          }\n\
          ^ = () -> Num => <\n\
-           tree = Node(Node(Leaf, 1, Leaf), 2, Leaf)\n\
+           tree = Node({ Node({ Leaf, 1, Leaf }), 2, Leaf })\n\
            assert(\"`tree`\", equals(\"Node(Node(Leaf, 1), 2)\"))\n\
            tree.sum()\n\
          >",

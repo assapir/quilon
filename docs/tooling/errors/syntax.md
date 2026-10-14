@@ -200,7 +200,8 @@ data in its variant payloads and its block holds methods only.
 Shape = Circle(Num) / Square(Num) { name :: Text }
 ```
 
-Move the data into a payload (`Circle(Num, Text)`) and keep the block to `=` methods.
+Move the data into a payload record (`Circle({ Num, Text })`) and keep the block to `=`
+methods.
 
 ### QN111 — bare expression as a function body
 
@@ -356,3 +357,14 @@ A position's canonical form has no leading zero. `p.0` and `p.10` are fine; `p.0
 ```
 
 Write the position without the leading zero: `pair.1`.
+
+### QN121 — sum-type variant with more than one payload
+
+A sum-type variant's parenthesized list names more than one payload type. A variant
+carries at most one payload; several values travel together as a single record.
+
+```quilon ignore
+Shape = Circle(Num) / Rect(Num, Num)
+```
+
+Combine `Rect`'s two payload types into one record: `Rect({ Num, Num })`.

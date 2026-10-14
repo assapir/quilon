@@ -413,8 +413,8 @@ impl<'ctx> DebugInfo<'ctx> {
     /// there until a `Result`-aware formatter reinterprets it by the payload's static type.
     ///
     /// It is deliberately NOT a DWARF variant part (`DW_TAG_variant_part` / `DW_TAG_variant`):
-    /// that self-describing form — where each variant names its own fields (`Circle(r)`,
-    /// `Rect(w, h)`) and the discriminant maps tag -> variant — is a possible later refinement.
+    /// that self-describing form — where each variant names its own payload (`Circle(r)`,
+    /// `Rect(p)`) and the discriminant maps tag -> variant — is a possible later refinement.
     /// A formatter that renders `Ok(5)`/`Red` without a side-channel tag->variant/payload table
     /// would want a real variant part (built via raw `llvm-sys`, since inkwell 0.10 has no
     /// wrapper — the same path `declare` already uses). Until then the tag + type name are
