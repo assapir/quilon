@@ -17,6 +17,14 @@ All notable changes to Quilon are documented here.
   record's field order isn't part of its type — `f({ b = "x", a = 1 })` passes to a `{ a
   :: Num, b :: Text }` parameter — and a diagnostic prints one canonical order. A
   position with a leading zero (`p.01`) is `QN120`. See `docs/types/records.md`.
+- **Editor support for anonymous and positional records.** The VS Code grammar now
+  scopes a positional access's digits (`grid.0.1`'s `0` and `1`) the same as a named
+  field access — no scope, not a number literal — so `p.0` no longer colors like the
+  number `0` and `grid.0.1` no longer colors like `0.1`. The language server's hover,
+  completion, and signature displays already rendered `{ Num, Num }` and
+  `{ count :: Num, label :: Text }` through the shared type formatter; completion after
+  `.` on a positional record now offers `0`/`1` in order, and on a named anonymous
+  record offers its field names. Part of #490.
 - **The runtime is a real M:N scheduler: one worker OS thread per CPU** (`QUILON_WORKERS=<n>`
   is a debugging override), **fibers pinned to the worker that created them.** A
   freestanding launch and an accepted connection's handler fiber each go to the worker with
