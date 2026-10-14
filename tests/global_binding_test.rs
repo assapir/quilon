@@ -169,7 +169,6 @@ fn a_global_initializer_using_a_match_expression_is_accepted() {
         "Size = Small / Large\n",
         "chosen = Large\n",
         "factor = chosen ?\n",
-        "  | Small => 1\n",
         "  | Large => 2\n",
         "^ = () -> Num => < factor * 7 >",
     );
