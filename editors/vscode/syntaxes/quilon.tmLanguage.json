@@ -73,7 +73,7 @@
       ]
     },
     "positional-access": {
-      "comment": "`.0`/`.1` on a positional record reads a field, not a number — a named field access (`p.width`) carries no scope, so neither does this, and listing it before #numbers wins the same-start tie against the number rule (`grid.0.1`'s `0` and `1` each match here, not as `0.1`).",
+      "comment": "A digit run after `.` is a positional field, unscoped like a named field access — listed before #numbers.",
       "match": "(?<=\\.)[0-9]+\\b"
     },
     "numbers": {
