@@ -23,18 +23,10 @@ use std::os::raw::{c_char, c_int, c_void};
 /// like `core.test`'s `failAt`, already reported through its own path), so the trap
 /// records no report text for it.
 ///
-/// Never returns. Uses libc `_exit(2)` rather than `exit(3)` or `std::process::exit`:
-/// `exit(3)` also runs the calling thread's registered `thread_local!` destructors
-/// (glibc runs them for `exit`, not only for a genuine thread exit) — which, under
-/// `quilon run`'s JIT (a normal, already-initialized Rust process, unlike an AOT
-/// binary's C `main`), drops this thread's `crate::worker::Worker` and so every fiber
-/// still parked on it, including a live `net.@tcpServe` accept loop. Dropping a
-/// `corosensei` coroutine that has not returned forces it to unwind its stack, which
-/// panics because that unwind runs from inside TLS-destructor teardown — a panic in a
-/// destructor during cleanup, which aborts the process instead of exiting with `code`.
-/// `_exit(2)` skips destructors, `atexit` handlers, and stdio flushing entirely (every
-/// diagnostic is already written through `write_to_fd`'s raw `write(2)`, never
-/// buffered), the same way `stack_overflow`'s own signal handler already exits.
+/// Never returns. Uses libc `_exit(2)` rather than `exit(3)`: `exit(3)` also runs the
+/// calling thread's `thread_local!` destructors, which drop any still-parked fiber (a
+/// live `net.@tcpServe` accept loop, say) and abort trying to unwind it. Every
+/// diagnostic is already a raw, unbuffered `write(2)`, so `_exit(2)` loses nothing.
 #[unsafe(no_mangle)]
 pub extern "C" fn __exit(code: c_int) -> ! {
     if crate::scheduler::abort_trap_active() {
