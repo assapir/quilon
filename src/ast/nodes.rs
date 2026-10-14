@@ -1239,7 +1239,8 @@ pub struct SumVariant {
 /// Shared by the type checker's overload diagnostics and codegen's entry-point
 /// signature diagnostic, so both render types the same way. A not-yet-concrete
 /// `Generic` (an unresolved sum payload such as the `T` in `Ok(T)`) renders as
-/// `<unknown>`.
+/// `<unknown>`. The match is exhaustive so a new `Type` variant must pick a rendering
+/// here rather than falling back to `Debug`.
 pub fn type_label(ty: &Type) -> String {
     match ty {
         Type::Num => NUM_TYPE_NAME.to_string(),
@@ -1249,6 +1250,16 @@ pub fn type_label(ty: &Type) -> String {
         Type::Array(elem) => format!("[]{}", type_label(elem)),
         Type::Map(k, v) => format!("[|{} => {}|]", type_label(k), type_label(v)),
         Type::Set(elem) => format!("[|{}|]", type_label(elem)),
+        Type::Record(fields) => {
+            if fields.is_empty() {
+                return "{}".to_string();
+            }
+            let rendered: Vec<String> = fields
+                .iter()
+                .map(|(name, field_type)| format!("{} :: {}", name, type_label(field_type)))
+                .collect();
+            format!("{{ {} }}", rendered.join(", "))
+        }
         Type::Named { name, .. } | Type::Sum { name, .. } => name.clone(),
         Type::Function {
             parameters,
@@ -1258,7 +1269,6 @@ pub fn type_label(ty: &Type) -> String {
             format!("({}) -> {}", rendered.join(", "), type_label(return_type))
         }
         Type::Generic { .. } => "<unknown>".to_string(),
-        other => format!("{:?}", other),
     }
 }
 
