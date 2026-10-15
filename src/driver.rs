@@ -226,21 +226,25 @@ fn front_end_source_reporting(
         match crate::deferral::analyze(&program, &atomic_reassignments, &top_level_reassignments) {
             Ok(defer) => defer,
             Err(violation) => {
-                return Err(FrontEndError {
-                    diagnostic: Box::new(
-                        Diagnostic::at(
-                            Code::AtomicReassignmentForced,
-                            &violation.span,
-                            format!(
-                                "`{}`'s reassignment must not wait on a deferred value — an \
+                let mut diagnostic = Diagnostic::at(
+                    Code::AtomicReassignmentForced,
+                    &violation.span,
+                    format!(
+                        "`{}`'s reassignment must not wait on a deferred value — an \
                              atomic binding's reassignment executes as a whole",
-                                violation.name
-                            ),
-                        )
-                        .help(
-                            "bind the forced value first with a plain `=` binding, then reassign",
-                        ),
+                        violation.name
                     ),
+                )
+                .help("bind the forced value first with a plain `=` binding, then reassign");
+                // A TRANSITIVE violation (reached through a call, not directly in the right
+                // side's own expression — see `deferral::AtomicReassignmentForced`'s own
+                // doc): name the first function on the call path that actually waits, and
+                // what it waits on, so the fix is not a guessing game across the call chain.
+                if let Some((function, what)) = &violation.transitive {
+                    diagnostic = diagnostic.note(format!("`{function}` waits on `{what}`"));
+                }
+                return Err(FrontEndError {
+                    diagnostic: Box::new(diagnostic),
                     sources,
                     partial_types: types,
                 });

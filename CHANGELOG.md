@@ -19,7 +19,9 @@ All notable changes to Quilon are documented here.
   lock in `quilon-rt` covering every atomic binding (`docs/concurrency/runtime.md`) — a
   per-binding lock can deadlock, since a reassignment's right side may read a different
   atomic binding; a single-worker program pays nothing beyond the lock itself, and only at
-  atomic-binding sites. Part of #488.
+  atomic-binding sites. QN349 now rejects a reassignment whose right side reaches an `@`
+  primitive through any call, not only directly, naming the first function on the path
+  that waits. Part of #488.
 - **A TLS client, over `net.@tcpRequest` and `core.http`.** `net.ConnectOptions { transport
   :: Transport, certificates :: Certificates }` and the `net.@tcpRequest(address,
   requestBytes, options)` overload — `Transport = Plain / TLS`, `Certificates = Checked /

@@ -96,9 +96,11 @@ atomic value is rejected — mutation goes only through its setters.
 allowed, at the top level and inside a block. `@` marks the declaration only; every read and
 reassignment after it — including one that reads the binding's own current value, as in
 `hits := hits + 1` — is bare, the same declaration/reassignment rule a plain `:=` binding
-already follows. An atomic binding's reassignment executes as a whole: the right side may
-not wait on a deferred value, so the statement never parks part-way, and the compiler
-rejects one that would (force it into a plain `=` binding first, then reassign). Mutation
+already follows. An atomic binding's reassignment executes as a whole: the right side waits
+on nothing, through any call, so the statement never parks part-way, and the compiler
+rejects one that would (force the value into a plain `=` binding first, then reassign) —
+naming the first function on the call path that waits, however many functions
+away it is. Mutation
 *inside* a bound record still follows the record's own rules; cross-field invariants belong
 to an atomic type `T = @{ … }`. (See `examples/atomic_binding.qn`.)
 

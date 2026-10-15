@@ -38,6 +38,20 @@ use crate::ast::{
 use crate::lexer::Span;
 use std::collections::{HashMap, HashSet};
 
+/// The bare name of the pause primitive (`time.@sleep(seconds)`): effect-only, and the one
+/// place calling an `@` primitive waits the instant it is called — no deferred value, so no
+/// later force to catch it. Used only by [`Taint::record_transitive_wait`]'s own positive
+/// list of primitives that wait on the call itself, rather than trying to exclude every
+/// deferred-producing/background-launching primitive by shape (which the options-overload
+/// arity on `@tcpServe`/`@serve` already shows is easy to under-cover).
+const SLEEP_PRIMITIVE: &str = "sleep";
+
+/// The bare name of the streaming-read primitive (`io.@streamFile(path, chunkSize,
+/// onChunk)`): runs strictly on the calling fiber, parking when a read reports not ready —
+/// the other primitive [`Taint::record_transitive_wait`] treats as waiting on the call
+/// itself.
+const STREAM_FILE_PRIMITIVE: &str = "streamFile";
+
 /// The bare name of the value-returning stdin read primitive, reached by an importer as
 /// `io.@readStdin()`; the call evaluates to a deferred `Text`.
 const READ_PRIMITIVE: &str = "readStdin";
@@ -97,10 +111,15 @@ impl DeferInfo {
 
 /// A reassignment to an atomic binding whose right side forces a deferred value — the
 /// binding-side twin of the locked rule that an atomic type's setter body may not force.
+/// `transitive` is set only when the wait is not IN the right side's own expression but
+/// reached through a call: `(function, what)` — the first function or method on the call
+/// path whose own body waits, and what it waits on (an `@` primitive's qualified name, or a
+/// note that the callee is a value the checker could not resolve).
 #[derive(Debug)]
 pub struct AtomicReassignmentForced {
     pub name: String,
     pub span: Span,
+    pub transitive: Option<(String, String)>,
 }
 
 /// Analyze `program`: the deferred-value taint and force-set — the whole codegen-visible
@@ -123,6 +142,7 @@ pub fn analyze(
     atomic_reassignments: &HashSet<Span>,
     top_level_reassignments: &HashSet<Span>,
 ) -> Result<DeferInfo, AtomicReassignmentForced> {
+    let known_functions = known_function_names(program);
     let mut deferred_globals: HashSet<String> = HashSet::new();
     loop {
         let mut taint = Taint {
@@ -134,6 +154,12 @@ pub fn analyze(
             deferred_globals: &deferred_globals,
             newly_deferred_globals: HashSet::new(),
             violation: None,
+            known_functions: &known_functions,
+            waiting_functions: HashMap::new(),
+            current_function: None,
+            transitive_waits: Vec::new(),
+            producers_seen: HashSet::new(),
+            track_unresolved_callees: true,
         };
         for item in &program.items {
             taint.analyze_item(item);
@@ -150,6 +176,34 @@ pub fn analyze(
         }
         deferred_globals.extend(taint.newly_deferred_globals);
     }
+}
+
+/// Every top-level function name and type-method name in `program` — a NAMED, resolvable
+/// callee, as opposed to a call through a function VALUE (a parameter, a captured closure)
+/// the checker cannot follow. Over-approximate the same way `ast::reachability` is: an
+/// overload set's members all share one name here, and a top-level `=`/`:=` binding whose
+/// value is itself a lambda literal counts too (`greet = () => <...>`, not just the
+/// `name = (params) -> T => body` sugar). A member call (`.trim()`, a type's own method) is
+/// never checked against this set at all — see `Taint::record_transitive_wait`'s own doc.
+fn known_function_names(program: &Program) -> HashSet<String> {
+    let mut names = HashSet::new();
+    for item in &program.items {
+        match item {
+            Item::FunctionDeclaration(f) => {
+                names.insert(f.name.clone());
+            }
+            Item::VariableDeclaration(v) if matches!(v.value, Expression::Lambda { .. }) => {
+                names.insert(v.name.clone());
+            }
+            Item::TypeDeclaration(t) => {
+                for method in t.type_definition.methods() {
+                    names.insert(method.name.clone());
+                }
+            }
+            Item::VariableDeclaration(_) | Item::TrapDeclaration(_) => {}
+        }
+    }
+    names
 }
 
 /// The deferred-value taint accumulator, for one round of the fixed-point walk.
@@ -174,6 +228,43 @@ struct Taint<'a> {
     /// The first atomic-reassignment violation found, in program order; later ones are not
     /// worth collecting; the whole point is to name one concrete fix.
     violation: Option<AtomicReassignmentForced>,
+    /// See [`known_function_names`].
+    known_functions: &'a HashSet<String>,
+    /// Every function/method already analyzed this round (in program order — a callee is
+    /// always declared above its caller, so by the time a call to it is visited its own
+    /// answer here is already final) that itself waits, directly or transitively: name ->
+    /// (the first function on ITS call path that waits, what it waits on). Read by
+    /// [`Self::record_transitive_wait`], written by [`Self::record_waiting_function`].
+    waiting_functions: HashMap<String, (String, String)>,
+    /// The function or method currently being analyzed, if any — `None` at the top level
+    /// (a top-level binding's own value, or a reassignment's right side with no enclosing
+    /// named function of its own). Set and restored around each function/method body visit.
+    current_function: Option<String>,
+    /// Every transitive wait found so far, in visit order — append-only, like `force_sites`:
+    /// [`Self::check_atomic_reassignment`] and [`Self::record_waiting_function`] each
+    /// snapshot its length before visiting an expression, the same way `force_sites` is
+    /// snapshotted, so only entries added DURING that one visit count towards it.
+    transitive_waits: Vec<(String, String)>,
+    /// Every value-returning `@` primitive's own name seen while visiting the CURRENT
+    /// function/method body — a provenance hint only, so `record_waiting_function`'s generic
+    /// `force_sites`-growth case (the body forces a deferred value, but not through a call
+    /// `record_transitive_wait` already named) can still label it with the actual primitive
+    /// (`io.@readStdin`), when there was exactly one, rather than the bare "a deferred
+    /// value" — naming the wrong one, with two or more producers in the body, would mislead
+    /// more than a generic label does. Saved and restored around each function/method body
+    /// visit, like `current_function`.
+    producers_seen: HashSet<String>,
+    /// Whether the body currently being visited may be flagged for an unresolved (call
+    /// through a value) callee — `false` only inside an inert corelib placeholder
+    /// (`FunctionDeclaration::is_inert_corelib_placeholder`): that body is never actually
+    /// executed (the compiler lowers the call to a runtime intrinsic instead), so an
+    /// ordinary higher-order shape in its fake implementation — `@serve`'s own placeholder
+    /// invoking its `handler` parameter — must not poison `waiting_functions` for every
+    /// real program that calls it. `force_sites`/`@sleep`/`@streamFile`/already-known-waiting
+    /// propagation are unaffected; only this one conservative, false-positive-prone branch
+    /// is suppressed. `true` everywhere else (including every method body — a method is
+    /// never an inert placeholder).
+    track_unresolved_callees: bool,
 }
 
 impl<'a> Taint<'a> {
@@ -198,8 +289,7 @@ impl<'a> Taint<'a> {
             // A function/method body is a strict slot: forcing its result keeps a promise from
             // escaping across the call boundary.
             Item::FunctionDeclaration(f) => {
-                let scope = self.fresh_scope();
-                self.strict(&f.body, &scope);
+                self.analyze_function_body(&f.name, &f.body, !f.is_inert_corelib_placeholder());
             }
             // A top-level `:=` binding's own initial value is a STORE into a global, exactly
             // like a later reassignment of it (see the module doc): a deferred value there
@@ -233,8 +323,151 @@ impl<'a> Taint<'a> {
     }
 
     fn analyze_method(&mut self, method: &MethodDeclaration) {
+        self.analyze_function_body(&method.name, &method.body, true);
+    }
+
+    /// Analyze one function or method's own body as a strict slot, under `name`, then record
+    /// whether `name` itself waits — directly (a force grew `force_sites`, or a call reached
+    /// an `@` primitive) or transitively (a call reached a name already known to wait) — into
+    /// `waiting_functions`, so a LATER caller of `name` (always declared below it — no
+    /// hoisting) sees the answer without re-walking this body. A name already present keeps
+    /// its first-found answer (an overload set's members share one name here, same as
+    /// `known_function_names`'s own over-approximation). `track_unresolved_callees` is
+    /// `false` only for an inert corelib placeholder — see that field's own doc.
+    fn analyze_function_body(
+        &mut self,
+        name: &str,
+        body: &Expression,
+        track_unresolved_callees: bool,
+    ) {
+        let force_sites_before = self.force_sites.len();
+        let transitive_waits_before = self.transitive_waits.len();
+        let previous_function = self.current_function.replace(name.to_string());
+        let previous_producers = std::mem::take(&mut self.producers_seen);
+        let previous_tracking =
+            std::mem::replace(&mut self.track_unresolved_callees, track_unresolved_callees);
         let scope = self.fresh_scope();
-        self.strict(&method.body, &scope);
+        self.strict(body, &scope);
+        self.current_function = previous_function;
+        self.track_unresolved_callees = previous_tracking;
+        let producers_during = std::mem::replace(&mut self.producers_seen, previous_producers);
+        self.record_waiting_function(
+            name,
+            force_sites_before,
+            transitive_waits_before,
+            &producers_during,
+        );
+    }
+
+    /// See [`Taint::transitive_waits`]'s own doc: fold this body's own visit into
+    /// `waiting_functions`, preferring a transitive wait's more specific label (names the
+    /// actual `@` primitive or unresolved callee) over the generic "forces a deferred value"
+    /// a bare `force_sites` growth gives — both can fire for the SAME body (a direct
+    /// `@readStdin` call is both a transitive-wait hit at its own call site and, once its
+    /// result is forced two lines later, a `force_sites` hit too), and the specific one is
+    /// always at least as informative.
+    fn record_waiting_function(
+        &mut self,
+        name: &str,
+        force_sites_before: usize,
+        transitive_waits_before: usize,
+        producers_seen: &HashSet<String>,
+    ) {
+        if self.waiting_functions.contains_key(name) {
+            return;
+        }
+        if let Some(found) = self.transitive_waits.get(transitive_waits_before).cloned() {
+            self.waiting_functions.insert(name.to_string(), found);
+        } else if self.force_sites.len() > force_sites_before {
+            let what = match producers_seen.iter().next() {
+                Some(producer) if producers_seen.len() == 1 => producer.clone(),
+                _ => "a deferred value".to_string(),
+            };
+            self.waiting_functions
+                .insert(name.to_string(), (name.to_string(), what));
+        }
+    }
+
+    /// Whether this call reaches an `@` primitive or an already-known-waiting function —
+    /// pushed onto `transitive_waits` if so.
+    ///
+    /// Only `@sleep`/`@streamFile` — [`SLEEP_PRIMITIVE`]/[`STREAM_FILE_PRIMITIVE`] — wait the
+    /// instant they are called: positively listed, rather than excluding every
+    /// deferred-producing (`@readStdin`/`@tcpRequest`/`connection.@read`) or
+    /// background-launching (`@tcpServe`/`@serve`) primitive by shape, since an overload
+    /// (`@serve`'s own 3-argument `ServerOptions` form) can fall outside the arity
+    /// `produces_deferred`/`launches_in_background` check for, and under-covering there
+    /// would wrongly reject an ordinary `stand := http.@serve(address, handler, options)`.
+    /// Calling a value-returning primitive does not itself wait — only FORCING its result
+    /// does, which `record_waiting_function`'s own `force_sites` check already catches
+    /// intraprocedurally; counting the bare call here too would wrongly reject
+    /// `testimony := io.@readStdin()` itself, the accepted "store it deferred, force it
+    /// later elsewhere" shape.
+    ///
+    /// A MEMBER call (`.trim()`, `.each(...)`, a type's own method) is only ever checked
+    /// against `waiting_functions` (keyed by the method's own bare name, exactly as
+    /// `known_function_names` collects it) — never flagged as "unresolved": telling a
+    /// built-in/corelib composable's qualified name apart from a genuine unresolved method
+    /// is exactly the distinction this pass does not make, so a member call simply never
+    /// triggers that branch. A NON-member call to a bare name that is neither `@`-marked nor
+    /// a known top-level function (`known_functions`) is a call through a function VALUE —
+    /// a parameter or a captured closure — which the checker cannot follow; conservatively
+    /// treated as a wait too, naming the value instead of a function.
+    fn record_transitive_wait(&mut self, function: &Expression, member_call: bool) {
+        let Expression::Identifier { name, .. } = function else {
+            return;
+        };
+        // `@tcpServe`/`@serve` never wait the calling fiber, full stop — their own handler
+        // argument is stored and invoked later, per accepted connection, each on its own
+        // fresh fiber, never synchronously as part of THIS call. That already excludes the
+        // handler argument itself (see the `Call` arm's own `is_server_launch` truncation);
+        // this excludes `waiting_functions`'s answer for the NAMES `@tcpServe`/`@serve`
+        // themselves too — their own corelib implementation's static body can reach the
+        // handler parameter (storing it for later, not calling it now), which would
+        // otherwise poison `waiting_functions["core.net.tcpServe"]`/`["core.http.serve"]`
+        // with a false wait every ordinary caller then inherits.
+        if matches!(
+            at_primitive_name(name),
+            Some(TCP_SERVE_PRIMITIVE) | Some(HTTP_SERVE_PRIMITIVE)
+        ) {
+            return;
+        }
+        if matches!(
+            at_primitive_name(name),
+            Some(SLEEP_PRIMITIVE) | Some(STREAM_FILE_PRIMITIVE)
+        ) {
+            let culprit = self
+                .current_function
+                .clone()
+                .unwrap_or_else(|| name.clone());
+            self.transitive_waits.push((culprit, name.clone()));
+            return;
+        }
+        if let Some(found) = self.waiting_functions.get(name).cloned() {
+            self.transitive_waits.push(found);
+            return;
+        }
+        // A capitalized callee (`Ok(x)`, a sum variant's payload constructor) is never a
+        // function value — the language's own naming convention (every function name is
+        // lowercase; every type/constructor name is capitalized) is enough to tell the two
+        // apart without a type-level constructor registry this syntactic pass does not have.
+        let is_constructor_shaped = name
+            .rsplit('.')
+            .next()
+            .and_then(|last| last.chars().next())
+            .map(|c| c.is_uppercase())
+            .unwrap_or(false);
+        if self.track_unresolved_callees
+            && !member_call
+            && !is_constructor_shaped
+            && at_primitive_name(name).is_none()
+            && !self.known_functions.contains(name)
+        {
+            self.transitive_waits.push((
+                name.clone(),
+                "the callee is a value, not a function the checker can follow".to_string(),
+            ));
+        }
     }
 
     /// Visit `expression` in a STRICT slot: analyze it, and if its value is deferred, force it here.
@@ -245,17 +478,33 @@ impl<'a> Taint<'a> {
     }
 
     /// Record `v` as the atomic-reassignment violation — once, the first one found — when
-    /// its span is one the checker resolved as reassigning an atomic binding, and
-    /// evaluating its value grew `force_sites` past `force_sites_before`: the right side
-    /// forced a deferred value.
-    fn check_atomic_reassignment(&mut self, v: &VariableDeclaration, force_sites_before: usize) {
-        if self.violation.is_none()
-            && self.force_sites.len() > force_sites_before
-            && self.atomic_reassignments.contains(&v.span)
-        {
+    /// its span is one the checker resolved as reassigning an atomic binding, and evaluating
+    /// its value either grew `force_sites` past `force_sites_before` (a DIRECT force, right
+    /// there in the right side's own expression) or grew `transitive_waits` past
+    /// `transitive_waits_before` (reached only through a call — see
+    /// [`Self::record_transitive_wait`]). The direct case takes priority when both fire (a
+    /// call reaching an `@` primitive whose result is then also forced two steps later would
+    /// otherwise report twice): it needs no extra naming, so it is the simpler message.
+    fn check_atomic_reassignment(
+        &mut self,
+        v: &VariableDeclaration,
+        force_sites_before: usize,
+        transitive_waits_before: usize,
+    ) {
+        if self.violation.is_some() || !self.atomic_reassignments.contains(&v.span) {
+            return;
+        }
+        if self.force_sites.len() > force_sites_before {
             self.violation = Some(AtomicReassignmentForced {
                 name: v.name.clone(),
                 span: v.span.clone(),
+                transitive: None,
+            });
+        } else if let Some(found) = self.transitive_waits.get(transitive_waits_before).cloned() {
+            self.violation = Some(AtomicReassignmentForced {
+                name: v.name.clone(),
+                span: v.span.clone(),
+                transitive: Some(found),
             });
         }
     }
@@ -267,8 +516,9 @@ impl<'a> Taint<'a> {
     /// force it).
     fn analyze_declaration_value(&mut self, v: &VariableDeclaration, env: &Scope<'a>) -> bool {
         let force_sites_before = self.force_sites.len();
+        let transitive_waits_before = self.transitive_waits.len();
         let deferred = self.visit(&v.value, env);
-        self.check_atomic_reassignment(v, force_sites_before);
+        self.check_atomic_reassignment(v, force_sites_before, transitive_waits_before);
         deferred
     }
 
@@ -295,10 +545,32 @@ impl<'a> Taint<'a> {
                 ..
             } => {
                 self.strict(function, env);
+                // A handler passed to `@tcpServe`/`@serve` is never invoked synchronously
+                // as part of THIS call — it is stored and run later, once per accepted
+                // connection, each on its own fresh fiber — so a wait inside it (reading
+                // from that connection, say) is not a wait the launch's OWN right side
+                // takes on. Discard anything `record_transitive_wait` found while visiting
+                // the handler argument's body; the normal taint/force tracking on it
+                // (needed for the handler's own analysis, done when IT is itself checked
+                // as the atomic-reassignment target of some later statement) is unaffected.
+                let is_server_launch = matches!(
+                    &**function,
+                    Expression::Identifier { name, .. }
+                        if matches!(at_primitive_name(name), Some(TCP_SERVE_PRIMITIVE) | Some(HTTP_SERVE_PRIMITIVE))
+                );
+                let transitive_waits_before_arguments = self.transitive_waits.len();
                 for arg in arguments {
                     self.strict(arg, env);
                 }
+                if is_server_launch {
+                    self.transitive_waits
+                        .truncate(transitive_waits_before_arguments);
+                }
+                self.record_transitive_wait(function, *member_call);
                 let deferred = produces_deferred(function, arguments, *member_call);
+                if deferred && let Expression::Identifier { name, .. } = &**function {
+                    self.producers_seen.insert(name.clone());
+                }
                 if launches_in_background(function, arguments, *member_call)
                     && let Some(scope) = self.block_stack.last()
                 {
@@ -428,8 +700,7 @@ impl<'a> Taint<'a> {
                     local.bind(v.name.clone(), deferred);
                 }
                 Statement::Item(Item::FunctionDeclaration(f)) => {
-                    let scope = self.fresh_scope();
-                    self.strict(&f.body, &scope);
+                    self.analyze_function_body(&f.name, &f.body, true);
                 }
                 // A block-declared type's methods are analyzed exactly like a
                 // top-level type's (see `analyze_item`): each method body is its own
@@ -970,5 +1241,40 @@ mod tests {
         // function, which is where the one force site lands.
         let src = "<< core.io\n@testimony := \"\"\ninterrogate = () -> $ => < testimony := io.@readStdin() >\n^ = () -> Num => <\n  interrogate()\n  testimony == \"fact\" ? 0 : 1\n>";
         assert_eq!(checked_force_count(src), 1);
+    }
+
+    #[test]
+    fn a_reassignment_calling_a_function_that_waits_is_rejected_transitively() {
+        // The maintainer's own probe: `f` reads stdin and forces it (its own body's
+        // `line.length`); `^`'s atomic reassignment never mentions `io.@readStdin` itself,
+        // only calls `f()` — the wait is reached through a call, one hop away.
+        let src = "<< core.io\n@a := 0\nf = () -> Num => <\n  line = io.@readStdin()\n  line.length\n>\n^ = () -> Num => <\n  a := a + f()\n  a\n>";
+        let violation = atomic_violation(src);
+        assert_eq!(violation.name, "a");
+        assert_eq!(
+            violation.transitive,
+            Some(("f".to_string(), "core.io.@readStdin".to_string()))
+        );
+    }
+
+    #[test]
+    fn a_reassignment_calling_a_function_two_hops_from_the_wait_names_the_waiting_one() {
+        // `^` calls `g`, `g` calls `f`, `f` reads stdin — the violation names `f`, the
+        // function that ACTUALLY waits, not `g`, which merely forwards the call.
+        let src = "<< core.io\n@a := 0\nf = () -> Num => <\n  line = io.@readStdin()\n  line.length\n>\ng = () -> Num => < f() >\n^ = () -> Num => <\n  a := a + g()\n  a\n>";
+        let violation = atomic_violation(src);
+        assert_eq!(violation.name, "a");
+        assert_eq!(
+            violation.transitive,
+            Some(("f".to_string(), "core.io.@readStdin".to_string()))
+        );
+    }
+
+    #[test]
+    fn a_reassignment_calling_a_pure_function_is_accepted() {
+        // A right side calling an ordinary function that itself waits on nothing — the
+        // transitive rule has nothing to reject here.
+        let src = "@a := 0\npure = (n :: Num) -> Num => < n + 1 >\n^ = () -> Num => <\n  a := a + pure(1)\n  a\n>";
+        assert_eq!(checked_force_count(src), 0);
     }
 }
