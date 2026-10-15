@@ -278,7 +278,11 @@ fn atomic_binding_increments_never_lose_updates_across_workers() {
     // near lockstep (`time.@sleep(0.05)`), make the race land reliably if the reassignment
     // is not actually atomic across workers.
     const CONNECTIONS: u64 = 8;
-    const PER_CONNECTION: u64 = 2_000_000;
+    // Large enough that the race (a lost update under real cross-worker contention) is not
+    // a matter of luck — main loses more than half of 16,000,000 at this same shape — small
+    // enough to leave headroom under the fixed 5s socket read timeout when this file's other
+    // tests are also competing for CPU in the same `cargo test` run.
+    const PER_CONNECTION: u64 = 500_000;
     let file = temp_ql(
         "atomic_counter",
         &atomic_counter_server_program(PER_CONNECTION),
@@ -326,6 +330,200 @@ fn atomic_binding_increments_never_lose_updates_across_workers() {
          every one of {} increments from {CONNECTIONS} connections to survive",
         CONNECTIONS * PER_CONNECTION
     );
+}
+
+/// A `net.@tcpServe` server exercising a REASSIGNMENT whose right side reads a DIFFERENT
+/// atomic binding — directly (`pumpA`/`pumpB`: `a := b + 1` / `b := a + 1`) and through an
+/// ordinary function call one frame further out (`pumpA2`/`pumpB2`: `a := readB() + 1` /
+/// `b := readA() + 1`, `readB`/`readA` each just reading the other binding). This is the
+/// shape a PER-BINDING lock scheme deadlocks on: one worker holds `a`'s lock wanting `b`'s
+/// while another holds `b`'s wanting `a`'s, at the same instant.
+fn cross_binding_server_program(iterations: u64) -> String {
+    format!(
+        r#"
+<< core.net
+<< core.io
+<< core.time
+
+@server := net.Server {{ handle = 0 }}
+@a := 0
+@b := 0
+
+readB = () -> Num => < b >
+readA = () -> Num => < a >
+
+pumpA = (connection :: net.Connection) -> $ => <
+  time.@sleep(0.05)
+  (1 <- {iterations}).each(i => <
+    a := b + 1
+  >)
+  connection.@write("ok")
+>
+
+pumpB = (connection :: net.Connection) -> $ => <
+  time.@sleep(0.05)
+  (1 <- {iterations}).each(i => <
+    b := a + 1
+  >)
+  connection.@write("ok")
+>
+
+pumpA2 = (connection :: net.Connection) -> $ => <
+  time.@sleep(0.05)
+  (1 <- {iterations}).each(i => <
+    a := readB() + 1
+  >)
+  connection.@write("ok")
+>
+
+pumpB2 = (connection :: net.Connection) -> $ => <
+  time.@sleep(0.05)
+  (1 <- {iterations}).each(i => <
+    b := readA() + 1
+  >)
+  connection.@write("ok")
+>
+
+report = (connection :: net.Connection) -> $ => <
+  connection.@write("`a`,`b`")
+>
+
+respond = (connection :: net.Connection) -> $ => <
+  line = connection.@read()
+  line == "quit"
+    ? server.kill(1)
+    : (line == "pumpA"
+      ? pumpA(connection)
+      : (line == "pumpB"
+        ? pumpB(connection)
+        : (line == "pumpA2"
+          ? pumpA2(connection)
+          : (line == "pumpB2" ? pumpB2(connection) : report(connection)))))
+>
+
+^ = () -> Num => <
+  server := net.@tcpServe("127.0.0.1:0", connection => respond(connection))
+  io.print(server.address().port)
+  0
+>
+"#
+    )
+}
+
+/// Connect, write `command`, and wait for the fixed `"ok"` reply — one leg of each
+/// deadlock test below.
+fn pump(port: u16, command: &str) {
+    let mut stream = connect_with_timeout("127.0.0.1", port).expect("connect to the test server");
+    stream
+        .write_all(command.as_bytes())
+        .unwrap_or_else(|e| panic!("write {command}: {e}"));
+    let mut reply = [0u8; 2];
+    stream
+        .read_exact(&mut reply)
+        .unwrap_or_else(|e| panic!("read the ok reply to {command}: {e}"));
+    assert_eq!(&reply, b"ok", "{command} did not reply ok");
+}
+
+/// `report`'s `"a,b"` reply, parsed back into the two numbers.
+fn report_a_b(port: u16) -> (f64, f64) {
+    let mut stream = connect_with_timeout("127.0.0.1", port).expect("connect to report");
+    stream.write_all(b"report").expect("write report");
+    let mut reply = Vec::new();
+    stream
+        .read_to_end(&mut reply)
+        .expect("read the report reply");
+    let text = std::str::from_utf8(&reply).expect("report reply is UTF-8");
+    let mut parts = text.split(',');
+    let a: f64 = parts
+        .next()
+        .expect("a present")
+        .trim()
+        .parse()
+        .expect("a is a number");
+    let b: f64 = parts
+        .next()
+        .expect("b present")
+        .trim()
+        .parse()
+        .expect("b is a number");
+    (a, b)
+}
+
+/// Every single reassignment of `a` or `b` takes the ONE process-wide atomic-binding lock
+/// for its whole duration, so the whole run is some serialization of individual steps, each
+/// setting one binding to the other's CURRENT value plus one. By induction neither binding
+/// ever exceeds the number of steps completed so far, so this bound — generous by 2 — holds
+/// regardless of how the two pumps interleave; a torn read/write (the bug a correct lock
+/// rules out) is what would blow past it (or produce a non-finite value).
+fn assert_well_formed_ping_pong(a: f64, b: f64, iterations: u64) {
+    let bound = (2 * iterations + 2) as f64;
+    assert!(
+        a.is_finite() && a >= 0.0 && a <= bound,
+        "`a` ended at an implausible value: {a} (bound {bound})"
+    );
+    assert!(
+        b.is_finite() && b >= 0.0 && b <= bound,
+        "`b` ended at an implausible value: {b} (bound {bound})"
+    );
+}
+
+#[test]
+fn cross_reassignment_of_two_atomic_bindings_does_not_deadlock() {
+    // The deadlock a PER-BINDING lock scheme risks: worker 1 running `a := b + 1` holds
+    // `a`'s lock and wants `b`'s to read it, while worker 2 running `b := a + 1` holds `b`'s
+    // and wants `a`'s, at the same instant — classic AB-BA, both spin forever. A hard
+    // timeout makes a hang the test failure rather than an indefinite wait: `wait_bounded`
+    // kills the child and panics if this takes anywhere near as long as a real deadlock
+    // would park every worker spinning.
+    const ITERATIONS: u64 = 200_000;
+    let file = temp_ql(
+        "cross_reassignment",
+        &cross_binding_server_program(ITERATIONS),
+    );
+    let (child, port) = spawn_server(&file, Some("4"));
+
+    let pump_a = std::thread::spawn(move || pump(port, "pumpA"));
+    let pump_b = std::thread::spawn(move || pump(port, "pumpB"));
+    pump_a.join().expect("pumpA thread panicked");
+    pump_b.join().expect("pumpB thread panicked");
+
+    let (a, b) = report_a_b(port);
+
+    quit(port);
+    assert_eq!(
+        wait_bounded(child, Duration::from_secs(15)),
+        0,
+        "the server's own process exits 0 — a hang here IS the deadlock this test guards \
+         against"
+    );
+    assert_well_formed_ping_pong(a, b, ITERATIONS);
+}
+
+#[test]
+fn a_reassignment_reading_a_different_binding_through_a_function_does_not_deadlock() {
+    // The same risk, one call frame further out: the right side reads the OTHER binding
+    // through an ordinary function call (`readB()`/`readA()`) rather than inline, proving
+    // the lock's re-entrancy does not depend on the nested read being syntactically direct
+    // in the reassignment's own right-side expression.
+    const ITERATIONS: u64 = 200_000;
+    let file = temp_ql("nested_read", &cross_binding_server_program(ITERATIONS));
+    let (child, port) = spawn_server(&file, Some("4"));
+
+    let pump_a = std::thread::spawn(move || pump(port, "pumpA2"));
+    let pump_b = std::thread::spawn(move || pump(port, "pumpB2"));
+    pump_a.join().expect("pumpA2 thread panicked");
+    pump_b.join().expect("pumpB2 thread panicked");
+
+    let (a, b) = report_a_b(port);
+
+    quit(port);
+    assert_eq!(
+        wait_bounded(child, Duration::from_secs(15)),
+        0,
+        "the server's own process exits 0 — a hang here IS the deadlock this test guards \
+         against"
+    );
+    assert_well_formed_ping_pong(a, b, ITERATIONS);
 }
 
 #[test]
