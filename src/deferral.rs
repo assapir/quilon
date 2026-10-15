@@ -417,15 +417,8 @@ impl<'a> Taint<'a> {
         let Expression::Identifier { name, .. } = function else {
             return;
         };
-        // `@tcpServe`/`@serve` never wait the calling fiber, full stop — their own handler
-        // argument is stored and invoked later, per accepted connection, each on its own
-        // fresh fiber, never synchronously as part of THIS call. That already excludes the
-        // handler argument itself (see the `Call` arm's own `is_server_launch` truncation);
-        // this excludes `waiting_functions`'s answer for the NAMES `@tcpServe`/`@serve`
-        // themselves too — their own corelib implementation's static body can reach the
-        // handler parameter (storing it for later, not calling it now), which would
-        // otherwise poison `waiting_functions["core.net.tcpServe"]`/`["core.http.serve"]`
-        // with a false wait every ordinary caller then inherits.
+        // `@tcpServe`/`@serve` return before any wait.
+        // Their handler runs on its own fiber later, once a connection arrives.
         if matches!(
             at_primitive_name(name),
             Some(TCP_SERVE_PRIMITIVE) | Some(HTTP_SERVE_PRIMITIVE)
