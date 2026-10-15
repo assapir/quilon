@@ -114,7 +114,7 @@ fn result_ok_text_payload_round_trips() {
         r#"
         ^ = () -> Num => <
           r = Ok("hello")
-          r ? | Ok(x) => x.length | NotOk(e) => 0
+          r ? | Ok(x) => x.length
         >
         "#,
         5,
@@ -128,7 +128,7 @@ fn result_notok_text_payload_round_trips() {
         r#"
         ^ = () -> Num => <
           r = NotOk("boom!")
-          r ? | Ok(x) => 0 | NotOk(e) => e.size
+          r ? | NotOk(e) => e.size
         >
         "#,
         5,
@@ -138,12 +138,13 @@ fn result_notok_text_payload_round_trips() {
 #[test]
 fn user_sum_type_text_payload_round_trips() {
     // A user-defined sum type with `Text` payloads in both variants; matching binds
-    // the payload at its real type. "hi there".length = 8.
+    // the payload at its real type. `:=`, so narrowing leaves `m` alone and both arms
+    // stay live. "hi there".length = 8.
     assert_exit(
         r#"
         Msg = Hello(Text) / Bye(Text)
         ^ = () -> Num => <
-          m = Hello("hi there")
+          m :: Msg := Hello("hi there")
           m ? | Hello(t) => t.length | Bye(t) => t.length
         >
         "#,
@@ -157,11 +158,12 @@ fn match_result_type_from_unconstructed_generic_arm_compiles() {
     // whose payload `e` stays an un-specialized `Generic` (NotOk is never constructed
     // here). The oracle records the match result as `Generic`; codegen must fall back to
     // the numeric (f64) representation rather than erroring on an unlowerable type.
-    // Ok(7) -> the Ok arm runs -> 7.
+    // Ok(7) -> the Ok arm runs -> 7. `:=`, so narrowing leaves `r` alone — the `NotOk`
+    // arm must stay live for the regression this guards.
     assert_exit(
         r#"
         ^ = () -> Num => <
-          r = Ok(7)
+          r := Ok(7)
           r ? | NotOk(e) => e | Ok(x) => x
         >
         "#,
@@ -193,11 +195,12 @@ fn named_constructor_fields_out_of_declaration_order() {
 #[test]
 fn match_returning_text_then_measured() {
     // The match itself yields `Text` (both arms return a Text), measured afterward.
-    // Picks "longer" (6 graphemes).
+    // Picks "longer" (6 graphemes). `:=`, so narrowing leaves `r` alone and both arms
+    // (needed for the Text/Text merge this guards) stay live.
     assert_exit(
         r#"
         ^ = () -> Num => <
-          r = Ok("longer")
+          r := Ok("longer")
           s = r ? | Ok(x) => x | NotOk(e) => e
           s.length
         >
@@ -225,7 +228,7 @@ fn ok_text_payload_dispatches_overload_by_concrete_type() {
         describe = (n :: Num)  -> Num => < n + 100 >
         ^ = () -> Num => <
           r = Ok("quilon")
-          r ? | Ok(s) => describe(s) | NotOk(_) => 0
+          r ? | Ok(s) => describe(s)
         >
         "#,
         6,
@@ -241,7 +244,7 @@ fn ok_num_payload_dispatches_overload_by_concrete_type() {
         describe = (n :: Num)  -> Num => < n + 100 >
         ^ = () -> Num => <
           r = Ok(5)
-          r ? | Ok(n) => describe(n) | NotOk(_) => 0
+          r ? | Ok(n) => describe(n)
         >
         "#,
         105,
@@ -255,7 +258,7 @@ fn ok_unit_payload_still_matches() {
         r#"
         ^ = () -> Num => <
           r = Ok($)
-          r ? | Ok(_) => 7 | NotOk(_) => 0
+          r ? | Ok(_) => 7
         >
         "#,
         7,
@@ -269,7 +272,7 @@ fn ok_bool_payload_binds_and_is_usable() {
         r#"
         ^ = () -> Num => <
           r = Ok(true)
-          r ? | Ok(b) => (b ? 1 : 2) | NotOk(_) => 0
+          r ? | Ok(b) => (b ? 1 : 2)
         >
         "#,
         1,
@@ -285,7 +288,7 @@ fn notok_text_payload_dispatches_overload() {
         len = (n :: Num)  -> Num => < n >
         ^ = () -> Num => <
           r = NotOk("oops")
-          r ? | Ok(_) => 0 | NotOk(e) => len(e)
+          r ? | NotOk(e) => len(e)
         >
         "#,
         4,
@@ -393,7 +396,7 @@ fn overload_with_no_matching_member_for_payload_is_rejected() {
         only = (b :: Bool) -> Num => < 1 >
         ^ = () -> Num => <
           r = Ok("x")
-          r ? | Ok(s) => only(s) | NotOk(_) => 0
+          r ? | Ok(s) => only(s)
         >
         "#,
     );

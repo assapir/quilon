@@ -263,8 +263,14 @@ impl TypeChecker {
                 let condition_type = self.infer_expression(condition)?;
                 self.check_type_compatibility(&Type::Bool, &condition_type, span)?;
 
+                // Only one of `then`/`else_` ever runs, so a fact either proves (narrowing
+                // — see `Environment::snapshot_narrowing`) holds only inside it, not in its
+                // sibling or after the `?:` — the same confinement a match arm's body gets.
+                let narrowing_before = self.env.snapshot_narrowing();
                 let then_type = self.infer_expression(then)?;
+                self.env.restore_narrowing(narrowing_before.clone());
                 let else_type = self.infer_expression(else_)?;
+                self.env.restore_narrowing(narrowing_before);
 
                 self.check_type_compatibility(&then_type, &else_type, span)?;
                 // Merge the branch types so a `Result` gets the concrete payload from
@@ -288,6 +294,22 @@ impl TypeChecker {
 
                 match expression_type {
                     Type::Record(fields) => {
+                        if crate::ast::is_positional_field(field) {
+                            if !crate::ast::record_fields_are_positional(&fields) {
+                                return Err(TypeError::PositionalAccessOnNamedRecord {
+                                    field: field.clone(),
+                                    span: span.clone(),
+                                });
+                            }
+                            let position: usize = field.parse().unwrap_or(usize::MAX);
+                            return fields.get(position).map(|(_, t)| t.clone()).ok_or_else(|| {
+                                TypeError::RecordPositionOutOfRange {
+                                    position: field.clone(),
+                                    size: fields.len(),
+                                    span: span.clone(),
+                                }
+                            });
+                        }
                         for (f, t) in fields {
                             if f == *field {
                                 return Ok(t);
@@ -299,6 +321,12 @@ impl TypeChecker {
                         })
                     }
                     Type::Named { .. } => {
+                        if crate::ast::is_positional_field(field) {
+                            return Err(TypeError::PositionalAccessOnNamedRecord {
+                                field: field.clone(),
+                                span: span.clone(),
+                            });
+                        }
                         // A field's own type may still be a frozen self-reference placeholder; resolve both ends.
                         let Type::Named { fields, .. } =
                             self.resolve_payload_type(&expression_type)
@@ -588,6 +616,15 @@ impl TypeChecker {
                                 }
                             }
 
+                            if name == "core.net.Listener"
+                                && let Some(has_identity) = listener_identity_mismatch(fields)
+                            {
+                                return Err(TypeError::ListenerIdentityMismatch {
+                                    has_identity,
+                                    span: span.clone(),
+                                });
+                            }
+
                             Ok(Type::Named {
                                 name,
                                 fields: type_fields,
@@ -625,11 +662,23 @@ impl TypeChecker {
     /// earlier one of the same name, and a new name is appended. If the FIRST named-record
     /// spread source's declared field set is reproduced exactly by the merged result (same
     /// names, each type compatible, nothing added), the result KEEPS that named type — and
-    /// therefore its methods; otherwise it is an anonymous record.
+    /// therefore its methods; otherwise it is an anonymous record, its field order
+    /// canonicalized so two differently-written literals of the same shape are one type.
+    ///
+    /// A numbered entry (`0 = 9`, the parser's positional spread-update override) is
+    /// stricter than a named one: it may only replace a position a spread source already
+    /// has, never add one — validated once every spread is known, so write order
+    /// (override before or after its spread) doesn't matter.
     pub(super) fn infer_record(
         &mut self,
         fields: &[(String, Expression)],
     ) -> Result<Type, TypeError> {
+        // A digit-named direct entry is a NUMBERED OVERRIDE only next to a spread —
+        // otherwise it is a bare positional literal's own field (`{ 6, 7 }`), already
+        // named "0"/"1" by the parser, not an override of anything.
+        let has_spread = fields
+            .iter()
+            .any(|(_, value)| matches!(value, Expression::Spread { .. }));
         let mut merged: Vec<(String, Type)> = Vec::new();
         // The named type of the FIRST named-record spread source, if any (holds its
         // declared fields + methods) — the candidate the result may keep.
@@ -638,6 +687,11 @@ impl TypeChecker {
         // `<-source` spread brought in, which a later literal may legitimately overwrite
         // (functional update). A SECOND literal naming the same field is a duplicate.
         let mut literal_field_names = std::collections::HashSet::new();
+        let mut spread_positions = std::collections::HashSet::new();
+        let mut spread_is_named = false;
+        let mut spread_count = 0usize;
+        let mut any_positional_spread = false;
+        let mut numbered_overrides: Vec<(String, Span)> = Vec::new();
 
         for (name, value) in fields {
             if let Expression::Spread {
@@ -646,8 +700,17 @@ impl TypeChecker {
             {
                 let src_type = self.infer_expression(value)?;
                 let src_fields = match &src_type {
-                    Type::Record(fs) => fs.clone(),
+                    Type::Record(fs) => {
+                        if crate::ast::record_fields_are_positional(fs) {
+                            any_positional_spread = true;
+                            spread_positions.extend(fs.iter().map(|(n, _)| n.clone()));
+                        } else {
+                            spread_is_named = true;
+                        }
+                        fs.clone()
+                    }
                     Type::Named { fields: fs, .. } => {
+                        spread_is_named = true;
                         if named_identity.is_none() {
                             named_identity = Some(src_type.clone());
                         }
@@ -661,6 +724,14 @@ impl TypeChecker {
                         });
                     }
                 };
+                spread_count += 1;
+                // A positional record takes one spread; named multi-spread is unaffected
+                // (it has always worked).
+                if spread_count > 1 && any_positional_spread {
+                    return Err(TypeError::MultiplePositionalSpreads {
+                        span: value.span().clone(),
+                    });
+                }
                 for (fname, fty) in src_fields {
                     match merged.iter_mut().find(|(n, _)| *n == fname) {
                         Some(slot) => slot.1 = fty,
@@ -674,11 +745,30 @@ impl TypeChecker {
                         span: value.span().clone(),
                     });
                 }
+                if has_spread && crate::ast::is_positional_field(name) {
+                    numbered_overrides.push((name.clone(), value.span().clone()));
+                }
                 let value_type = self.infer_expression(value)?;
                 match merged.iter_mut().find(|(n, _)| *n == *name) {
                     Some(slot) => slot.1 = value_type,
                     None => merged.push((name.clone(), value_type)),
                 }
+            }
+        }
+
+        for (position, span) in &numbered_overrides {
+            if spread_is_named {
+                return Err(TypeError::PositionalAccessOnNamedRecord {
+                    field: position.clone(),
+                    span: span.clone(),
+                });
+            }
+            if !spread_positions.contains(position) {
+                return Err(TypeError::RecordUpdatePositionOutOfRange {
+                    position: position.clone(),
+                    size: spread_positions.len(),
+                    span: span.clone(),
+                });
             }
         }
 
@@ -701,7 +791,9 @@ impl TypeChecker {
             }
         }
 
-        Ok(Type::Record(merged))
+        Ok(Type::Record(crate::ast::canonical_record_field_order(
+            merged,
+        )))
     }
 
     /// Verify `ty` may be used as a Map/Set key. The built-in hashable types are `Num`,
@@ -1093,4 +1185,35 @@ fn literal_key_label(key: &Expression) -> String {
         Expression::Bool { value, .. } => value.to_string(),
         _ => String::new(),
     }
+}
+
+/// Whether a `core.net.Listener { ... }` literal's `transport`/`identity` fields are
+/// STATICALLY written as one of `core.net`'s own constructors — a bare `Plain`/`TLS` for
+/// `transport`, a bare `None` or a `Files(...)`/`Base64(...)` call for `identity` — and, if
+/// so, whether those two disagree (`TLS` with `None`, or `Plain` with an identity other
+/// than `None`). `None` either when a field is missing (`MissingConstructorField` already
+/// covers that) or when either side is written some other way (a variable, a call, a
+/// spread) — a disagreement there is still possible, but only `core.net.@tcpServe`/
+/// `@serve`'s own fatal check at listener start can tell, not this literal's shape alone.
+fn listener_identity_mismatch(fields: &[(String, Expression)]) -> Option<bool> {
+    let transport = fields.iter().find(|(name, _)| name == "transport")?;
+    let identity = fields.iter().find(|(name, _)| name == "identity")?;
+    let is_tls = match &transport.1 {
+        Expression::Identifier { name, .. } if name == "core.net.Plain" => false,
+        Expression::Identifier { name, .. } if name == "core.net.TLS" => true,
+        _ => return None,
+    };
+    let has_identity = match &identity.1 {
+        Expression::Identifier { name, .. } if name == "core.net.None" => false,
+        Expression::Call { function, .. } => match function.as_ref() {
+            Expression::Identifier { name, .. }
+                if name == "core.net.Files" || name == "core.net.Base64" =>
+            {
+                true
+            }
+            _ => return None,
+        },
+        _ => return None,
+    };
+    (is_tls != has_identity).then_some(has_identity)
 }

@@ -6,6 +6,25 @@ All notable changes to Quilon are documented here.
 
 ### Added
 
+- **Anonymous record types in annotations, and positional records.** A record type may
+  now be written directly in an annotation, named (`{ name :: Text, age :: Num }`) or
+  positional (`{ Num, Num }`, values `{ 6, 7 }`, read with `.0`/`.1`). Mixing named and
+  positional fields is `QN118`; `.0` on a named record is `QN359`; an out-of-range
+  position is `QN360`. See `docs/types/records.md`. Step 1 of #490.
+- **Positional record spread, field order, and position syntax, locked down further.**
+  `{<-p}` copies a positional record and `{<-p, 0 = 9}` overrides one of its positions
+  (never adds one); a numbered entry with no spread is `QN119`. A named anonymous
+  record's field order isn't part of its type — `f({ b = "x", a = 1 })` passes to a `{ a
+  :: Num, b :: Text }` parameter — and a diagnostic prints one canonical order. A
+  position with a leading zero (`p.01`) is `QN120`. See `docs/types/records.md`.
+- **Editor support for anonymous and positional records.** The VS Code grammar now
+  scopes a positional access's digits (`grid.0.1`'s `0` and `1`) the same as a named
+  field access — no scope, not a number literal — so `p.0` no longer colors like the
+  number `0` and `grid.0.1` no longer colors like `0.1`. The language server's hover,
+  completion, and signature displays already rendered `{ Num, Num }` and
+  `{ count :: Num, label :: Text }` through the shared type formatter; completion after
+  `.` on a positional record now offers `0`/`1` in order, and on a named anonymous
+  record offers its field names. Part of #490.
 - **The runtime is a real M:N scheduler: one worker OS thread per CPU** (`QUILON_WORKERS=<n>`
   is a debugging override), **fibers pinned to the worker that created them.** A
   freestanding launch and an accepted connection's handler fiber each go to the worker with
@@ -40,6 +59,55 @@ All notable changes to Quilon are documented here.
   an expired certificate with its date, a name mismatch naming both names), rustls's own
   text otherwise. See `docs/corelib/net.md#tls` and `docs/corelib/http.md#tls`. Closes
   #339. Part of #486.
+
+- **A TLS server, over `net.@tcpServe` and `http.@serve`.** `core.net.Identity = None /
+  Files({ certificate, key }) / Base64({ certificate, key })` and `Listener { address,
+  transport, identity }`: `Files`'s fields are two PEM file paths read when the listener
+  starts (the certificate file may hold a whole chain, leaf first); `Base64`'s fields are
+  the base64 of those same two files, one line each, for an environment variable or a
+  secrets manager. Either way the private key may be PKCS#8, SEC1, or PKCS#1.
+  `net.@tcpServe(listeners :: []Listener, handler)` and `http.@serve(listeners ::
+  []Listener, handler[, ServerOptions])` bind every listener in the list — `Plain` or
+  `TLS` per its own `transport`/`identity` — under ONE `net.Server`: `kill` stops all of them,
+  `addresses() -> []Address` reports every listener's bound address (`address()` stays
+  the single-listener form, now fatal on a server with more than one listener). A `TLS`
+  listener's `ServerConfig` is built once, when it starts; each accepted connection then
+  runs rustls's server-side handshake — the same crypto-on-the-blocking-pool,
+  record-I/O-on-the-reactor split as the client's — before `handler` ever sees it, handed
+  the same `Connection` a `Plain` one is. The handshake itself is bounded — `ServerOptions
+  .idleTimeout` for `http.@serve`, the same 5-second default for `net.@tcpServe` — so a
+  client that connects and sends nothing is closed once that passes rather than holding
+  the connection forever. `transport = TLS` with `identity = None`, or
+  `transport = Plain` with an identity, is a compile error (`QN363`) on a literal
+  `Listener`, fatal (`QN512`) on one built another way; an identity that fails to load
+  (missing file, bad base64, bad PEM, a mismatched key) is fatal (`QN513`), naming the
+  listener's address and a reason. See `docs/corelib/net.md#tls-listeners` and
+  `docs/corelib/http.md#tls-listeners`. Part of #486.
+- **Breaking: a sum variant carries at most one payload.** Several values travel
+  together as one record instead of a longer payload list:
+  ```quilon ignore
+  Shape = Circle(Num) / Rect(Num, Num)        ~ before: two payload types
+  Shape = Circle(Num) / Rect({ Num, Num })    ~ after: one record payload
+  ```
+  Declaring more than one payload type is `QN121`; constructing or matching with several
+  arguments reuses the existing arity mismatch, `QN303`. See `docs/types/sum-types.md`.
+  Step 2 of #490.
+
+- **Breaking: narrowing — a proven `=` binding or parameter needs no re-checking.** Once
+  the checker proves its variant (construction, a provable `assert`/`expect`, or being
+  inside a match arm), a later match over it needs arms only for the variants it can still be —
+  and an arm, or an `assert`/`expect`, that can only cover an already-ruled-out variant is
+  now a compile error:
+  ```quilon ignore
+  v = Ok(21)
+  doubled = v ?
+    | Ok(x)    => x * 2
+    | NotOk(e) => 0        ~ before: required; after: QN365 — v is always Ok here
+  ```
+  The new matcher `is(Variant)` joins `isOk()`/`isNotOk()` (now `is(Ok)`/`is(NotOk)`'s
+  own names), for every sum type, `Result` included. A call's result is never a known
+  variant, and a `:=` binding is never narrowed — its exhaustiveness is unchanged. See
+  `docs/types/sum-types.md#narrowing--bindings`. `QN364`/`QN365`. Step 3 of #490.
 
 - **The signal trap (`!>`) — a top-level item, one per program, in the file that defines
   `^`, matching signals via a new `core.process` module.** `!>` followed by one or more
@@ -392,6 +460,13 @@ All notable changes to Quilon are documented here.
   keeps reading its own value everywhere in its own arm regardless of what a nested match
   inside it binds. See `docs/expressions/pattern-matching.md` and
   `examples/nested_match.qn`. Closes #467.
+- **Diagnostics now print an anonymous record type in Quilon syntax**, `{ name :: Text,
+  age :: Num }`, instead of the compiler's internal `Record([("name", Text), ("age",
+  Num)])` debug form.
+- **A fatal runtime check (a failing `assert`, an invalid `arr[i]`, a `net.@tcpServe` bind
+  failure, …) no longer aborts the process** — `panic in a destructor during cleanup` /
+  `thread caused non-unwinding panic. aborting` — **when a `net.@tcpServe` accept loop is
+  still running.** It now exits cleanly with the check's own documented code instead.
 
 ## 0.11.0 "Rackham" — 2026-09-08
 

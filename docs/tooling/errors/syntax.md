@@ -200,7 +200,8 @@ data in its variant payloads and its block holds methods only.
 Shape = Circle(Num) / Square(Num) { name :: Text }
 ```
 
-Move the data into a payload (`Circle(Num, Text)`) and keep the block to `=` methods.
+Move the data into a payload record (`Circle({ Num, Text })`) and keep the block to `=`
+methods.
 
 ### QN111 — bare expression as a function body
 
@@ -299,3 +300,71 @@ every signal at its OS default already — write at least one arm, or remove the
 
 ^ = () -> Num => < 0 >
 ```
+
+### QN118 — mixed named and positional record fields
+
+A record type or literal is all named fields or all positional — never both. A named
+field is `name :: Type` (in a type) or `name = value` (in a literal); a positional one is
+a bare type or a bare value, read back later by position (`.0`, `.1`, …).
+
+```quilon ignore
+half = (shape :: { Num, label :: Text }) -> Num => < shape.0 / 2 >
+```
+
+Write every field named (`{ size :: Num, label :: Text }`), or drop the names and write
+every field positional (`{ Num, Text }`). The same rule applies to a record literal:
+`{ 1, label = "x" }` is the same error — write `{ size = 1, label = "x" }` or
+`{ 1, "x" }`.
+
+A spread update's own override entries are one shape too — a named override (`name =
+value`) and a numbered one (`position = value`) don't mix in the same literal:
+
+```quilon ignore
+^ = () -> Num => <
+  p = { 6, 7 }
+  bad = {<-p, name = 1, 0 = 2}
+  0
+>
+```
+
+Override `p`'s positions numbered (`{<-p, 0 = 2, 1 = 1}`), or spread a named source and
+override its fields by name instead.
+
+### QN119 — numbered record field without a spread
+
+A numbered entry (`0 = 6`) overrides a position a `<-source` spread brought in — written
+with no spread at all, there is nothing for it to override.
+
+```quilon ignore
+^ = () -> Num => <
+  pair = { 0 = 6, 1 = 7 }
+  pair.0
+>
+```
+
+Write the positions directly: `{ 6, 7 }`.
+
+### QN120 — record position with a leading zero
+
+A position's canonical form has no leading zero. `p.0` and `p.10` are fine; `p.01` and
+`p.00` are not — their canonical forms are `p.1` and `p.0`.
+
+```quilon ignore
+^ = () -> Num => <
+  pair = { 6, 7 }
+  pair.01
+>
+```
+
+Write the position without the leading zero: `pair.1`.
+
+### QN121 — sum-type variant with more than one payload
+
+A sum-type variant's parenthesized list names more than one payload type. A variant
+carries at most one payload; several values travel together as a single record.
+
+```quilon ignore
+Shape = Circle(Num) / Rect(Num, Num)
+```
+
+Combine `Rect`'s two payload types into one record: `Rect({ Num, Num })`.

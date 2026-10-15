@@ -147,7 +147,7 @@ pub struct TypeDeclaration {
 #[derive(Debug, Clone, PartialEq)]
 pub enum TypeDefinition {
     /// A user-defined sum type: `Color = Red / Green / Blue`,
-    /// `Shape = Circle(Num) / Rect(Num, Num)`. Variants are separated by `/`. An optional
+    /// `Shape = Circle(Num) / Rect({ Num, Num })`. Variants are separated by `/`. An optional
     /// trailing `{ }` block carries METHODS ONLY (named methods, the render `` ` ``, and
     /// operator members) — a sum has no fields, so a field-like entry there is rejected.
     Sum {
@@ -488,8 +488,11 @@ pub const EXPECT: &str = "expect";
 /// Compiler-provided rather than written in `.qn` because a matcher holds a value of the type
 /// under test, which without generics would need one matcher type per value type. `not` takes
 /// a matcher and negates it; `aborts` reads a zero-parameter lambda instead of comparing a
-/// value; the rest take the value they compare against, or nothing.
-pub const MATCHERS: &[&str] = &["equals", "contains", "not", "isOk", "isNotOk", "aborts"];
+/// value; `is` takes a variant NAME (not a value) of the sum under test; the rest take the
+/// value they compare against, or nothing.
+pub const MATCHERS: &[&str] = &[
+    "equals", "contains", "not", "isOk", "isNotOk", "is", "aborts",
+];
 
 /// Whether `name` is `assert` or `expect` — a call the compiler lowers itself.
 pub fn is_assertion(name: &str) -> bool {
@@ -1172,7 +1175,9 @@ pub enum Type {
     // `Map(key, value)` = `[|K => V|]`; `Set(elem)` = `[|T|]`.
     Map(Box<Type>, Box<Type>),
     Set(Box<Type>),
-    Record(Vec<(String, Type)>), // For anonymous records
+    // Anonymous record (named or positional); a positional field is stored under its
+    // decimal position ("0", "1", …).
+    Record(Vec<(String, Type)>),
     /// A user-declared record type. Its `fields` and `methods` are behind an `Rc` because
     /// a `Type` is cloned once per expression that has this type — into the type table, out
     /// of it in codegen, through every inference step — and the declaration itself never
@@ -1235,11 +1240,43 @@ pub struct SumVariant {
     pub fields: Vec<Type>,
 }
 
+/// An identifier can never be all-digits, so this is unambiguous against a written name.
+pub fn is_positional_field(field: &str) -> bool {
+    !field.is_empty() && field.bytes().all(|byte| byte.is_ascii_digit())
+}
+
+/// True when the record is positional — a record is never a mix of the two, so the
+/// first field speaks for the rest.
+pub fn record_fields_are_positional(fields: &[(String, Type)]) -> bool {
+    fields
+        .first()
+        .is_some_and(|(name, _)| is_positional_field(name))
+}
+
+/// The field name a positional record's `index`'th slot is stored under.
+pub fn positional_field_name(index: usize) -> String {
+    index.to_string()
+}
+
+/// Canonical field order for an anonymous record — ascending by name (named) or by
+/// index (positional, numeric so it holds past nine fields) — so two records of the
+/// same shape are the same `Type::Record` however they were written, and codegen lays
+/// out one struct shape for both.
+pub fn canonical_record_field_order(mut fields: Vec<(String, Type)>) -> Vec<(String, Type)> {
+    if record_fields_are_positional(&fields) {
+        fields.sort_by_key(|(name, _)| name.parse::<usize>().unwrap_or(usize::MAX));
+    } else {
+        fields.sort_by(|a, b| a.0.cmp(&b.0));
+    }
+    fields
+}
+
 /// A short, user-facing label for a type (`Num`, `Text`, `[]Text`, a user type's name).
 /// Shared by the type checker's overload diagnostics and codegen's entry-point
 /// signature diagnostic, so both render types the same way. A not-yet-concrete
 /// `Generic` (an unresolved sum payload such as the `T` in `Ok(T)`) renders as
-/// `<unknown>`.
+/// `<unknown>`. The match is exhaustive so a new `Type` variant must pick a rendering
+/// here rather than falling back to `Debug`.
 pub fn type_label(ty: &Type) -> String {
     match ty {
         Type::Num => NUM_TYPE_NAME.to_string(),
@@ -1249,6 +1286,18 @@ pub fn type_label(ty: &Type) -> String {
         Type::Array(elem) => format!("[]{}", type_label(elem)),
         Type::Map(k, v) => format!("[|{} => {}|]", type_label(k), type_label(v)),
         Type::Set(elem) => format!("[|{}|]", type_label(elem)),
+        Type::Record(fields) if fields.is_empty() => "{}".to_string(),
+        Type::Record(fields) if record_fields_are_positional(fields) => {
+            let rendered: Vec<String> = fields.iter().map(|(_, t)| type_label(t)).collect();
+            format!("{{ {} }}", rendered.join(", "))
+        }
+        Type::Record(fields) => {
+            let rendered: Vec<String> = fields
+                .iter()
+                .map(|(name, t)| format!("{name} :: {}", type_label(t)))
+                .collect();
+            format!("{{ {} }}", rendered.join(", "))
+        }
         Type::Named { name, .. } | Type::Sum { name, .. } => name.clone(),
         Type::Function {
             parameters,
@@ -1258,7 +1307,6 @@ pub fn type_label(ty: &Type) -> String {
             format!("({}) -> {}", rendered.join(", "), type_label(return_type))
         }
         Type::Generic { .. } => "<unknown>".to_string(),
-        other => format!("{:?}", other),
     }
 }
 

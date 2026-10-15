@@ -69,6 +69,7 @@ impl TypeChecker {
             return Err(TypeError::NonExhaustiveMatch {
                 scrutinee: Box::new(expression_type),
                 missing: Vec::new(),
+                mutable_binding: false,
                 span: span.clone(),
             });
         }
@@ -79,7 +80,29 @@ impl TypeChecker {
         for arm in arms {
             self.check_pattern(&arm.pattern, &expression_type)?;
         }
-        self.check_exhaustiveness(&expression_type, arms, span)?;
+
+        // A bare `=` binding scrutinee may already be proven down to fewer variants than
+        // its sum declares (see `docs/types/sum-types.md`'s narrowing section) — a `:=`
+        // binding never is (`Environment::narrowed_variants` answers `None` for it, the
+        // same answer an unnarrowed `=` binding gets, so the two share the path below; the
+        // mutability is only needed for the exhaustiveness error's help line).
+        let scrutinee_binding = match expression {
+            Expression::Identifier { name, .. } => Some(name.as_str()),
+            _ => None,
+        };
+        let narrowed = scrutinee_binding.and_then(|name| self.env.narrowed_variants(name).cloned());
+        let mutable_binding = scrutinee_binding.is_some_and(|name| self.env.is_mutable(name));
+
+        if let (Some(binding), Some(narrowed)) = (scrutinee_binding, &narrowed) {
+            self.check_dead_arms(binding, narrowed, arms)?;
+        }
+        self.check_exhaustiveness(
+            &expression_type,
+            arms,
+            narrowed.as_ref(),
+            mutable_binding,
+            span,
+        )?;
 
         let mut result_type = None;
 
@@ -95,14 +118,29 @@ impl TypeChecker {
         let mut arms_aliasing = ValueAliasing::default();
 
         for arm in arms {
+            // Confined to this arm: a fact an arm's own body proves (about the scrutinee
+            // or anything else) does not survive past it, the same as a branch's does not
+            // (see `Environment::snapshot_narrowing`).
+            let narrowing_before = self.env.snapshot_narrowing();
+
             // Bind pattern variables and check body
             self.env.push_scope();
             self.bind_pattern_vars(&arm.pattern, &expression_type, &scrutinee_aliasing)?;
+
+            // Inside `| Variant(p) => …`, a bare `=` scrutinee is known to be `Variant` —
+            // one of this step's three narrowing sources (see `docs/types/sum-types.md`).
+            if let (Some(binding), Pattern::Constructor { name, .. }) =
+                (scrutinee_binding, &arm.pattern)
+            {
+                self.env
+                    .narrow(binding, [name.clone()].into_iter().collect());
+            }
 
             let body_type = self.infer_expression(&arm.body)?;
             arms_aliasing.merge(self.value_aliasing(&arm.body));
 
             self.env.pop_scope();
+            self.env.restore_narrowing(narrowing_before);
 
             // All arms must agree (compatibly). Prefer the most concrete arm type as the
             // result: an arm binding an un-specialized payload (`Generic`, e.g. a
@@ -135,13 +173,16 @@ impl TypeChecker {
     }
 
     /// Every match must be total. A sum-typed scrutinee is covered arm by arm — one per
-    /// variant, or a catch-all. Any other scrutinee has no enumerable set of values, so a
-    /// catch-all (`_`, or a binding) is the only way to cover it: without one, a value no
-    /// arm lists would fall off the end of the match with no value to yield.
+    /// variant the scrutinee can still be (every variant, unless `narrowed` says fewer),
+    /// or a catch-all. Any other scrutinee has no enumerable set of values, so a catch-all
+    /// (`_`, or a binding) is the only way to cover it: without one, a value no arm lists
+    /// would fall off the end of the match with no value to yield.
     pub(super) fn check_exhaustiveness(
         &self,
         scrutinee: &Type,
         arms: &[MatchArm],
+        narrowed: Option<&std::collections::BTreeSet<String>>,
+        mutable_binding: bool,
         span: &Span,
     ) -> Result<(), TypeError> {
         if arms.iter().any(|arm| arm.pattern.is_irrefutable()) {
@@ -151,6 +192,7 @@ impl TypeChecker {
         let not_covered = |missing: Vec<String>| TypeError::NonExhaustiveMatch {
             scrutinee: Box::new(scrutinee.clone()),
             missing,
+            mutable_binding,
             span: span.clone(),
         };
 
@@ -164,8 +206,10 @@ impl TypeChecker {
                 _ => None,
             })
             .collect();
-        let missing: Vec<String> = variants
+        let required = variants
             .iter()
+            .filter(|variant| narrowed.is_none_or(|set| set.contains(&variant.name)));
+        let missing: Vec<String> = required
             .filter(|variant| !covered.contains(variant.name.as_str()))
             .map(|variant| variant.name.clone())
             .collect();
@@ -174,6 +218,48 @@ impl TypeChecker {
             true => Ok(()),
             false => Err(not_covered(missing)),
         }
+    }
+
+    /// A match arm that can only cover a variant the narrowing already ruled out — a
+    /// constructor pattern naming a variant outside `narrowed`, or a catch-all (`_`, or a
+    /// binding) when every variant it would otherwise reach is already ruled out too. Runs
+    /// only when the scrutinee IS narrowed (a strict subset of its sum), so an ordinary,
+    /// unnarrowed match is entirely unaffected.
+    fn check_dead_arms(
+        &self,
+        binding: &str,
+        narrowed: &std::collections::BTreeSet<String>,
+        arms: &[MatchArm],
+    ) -> Result<(), TypeError> {
+        let covered: std::collections::HashSet<&str> = arms
+            .iter()
+            .filter_map(|arm| match &arm.pattern {
+                Pattern::Constructor { name, .. } => Some(name.as_str()),
+                _ => None,
+            })
+            .collect();
+        let dead = |variant: Option<String>, span: &Span| TypeError::UnreachableMatchArm {
+            binding: binding.to_string(),
+            variant,
+            known: narrowed.iter().cloned().collect(),
+            span: span.clone(),
+        };
+        for arm in arms {
+            match &arm.pattern {
+                Pattern::Constructor { name, span, .. } if !narrowed.contains(name) => {
+                    return Err(dead(Some(name.clone()), span));
+                }
+                Pattern::Wildcard { span } | Pattern::Identifier { span, .. }
+                    if narrowed
+                        .iter()
+                        .all(|variant| covered.contains(variant.as_str())) =>
+                {
+                    return Err(dead(None, span));
+                }
+                _ => {}
+            }
+        }
+        Ok(())
     }
 
     pub(super) fn check_pattern(

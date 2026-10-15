@@ -1,24 +1,29 @@
 // SPDX-License-Identifier: GPL-2.0-only WITH Classpath-exception-2.0
 
-//! `net.@tcpRequest`'s `TLS` transport.
-//!
-//! The connect and the handshake's record I/O run on the reactor, exactly like the plain
-//! path; only `process_new_packets()` — the CPU-bound step (signature verification, key
-//! exchange) — goes to the blocking-call pool ([`run_blocking`]), so a slow or silent peer
-//! parks the calling fiber, not a pool thread, and record encryption/decryption afterward
-//! runs inline on the reactor.
+//! TLS for `core.net`: `net.@tcpRequest`'s `TLS` transport (the client half, below), and
+//! `net.@tcpServe`/`http.@serve`'s `TLS` listeners (the server half, at the end of this
+//! file). Both sides share one handshake loop ([`handshake`]): the connect/accept and the
+//! handshake's record I/O run on the reactor; only the CPU-bound step (building the
+//! connection, `process_new_packets()`) goes to the blocking-call pool ([`run_blocking`]),
+//! so a slow or silent peer parks the calling fiber, not a pool thread, and record
+//! encryption/decryption afterward runs inline on the reactor.
 
 use super::TcpStream;
 use crate::blocking::run_blocking;
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD as BASE64;
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
 use rustls::crypto::{CryptoProvider, verify_tls12_signature, verify_tls13_signature};
-use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
+use rustls::pki_types::pem::PemObject;
+use rustls::pki_types::{CertificateDer, PrivateKeyDer, ServerName, UnixTime};
 use rustls::{
-    CertificateError, ClientConfig, ClientConnection, DigitallySignedStruct, Error as TLSError,
-    RootCertStore, SignatureScheme,
+    CertificateError, ClientConfig, ClientConnection, Connection, DigitallySignedStruct,
+    Error as TLSError, RootCertStore, ServerConfig, ServerConnection, SignatureScheme,
 };
+use std::fs;
 use std::io;
 use std::sync::{Arc, OnceLock};
+use std::time::Instant;
 
 pub(super) fn tls_request(
     address: &str,
@@ -34,7 +39,7 @@ pub(super) fn tls_request(
     let mut stream = TcpStream::connect(target)
         .map_err(|error| super::client::request_error_text(address, "connect", &error))?;
 
-    let conn = handshake(client_config(unchecked), server_name, &mut stream)
+    let conn = handshake_client(client_config(unchecked), server_name, &mut stream)
         .map_err(|error| handshake_error_text(address, &curated_message(&error, &host)))?;
 
     let mut tls = rustls::StreamOwned::new(conn, stream);
@@ -44,17 +49,22 @@ pub(super) fn tls_request(
         .map_err(|error| super::client::request_error_text(address, "read", &error))
 }
 
-/// Build the `ClientConnection` and drive it to completion. `ClientConnection::new` already
-/// does crypto (the ClientHello's key share), so it runs on the blocking-call pool too, not
-/// just `process_new_packets` below; `write_tls`/`read_tls` move raw bytes over `stream`'s
-/// own park-on-readiness `read`/`write`, the only steps that stay on the reactor.
+/// Build a `rustls::Connection` and drive its handshake to completion — the one loop the
+/// client (`ClientConnection`) and server (`ServerConnection`) sides share, dispatching
+/// through `Connection`'s own `read_tls`/`write_tls`/`process_new_packets`/`wants_*`
+/// (`Deref<Target = CommonState>` and match-dispatched inherent methods) so neither side
+/// needs its own copy. `new_connection` builds the concrete connection — crypto already
+/// (a ClientHello's key share, or the certificate/key to sign with), wrapped as a
+/// `Connection` so the loop below never has to know which side it is — inside the FIRST
+/// `run_blocking`, not just `process_new_packets`'s own. `deadline`, when given, bounds a
+/// server's own wait for a slow or silent peer (see `TcpStream::wait_readable`); a client
+/// handshake passes `None`, unbounded as before.
 fn handshake(
-    config: Arc<ClientConfig>,
-    server_name: ServerName<'static>,
+    new_connection: impl FnOnce() -> Result<Connection, TLSError> + Send + 'static,
     stream: &mut TcpStream,
-) -> io::Result<ClientConnection> {
-    let mut conn =
-        run_blocking(move || ClientConnection::new(config, server_name))?.map_err(tls_io_error)?;
+    deadline: Option<Instant>,
+) -> io::Result<Connection> {
+    let mut conn = run_blocking(new_connection)?.map_err(tls_io_error)?;
     while conn.is_handshaking() {
         while conn.wants_write() {
             if conn.write_tls(stream)? == 0 {
@@ -63,6 +73,14 @@ fn handshake(
         }
         if !conn.wants_read() {
             continue;
+        }
+        if let Some(deadline) = deadline
+            && !stream.wait_readable(deadline)?
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "TLS handshake timed out",
+            ));
         }
         if conn.read_tls(stream)? == 0 {
             return Err(io::Error::new(
@@ -77,6 +95,22 @@ fn handshake(
         conn = returned;
         outcome.map_err(tls_io_error)?;
     }
+    Ok(conn)
+}
+
+fn handshake_client(
+    config: Arc<ClientConfig>,
+    server_name: ServerName<'static>,
+    stream: &mut TcpStream,
+) -> io::Result<ClientConnection> {
+    let Connection::Client(conn) = handshake(
+        move || ClientConnection::new(config, server_name).map(Connection::Client),
+        stream,
+        None,
+    )?
+    else {
+        unreachable!("new_connection above always returns Connection::Client")
+    };
     Ok(conn)
 }
 
@@ -270,4 +304,99 @@ impl ServerCertVerifier for AcceptAnyCertificate {
             .signature_verification_algorithms
             .supported_schemes()
     }
+}
+
+// ---------------------------------------------------------------------------------------
+// Server side: `net.@tcpServe`/`http.@serve`'s `TLS` listeners.
+// ---------------------------------------------------------------------------------------
+
+/// A `TLS` listener's identity, already split into its two PEM byte sources —
+/// `core.net.Identity`'s `Files`/`Base64` variants. `None` never reaches here: a `Plain`
+/// listener has no `ListenerKind::Tls`.
+pub(super) enum Identity {
+    Files {
+        certificate_path: String,
+        key_path: String,
+    },
+    Base64 {
+        certificate: String,
+        key: String,
+    },
+}
+
+impl Identity {
+    /// This identity's certificate-chain and private-key PEM bytes: `Files` reads them
+    /// from disk, `Base64` decodes them. Either way, the result is handed to
+    /// [`CertificateDer::pem_slice_iter`]/[`PrivateKeyDer::from_pem_slice`] exactly as if
+    /// they had come from a PEM file.
+    fn pem_bytes(&self) -> Result<(Vec<u8>, Vec<u8>), String> {
+        match self {
+            Identity::Files {
+                certificate_path,
+                key_path,
+            } => {
+                let certificate = fs::read(certificate_path)
+                    .map_err(|error| format!("reading {certificate_path}: {error}"))?;
+                let key =
+                    fs::read(key_path).map_err(|error| format!("reading {key_path}: {error}"))?;
+                Ok((certificate, key))
+            }
+            Identity::Base64 { certificate, key } => {
+                let certificate = BASE64
+                    .decode(certificate.trim())
+                    .map_err(|error| format!("the certificate's base64: {error}"))?;
+                let key = BASE64
+                    .decode(key.trim())
+                    .map_err(|error| format!("the key's base64: {error}"))?;
+                Ok((certificate, key))
+            }
+        }
+    }
+}
+
+/// Build the `ServerConfig` a `TLS` listener serves every connection it accepts under —
+/// built once, here, when the listener starts, never per-connection. `identity`'s
+/// certificate PEM may hold a whole chain (leaf first); its key PEM may be PKCS#8, SEC1,
+/// or PKCS#1 — whatever [`PrivateKeyDer`]'s own PEM parser accepts.
+pub(super) fn server_config(identity: &Identity) -> Result<Arc<ServerConfig>, String> {
+    let (certificate_pem, key_pem) = identity.pem_bytes()?;
+    let certificates: Vec<CertificateDer<'static>> =
+        CertificateDer::pem_slice_iter(&certificate_pem)
+            .collect::<Result<_, _>>()
+            .map_err(|error| format!("the certificate is not a valid PEM chain: {error}"))?;
+    if certificates.is_empty() {
+        return Err("the certificate holds no certificate".to_string());
+    }
+    let key = PrivateKeyDer::from_pem_slice(&key_pem).map_err(|error| {
+        format!("the key is not a valid PEM private key (PKCS#8, SEC1, or PKCS#1): {error}")
+    })?;
+    let provider = Arc::new(rustls::crypto::ring::default_provider());
+    let config = ServerConfig::builder_with_provider(provider)
+        .with_safe_default_protocol_versions()
+        .expect("ring's cipher suites support rustls's default protocol versions")
+        .with_no_client_auth()
+        .with_single_cert(certificates, key)
+        .map_err(|error| format!("the certificate and key do not match: {error}"))?;
+    Ok(Arc::new(config))
+}
+
+/// The server side of [`handshake`]: bounded by `deadline` (`net.@tcpServe`/
+/// `http.@serve`'s own handshake timeout), so a client that connects and sends nothing
+/// times out rather than holding the connection's worker and fiber forever. A client
+/// whose handshake fails this way — including by timing out — is closed silently by the
+/// caller (`net::server::place_connection`'s own `ListenerKind::Tls` arm).
+pub(super) fn handshake_server(
+    config: Arc<ServerConfig>,
+    stream: &mut TcpStream,
+    deadline: Instant,
+) -> io::Result<ServerConnection> {
+    let Connection::Server(conn) = handshake(
+        move || ServerConnection::new(config).map(Connection::Server),
+        stream,
+        Some(deadline),
+    )?
+    else {
+        unreachable!("new_connection above always returns Connection::Server")
+    };
+    Ok(conn)
 }

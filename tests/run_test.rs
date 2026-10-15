@@ -12,9 +12,9 @@ use std::process::Command;
 
 mod common;
 use common::{
-    JIT_LOCK, assert_exit, assert_exit_linked, assert_exit_linked_from, assert_type_error,
-    assert_type_error_code, build_and_run_native, build_and_run_native_with_stderr,
-    ensure_runtime_lib, run_program, tool_available,
+    JIT_LOCK, assert_exit, assert_exit_linked, assert_exit_linked_from, assert_parse_error,
+    assert_type_error, assert_type_error_code, build_and_run_native,
+    build_and_run_native_with_stderr, ensure_runtime_lib, run_program, tool_available,
 };
 
 #[test]
@@ -138,9 +138,10 @@ fn ternary_branch_may_be_a_reassignment() {
 #[test]
 fn match_arm_may_be_a_reassignment() {
     // Same bare-expression position as a ternary branch: a `?`/`|` match arm may be a
-    // reassignment of an outer `:=` binding.
+    // reassignment of an outer `:=` binding. `choice` is itself `:=`, so narrowing leaves
+    // it alone and both arms stay live.
     assert_exit(
-        "^ = () -> Num => <\n  n := 0\n  choice = Ok(7)\n  choice ?\n    | Ok(v) => n := v\n    | NotOk(_) => n := 0\n  n\n>",
+        "^ = () -> Num => <\n  n := 0\n  choice := Ok(7)\n  choice ?\n    | Ok(v) => n := v\n    | NotOk(_) => n := 0\n  n\n>",
         7,
     );
 }
@@ -174,6 +175,229 @@ fn run_record_size_field_not_shadowed() {
     assert_exit(
         "^ = () -> Num => <\n  r = { size = 7, other = 9 }\n  r.size\n>",
         7,
+    );
+}
+
+// --- Positional records: `{ Num, Num }` types, `{ 6, 7 }` literals, `.0`/`.1` access ---
+
+#[test]
+fn run_positional_record_literal_and_field_access() {
+    assert_exit(
+        "^ = () -> Num => <\n  pair = { 6, 7 }\n  pair.0 + pair.1\n>",
+        13,
+    );
+}
+
+#[test]
+fn run_one_field_positional_record() {
+    assert_exit("^ = () -> Num => <\n  solo = { 42 }\n  solo.0\n>", 42);
+}
+
+#[test]
+fn run_chained_positional_field_access_p_0_1_is_two_field_accesses() {
+    // The lexer reads `.0.1` as `.`, then the single NUMBER token `0.1` — this only
+    // passes if the parser splits that token back into two field accesses on the
+    // nested positional record, rather than reading it as the number `0.1`.
+    assert_exit(
+        "^ = () -> Num => <\n  nested = { { 1, 2 }, 3 }\n  nested.0.1\n>",
+        2,
+    );
+}
+
+#[test]
+fn run_positional_record_as_parameter_and_return_type() {
+    // Also the regression coverage for `boundary_type`: an anonymous record crossing a
+    // function boundary must keep its by-pointer ABI (the same as a NAMED record),
+    // never the bare-struct layout `type_to_llvm` uses for sizing.
+    assert_exit(
+        "area = (p :: { Num, Num }) -> Num => < p.0 * p.1 >\n\
+         makePoint = (x :: Num, y :: Num) -> { Num, Num } => < { x, y } >\n\
+         ^ = () -> Num => <\n  \
+           p = makePoint(6, 7)\n  \
+           area(p)\n\
+         >",
+        42,
+    );
+}
+
+#[test]
+fn run_array_of_positional_records_element_access() {
+    assert_exit(
+        "^ = () -> Num => <\n  \
+           points :: []{ Num, Num } = [{ 1, 2 }, { 3, 4 }]\n  \
+           points[0].0 + points[1].1\n\
+         >",
+        5,
+    );
+}
+
+#[test]
+fn run_anonymous_named_record_type_annotation_accepts_its_shape() {
+    assert_exit(
+        "greet = (p :: { name :: Text, age :: Num }) -> Num => < p.age >\n\
+         ^ = () -> Num => < greet({ name = \"Wu\", age = 41 }) >",
+        41,
+    );
+}
+
+#[test]
+fn run_named_type_rebuilt_field_by_field_still_passes_to_an_anonymous_parameter() {
+    assert_exit(
+        "User = { name :: Text, age :: Num }\n\
+         greet = (p :: { name :: Text, age :: Num }) -> Num => < p.age >\n\
+         ^ = () -> Num => <\n  \
+           u = User { name = \"Wu\", age = 41 }\n  \
+           greet({ name = u.name, age = u.age })\n\
+         >",
+        41,
+    );
+}
+
+#[test]
+fn run_positional_record_field_write_mutates_in_place() {
+    assert_exit(
+        "^ = () -> Num => <\n  \
+           p := { 1, 2 }\n  \
+           p.0 := 9\n  \
+           p.0 + p.1\n\
+         >",
+        11,
+    );
+}
+
+#[test]
+fn run_named_record_type_does_not_implicitly_convert_to_an_anonymous_parameter() {
+    assert_type_error_code(
+        "User = { name :: Text, age :: Num }\n\
+         greet = (p :: { name :: Text, age :: Num }) -> Num => < p.age >\n\
+         ^ = () -> Num => <\n  \
+           u = User { name = \"Wu\", age = 41 }\n  \
+           greet(u)\n\
+         >",
+        Code::TypeMismatch,
+    );
+}
+
+#[test]
+fn run_dot_zero_on_a_declared_named_type_is_rejected() {
+    assert_type_error_code(
+        "User = { name :: Text, age :: Num }\n\
+         ^ = () -> Num => <\n  \
+           u = User { name = \"Alice\", age = 30 }\n  \
+           u.0\n\
+         >",
+        Code::PositionalAccessOnNamedRecord,
+    );
+}
+
+#[test]
+fn run_positional_record_position_out_of_range_is_rejected() {
+    assert_type_error_code(
+        "^ = () -> Num => <\n  pair = { 6, 7 }\n  pair.2\n>",
+        Code::RecordPositionOutOfRange,
+    );
+}
+
+#[test]
+fn run_mixed_named_and_positional_record_literal_is_rejected() {
+    // Mixing is a parser-level error (syntactic) — the record's shape is settled
+    // before type checking ever runs.
+    assert_parse_error("^ = () -> Num => <\n  bad = { 1, label = \"x\" }\n  0\n>");
+}
+
+#[test]
+fn run_spread_copy_and_numbered_override_of_a_positional_record() {
+    assert_exit(
+        "^ = () -> Num => <\n  \
+           p = { 6, 7 }\n  \
+           q = {<-p}\n  \
+           r = {<-p, 0 = 9}\n  \
+           q.0 + q.1 + r.0 + r.1\n\
+         >",
+        29,
+    );
+}
+
+#[test]
+fn run_numbered_override_past_the_spread_source_is_rejected() {
+    assert_type_error_code(
+        "^ = () -> Num => <\n  \
+           p = { 6, 7 }\n  \
+           r = {<-p, 2 = 8}\n  \
+           r.0\n\
+         >",
+        Code::RecordUpdatePositionOutOfRange,
+    );
+}
+
+#[test]
+fn run_numbered_field_without_a_spread_is_rejected() {
+    assert_parse_error("^ = () -> Num => <\n  r = { 0 = 6, 1 = 7 }\n  r.0\n>");
+}
+
+#[test]
+fn run_bare_positional_entry_after_a_spread_is_rejected() {
+    assert_parse_error("^ = () -> Num => <\n  p = { 6, 7 }\n  r = {<-p, 9}\n  r.0\n>");
+}
+
+#[test]
+fn run_numbered_override_of_a_named_spread_source_is_rejected() {
+    assert_type_error_code(
+        "User = { name :: Text, age :: Num }\n\
+         ^ = () -> Num => <\n  \
+           u = User { name = \"Alice\", age = 30 }\n  \
+           r = {<-u, 0 = 1}\n  \
+           0\n\
+         >",
+        Code::PositionalAccessOnNamedRecord,
+    );
+}
+
+#[test]
+fn run_two_positional_spreads_in_one_literal_is_rejected() {
+    assert_type_error_code(
+        "^ = () -> Num => <\n  \
+           p = { 6, 7 }\n  \
+           q = { 8, 9 }\n  \
+           r = {<-p, <-q}\n  \
+           r.0\n\
+         >",
+        Code::MultiplePositionalSpreads,
+    );
+}
+
+#[test]
+fn run_named_anonymous_record_field_order_does_not_matter() {
+    assert_exit(
+        "f = (r :: { a :: Num, b :: Text }) -> Num => < r.a >\n\
+         ^ = () -> Num => < f({ b = \"x\", a = 1 }) >",
+        1,
+    );
+}
+
+#[test]
+fn run_empty_record_type_annotation_is_still_rejected() {
+    assert_parse_error("f = (r :: {}) -> Num => < 0 >\n^ = () -> Num => < f({}) >");
+}
+
+#[test]
+fn run_leading_zero_position_access_is_rejected() {
+    assert_parse_error("^ = () -> Num => <\n  p = { 6, 7 }\n  p.01\n>");
+}
+
+#[test]
+fn run_leading_zero_numbered_override_is_rejected() {
+    assert_parse_error("^ = () -> Num => <\n  p = { 6, 7 }\n  r = {<-p, 01 = 9}\n  r.0\n>");
+}
+
+#[test]
+fn run_position_past_nine_and_zero_itself_are_not_leading_zero_errors() {
+    assert_exit(
+        "^ = () -> Num => <\n  \
+           p = { 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16 }\n  \
+           p.0 + p.10\n\
+         >",
+        22,
     );
 }
 
@@ -1247,13 +1471,101 @@ fn run_overloaded_call_on_each_element_dispatches_by_element_type() {
 }
 
 #[test]
+fn run_narrowing_by_construction_allows_a_single_arm_match() {
+    // `v` is narrowed to `Ok` by its own construction, so a single-arm match over it is
+    // exhaustive at compile time, and the arm it runs at runtime matches that proof.
+    assert_exit(
+        "^ = () -> Num => <\n  v = Ok(21)\n  v ? | Ok(x) => x * 2\n>",
+        42,
+    );
+}
+
+#[test]
+fn run_narrowing_by_assert_allows_a_single_arm_match_after_a_call_result() {
+    // A call's result is never a known variant on its own — narrowing starts only once
+    // `assert`/`is` proves it, after which a single-arm match is exhaustive.
+    assert_exit(
+        "loadConfig = () -> Result => < Ok(21) >\n\
+         ^ = () -> Num => <\n  \
+           v = loadConfig()\n  \
+           assert(v, isOk())\n  \
+           v ? | Ok(x) => x * 2\n\
+         >",
+        42,
+    );
+}
+
+#[test]
+fn run_narrowing_inside_a_match_arm_allows_a_nested_single_arm_match() {
+    // Inside `| Circle(r) => …`, the scrutinee itself is known `Circle` — re-matching it
+    // needs only that one arm.
+    assert_exit(
+        "Shape = Circle(Num) / Square(Num)\n\
+         make = () -> Shape => < Circle(6) >\n\
+         ^ = () -> Num => <\n  \
+           s = make()\n  \
+           s ?\n    \
+             | Circle(_) => (s ? | Circle(r) => r * r)\n    \
+             | Square(side) => side * side\n\
+         >",
+        36,
+    );
+}
+
+#[test]
+fn run_a_parameter_narrowed_by_assert_needs_only_the_remaining_arms() {
+    assert_exit(
+        "Shape = Circle(Num) / Rect({ Num, Num }) / Dot\n\
+         pick = (s :: Shape) -> Num => <\n  \
+           assert(s, not(is(Dot)))\n  \
+           s ? | Circle(r) => r | Rect(p) => p.0\n\
+         >\n\
+         ^ = () -> Num => < pick(Rect({ 7, 1 })) >",
+        7,
+    );
+}
+
+#[test]
+fn run_a_parameter_narrowed_inside_a_match_arm() {
+    assert_exit(
+        "Shape = Circle(Num) / Square(Num)\n\
+         pick = (s :: Shape) -> Num => <\n  \
+           s ?\n    \
+             | Circle(_) => (s ? | Circle(r) => r * r)\n    \
+             | Square(n) => n\n\
+         >\n\
+         ^ = () -> Num => < pick(Circle(6)) >",
+        36,
+    );
+}
+
+#[test]
 fn run_numeric_sum_payload_through_operator_overload() {
     // A numeric sum payload flows through an operator overload set: `Ok(x) => x * 2`
     // — `x` is a (generic) Result payload that resolves as Num for `*`, so it picks the
-    // `(Num, Num)` member. (Guards the Generic-resolves-as-Num overload behavior.)
+    // `(Num, Num)` member. (Guards the Generic-resolves-as-Num overload behavior.) `:=`,
+    // so narrowing leaves `r` alone and both arms (the `NotOk` one still generic) stay
+    // live.
     assert_exit(
-        "^ = () -> Num => <\n  r = Ok(21)\n  r ? | Ok(x) => x * 2 | NotOk(e) => 0\n>",
+        "^ = () -> Num => <\n  r := Ok(21)\n  r ? | Ok(x) => x * 2 | NotOk(e) => 0\n>",
         42,
+    );
+}
+
+#[test]
+fn run_positional_field_access_chained_into_a_method_call() {
+    // Regression: the lexer's number regex allows a trailing `.` with no digit after
+    // it, so `p.0.sum()` lexes `0.` as one NUMBER token with no `.` token left before
+    // `sum` — the parser must still read it as a method call on `p.0`, not drop `sum`.
+    assert_exit(
+        "Shape = Circle(Num) / Rect({ Num, Num }) {\n\
+           sum = () -> Num => < it ? | Circle(r) => r | Rect(p) => p.0 + p.1 >\n\
+         }\n\
+         ^ = () -> Num => <\n\
+           p = { Rect({ 3, 4 }), 10 }\n\
+           p.0.sum() + p.1\n\
+         >",
+        17,
     );
 }
 
@@ -1261,8 +1573,9 @@ fn run_numeric_sum_payload_through_operator_overload() {
 fn run_user_sum_payload_dispatches_overload_by_concrete_type() {
     // A user sum type's payloads carry CONCRETE types (unlike Result's generic ones), so
     // a match arm's payload binding dispatches an overloaded call by that concrete type.
+    // `:=`, so narrowing leaves `s` alone and both arms stay live.
     assert_exit(
-        "Shape = Circle(Num) / Rect(Num, Num)\narea = (n :: Num) -> Num => < n * 3 >\n^ = () -> Num => <\n  s = Circle(14)\n  s ? | Circle(n) => area(n) | Rect(w, h) => w * h\n>",
+        "Shape = Circle(Num) / Rect({ Num, Num })\narea = (n :: Num) -> Num => < n * 3 >\n^ = () -> Num => <\n  s :: Shape := Circle(14)\n  s ? | Circle(n) => area(n) | Rect(p) => p.0 * p.1\n>",
         42,
     );
 }
@@ -1272,8 +1585,9 @@ fn run_user_sum_bool_payload_dispatches_to_bool_overload_member() {
     // Regression (review BUG3 family): a Bool payload binding must dispatch to the
     // `(Bool)` overload member — codegen tracks the binding's concrete type — not the
     // `(Num)` member (which previously produced an LLVM i1-into-f64 type mismatch).
+    // `:=`, so narrowing leaves `s` alone and both arms stay live.
     assert_exit(
-        "Flag = On(Bool) / Off(Bool)\nclassify = (n :: Num) -> Num => < n + 1 >\nclassify = (b :: Bool) -> Num => < b ? 100 : 7 >\n^ = () -> Num => <\n  s = On(true)\n  s ? | On(b) => classify(b) | Off(b) => classify(b)\n>",
+        "Flag = On(Bool) / Off(Bool)\nclassify = (n :: Num) -> Num => < n + 1 >\nclassify = (b :: Bool) -> Num => < b ? 100 : 7 >\n^ = () -> Num => <\n  s :: Flag := On(true)\n  s ? | On(b) => classify(b) | Off(b) => classify(b)\n>",
         100,
     );
 }
@@ -1402,11 +1716,12 @@ unwrap = (b :: Boxed) -> Num => <
 fn heterogeneous_record_and_num_payload_at_same_position_is_accepted() {
     // A record in one variant and a `Num` in another at the same payload position:
     // each variant reads its own field through its own typed view (`SumLayout::Union`).
+    // `:=`, so narrowing leaves `m` alone and both arms stay live.
     let src = r#"
 Point = { x :: Num, y :: Num }
 Mixed = Wrap(Point) / Plain(Num)
 ^ = () -> Num => <
-  m = Wrap(Point { x = 3, y = 4 })
+  m :: Mixed := Wrap(Point { x = 3, y = 4 })
   m ? | Wrap(p) => p.x + p.y | Plain(n) => n
 >
 "#;
@@ -1704,11 +2019,15 @@ fn aot_result_payload_pinned_through_an_overloaded_callee() {
 /// unaffected by whatever `outer`'s own parameter gets pinned to. `helper(5)` = 5.
 #[test]
 fn run_result_parameter_shadowed_by_a_local_reassignment_reads_its_own_value() {
+    // `:=` is not usable here: `result` already names the outer parameter, and `:=`
+    // resolves an existing name anywhere in scope as a REASSIGNMENT rather than a fresh
+    // shadowing binding — the single remaining `Ok` arm is what `result`'s own narrowing
+    // (by construction) leaves reachable.
     let src = r#"
         outer = (result :: Result) -> Num => <
           helper = (x :: Num) -> Num => <
             result = Ok(x)
-            result ? | Ok(n) => n | NotOk(_) => 0
+            result ? | Ok(n) => n
           >
           helper(5)
         >
@@ -1881,12 +2200,13 @@ test.describe("describe", () => <
 #[test]
 fn nested_sum_as_sum_payload_is_accepted() {
     // A declared sum may be another sum's payload, embedded by value (it is declared
-    // above, so its layout is already known).
+    // above, so its layout is already known). `:=`, so narrowing leaves `o` alone and
+    // both outer arms stay live.
     let src = r#"
 Inner = A / B
 Outer = Wrap(Inner) / Bare
 ^ = () -> Num => <
-  o = Wrap(B)
+  o :: Outer := Wrap(B)
   o ? | Wrap(inner) => (inner ? | A => 1 | B => 2) | Bare => 0
 >
 "#;
@@ -1931,8 +2251,9 @@ fn run_bool_equality_compares_values() {
 fn run_ok_dispatch_over_every_builtin_payload() {
     // `Ok` constructs over every built-in payload type, including `$` (zero-payload).
     // All four construct; the matched `Ok(Num)` extracts its payload as the exit code.
+    // `:=`, so narrowing leaves `n` alone and both arms stay live.
     assert_exit(
-        "^ = () -> Num => <\n  n = Ok(42)\n  t = Ok(\"hello\")\n  b = Ok(true)\n  u = Ok($)\n  n ? | Ok(x) => x | NotOk(e) => 0\n>",
+        "^ = () -> Num => <\n  n := Ok(42)\n  t = Ok(\"hello\")\n  b = Ok(true)\n  u = Ok($)\n  n ? | Ok(x) => x | NotOk(e) => 0\n>",
         42,
     );
 }
@@ -1941,9 +2262,10 @@ fn run_ok_dispatch_over_every_builtin_payload() {
 fn run_ok_text_payload_constructs_and_dispatches() {
     // `Ok(Text)` constructs and the match dispatches to the `Ok` arm by tag. (Using a
     // bound Text payload's fields is the separate, documented non-numeric-payload
-    // limitation; here we only require construction + tag dispatch to work.)
+    // limitation; here we only require construction + tag dispatch to work.) `:=`, so
+    // narrowing leaves `r` alone and both arms stay live.
     assert_exit(
-        "^ = () -> Num => <\n  r = Ok(\"abcd\")\n  r ? | Ok(s) => 42 | NotOk(e) => 0\n>",
+        "^ = () -> Num => <\n  r := Ok(\"abcd\")\n  r ? | Ok(s) => 42 | NotOk(e) => 0\n>",
         42,
     );
 }
@@ -2005,13 +2327,13 @@ fn result_bool_payload_round_trips() {
 fn result_user_sum_payload_boxes_crosses_and_extracts() {
     // A payload wider than the uniform `{ptr,i64}` slot — a user sum value `Circle(5)` — is
     // BOXED into the slot, so `Ok(Circle(5))` still crosses a generic `(r :: Result)` parameter
-    // (okTag), and the caller extracts the sum value and matches it: `Rect(3,4)` -> 12.
+    // (okTag), and the caller extracts the sum value and matches it: `Rect({3,4})` -> 12.
     assert_exit(
-        "Shape = Circle(Num) / Rect(Num, Num)\n\
+        "Shape = Circle(Num) / Rect({ Num, Num })\n\
          okTag = (r :: Result) -> Num => < r ? | Ok(_) => 1 | NotOk(_) => 0 >\n\
          ^ = () -> Num => <\n\
          \x20 a = okTag(Ok(Circle(5)))\n\
-         \x20 area = Ok(Rect(3, 4)) ? | Ok(sh) => (sh ? | Circle(r) => r * r | Rect(w, h) => w * h) | NotOk(_) => 0\n\
+         \x20 area = Ok(Rect({ 3, 4 })) ? | Ok(sh) => (sh ? | Circle(r) => r * r | Rect(p) => p.0 * p.1) | NotOk(_) => 0\n\
          \x20 a + area\n\
          >",
         13,
@@ -2750,11 +3072,12 @@ fn run_nested_type_declared_inside_a_block_and_its_method_runs() {
 /// top-level sum's, so the constructor `Circle(6)` and the match both resolve.
 #[test]
 fn run_nested_sum_type_constructor_and_match_resolve() {
+    // `:=`, so narrowing leaves `s` alone and both arms stay live.
     assert_exit(
         r#"
 ^ = () -> Num => <
   Shape = Circle(Num) / Square(Num)
-  s = Circle(6)
+  s :: Shape := Circle(6)
   s ? | Circle(r) => r * r | Square(side) => side * side
 >
 "#,

@@ -12,12 +12,13 @@ use quilon::diagnostic::codes::Code;
 
 #[test]
 fn nullary_enum_matched_exhaustively() {
-    // A nullary enum `Color`, constructed and matched on every variant.
+    // A nullary enum `Color`, constructed and matched on every variant — `:=`, so
+    // narrowing leaves `c` alone and every arm stays live.
     // Green is the second variant (tag 1); the match maps it to exit code 1.
     assert_exit(
         "Color = Red / Green / Blue\n\
          ^ = () -> Num => <\n\
-           c = Green\n\
+           c := Green\n\
            c ?\n\
              | Red => 0\n\
              | Green => 1\n\
@@ -29,15 +30,16 @@ fn nullary_enum_matched_exhaustively() {
 
 #[test]
 fn payload_sum_constructed_and_matched() {
-    // `Shape` with payload variants; match extracts the payloads. A Rect(3, 4)
-    // contributes 3 + 4 = 7. (`Circle` arm is also covered for exhaustiveness.)
+    // `Shape` with payload variants; match extracts the payloads. A Rect({3, 4})
+    // contributes 3 + 4 = 7. (`Circle` arm is also covered for exhaustiveness — `:=`,
+    // so narrowing leaves `s` alone.)
     assert_exit(
-        "Shape = Circle(Num) / Rect(Num, Num)\n\
+        "Shape = Circle(Num) / Rect({ Num, Num })\n\
          ^ = () -> Num => <\n\
-           s = Rect(3, 4)\n\
+           s := Rect({ 3, 4 })\n\
            s ?\n\
              | Circle(r) => r\n\
-             | Rect(w, h) => w + h\n\
+             | Rect(p)   => p.0 + p.1\n\
          >",
         7,
     );
@@ -45,14 +47,15 @@ fn payload_sum_constructed_and_matched() {
 
 #[test]
 fn payload_sum_single_field_extracted() {
-    // Single-payload variant: Circle(9) -> 9.
+    // Single-payload variant: Circle(9) -> 9. `:=`, so narrowing leaves `s` alone and
+    // the `Rect` arm (covered for exhaustiveness) stays live.
     assert_exit(
-        "Shape = Circle(Num) / Rect(Num, Num)\n\
+        "Shape = Circle(Num) / Rect({ Num, Num })\n\
          ^ = () -> Num => <\n\
-           s = Circle(9)\n\
+           s := Circle(9)\n\
            s ?\n\
              | Circle(r) => r\n\
-             | Rect(w, h) => w + h\n\
+             | Rect(p)   => p.0 + p.1\n\
          >",
         9,
     );
@@ -62,15 +65,15 @@ fn payload_sum_single_field_extracted() {
 fn function_over_sum_type_param_and_match() {
     // A function takes a sum-type parameter (`s :: Shape`) and dispatches on it —
     // exercises lowering a sum-type annotation to its tagged-union struct and passing
-    // a constructed value as an argument. area(Rect(6, 7)) = 42.
+    // a constructed value as an argument. area(Rect({6, 7})) = 42.
     assert_exit(
-        "Shape = Circle(Num) / Rect(Num, Num)\n\
+        "Shape = Circle(Num) / Rect({ Num, Num })\n\
            area = (s :: Shape) -> Num => <\n\
              s ?\n\
-             | Circle(r)  => 3 * r * r\n\
-             | Rect(w, h) => w * h\n\
+             | Circle(r) => 3 * r * r\n\
+             | Rect(p)   => p.0 * p.1\n\
            >\n\
-           ^ = () -> Num => < area(Rect(6, 7)) >",
+           ^ = () -> Num => < area(Rect({ 6, 7 })) >",
         42,
     );
 }
@@ -78,10 +81,11 @@ fn function_over_sum_type_param_and_match() {
 #[test]
 fn result_still_works_as_a_normal_sum_type() {
     // The predefined Result behaves exactly as before, now via the general
-    // sum-type mechanism: Ok(42) matched, payload doubled -> 84.
+    // sum-type mechanism: Ok(42) matched, payload doubled -> 84. `:=`, so narrowing
+    // leaves `outcome` alone and both arms stay live.
     assert_exit(
         "^ = () -> Num => <\n\
-           outcome = Ok(42)\n\
+           outcome := Ok(42)\n\
            outcome ?\n\
              | Ok(x) => x * 2\n\
              | NotOk(e) => 0\n\
@@ -124,11 +128,12 @@ fn result_with_unit_payload_notok_path() {
 #[test]
 fn user_sum_with_unit_payload() {
     // `$` is a valid payload for a user sum type too, and may coexist with a
-    // concrete-typed field at the same position (`Done($)` vs `Pending(Num)`).
+    // concrete-typed field at the same position (`Done($)` vs `Pending(Num)`). `:=`,
+    // so narrowing leaves `j` alone and both arms stay live.
     assert_exit(
         "Job = Done($) / Pending(Num)\n\
          ^ = () -> Num => <\n\
-           j = Pending(7)\n\
+           j := Pending(7)\n\
            j ?\n\
              | Done(_)    => 0\n\
              | Pending(n) => n\n\
@@ -209,10 +214,10 @@ fn a_direct_self_payload_of_pure_scalars_still_tracks_aliasing() {
     // still counts as a reference type: embedding an `=`-bound value into a
     // `:=`-bound constructor is rejected exactly as it is for any other sum.
     assert_type_error_code(
-        "Tree = Leaf(Num) / Node(Tree, Tree)\n\
+        "Tree = Leaf(Num) / Node({ Tree, Tree })\n\
          t = Leaf(1)\n\
          ^ = () -> Num => <\n\
-           w := Node(t, Leaf(2))\n\
+           w := Node({ t, Leaf(2) })\n\
            0\n\
          >",
         Code::MutableAliasOfImmutable,
@@ -276,9 +281,10 @@ fn literal_payload_pattern_in_user_sum_is_rejected() {
 
 #[test]
 fn binding_and_wildcard_payload_patterns_still_accepted() {
-    // The irrefutable forms — a binding and `_` — keep working.
+    // The irrefutable forms — a binding and `_` — keep working. `:=`, so narrowing
+    // leaves `r` alone and both arms stay live.
     assert_exit(
-        "^ = () -> Num => <\n  r = Ok(2)\n  r ?\n    | Ok(x) => x + 1\n    | NotOk(_) => 20\n>",
+        "^ = () -> Num => <\n  r := Ok(2)\n  r ?\n    | Ok(x) => x + 1\n    | NotOk(_) => 20\n>",
         3,
     );
 }

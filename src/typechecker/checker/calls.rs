@@ -1028,6 +1028,9 @@ impl TypeChecker {
             });
         }
         self.record_parameter_types(parameters, parameter_types);
+        // Confined to this callback's own body, the same as any other lambda's (see
+        // `Environment::snapshot_narrowing`).
+        let narrowing_before = self.env.snapshot_narrowing();
         self.env.push_scope();
         let enclosing_declaration = self.enter_declaration();
         for (slot, (parameter, ty)) in parameters.iter().zip(parameter_types).enumerate() {
@@ -1057,6 +1060,7 @@ impl TypeChecker {
         }
 
         self.env.pop_scope();
+        self.env.restore_narrowing(narrowing_before);
         self.leave_declaration(enclosing_declaration);
         let body_type = body_type?;
         // Record the lambda node's own type as its body type, for completeness.

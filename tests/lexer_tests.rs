@@ -22,6 +22,36 @@ fn test_not_equal_still_lexes_apart_from_the_trap_token() {
     assert!(!tokens.iter().any(|t| t.kind == TokenKind::Trap));
 }
 
+/// `p.0.1` lexes as `p`, `.`, then ONE number token `0.1` — a `.` never changes how a
+/// number lexes, leading or not. Splitting that token back into the two field accesses
+/// `.0` then `.1` is the PARSER's job (`Parser::chain_positional_field_accesses`); the
+/// lexer stays oblivious to what follows a `.`. `0.1` written on its own (no leading
+/// `.`) is the same single number token either way — this test pins the shared case.
+#[test]
+fn test_p_dot_0_dot_1_lexes_as_one_number_token_after_the_dot() {
+    let tokens = Lexer::tokenize("p.0.1").unwrap();
+    assert_eq!(tokens[0].kind, TokenKind::Ident);
+    assert_eq!(tokens[1].kind, TokenKind::Dot);
+    assert!(matches!(tokens[2].kind, TokenKind::Number(_)));
+    assert_eq!(tokens[2].text, "0.1");
+}
+
+/// `p.0.size` lexes as `p`, `.`, then ONE number token — the number regex also allows a
+/// TRAILING `.` with no digit after it, so `0.` (followed by a name, not a digit) is
+/// still one token, with no `.` token of its own before `size`. The parser's job is to
+/// read that trailing `.` as the start of `.size` (`Parser::chain_positional_field_
+/// accesses`'s own trailing-dot case); the lexer stays oblivious to what follows.
+#[test]
+fn test_p_dot_0_dot_name_lexes_the_0_dot_as_one_number_token() {
+    let tokens = Lexer::tokenize("p.0.size").unwrap();
+    assert_eq!(tokens[0].kind, TokenKind::Ident);
+    assert_eq!(tokens[1].kind, TokenKind::Dot);
+    assert!(matches!(tokens[2].kind, TokenKind::Number(_)));
+    assert_eq!(tokens[2].text, "0.");
+    assert_eq!(tokens[3].kind, TokenKind::Ident);
+    assert_eq!(tokens[3].text, "size");
+}
+
 #[test]
 fn test_hello_world() {
     let source = r#"

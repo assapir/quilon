@@ -28,6 +28,7 @@ sidebar:
 | Map/Set user-defined key types (via a `%` hash hook + `==` member) | ✅ |
 | Records + field access | ✅ |
 | Named record types + methods (`it`) | ✅ |
+| Anonymous record types in annotations (`{ name :: Text, age :: Num }`); positional records (`{ Num, Num }`, `{ 6, 7 }`, read with `.0`/`.1`); no implicit conversion between a named and an anonymous record either way | ✅ |
 | In-place mutation of `:=` records: field writes (`obj.f := v`) + setter methods | ✅ |
 | Deep immutability: `=` freezes the value — aliasing across the `=`/`:=` line (bindings, containers, escaping method/function results, parameter laundering) is a compile error | ✅ |
 | Functions, recursion, blocks, type inference | ✅ |
@@ -38,12 +39,13 @@ sidebar:
 | Spread: prefix `<-` in literals — array splice `[<-xs, 4]`, record update `{<-p, x = 9}` | ✅ |
 | Pattern matching (numbers, text literals, wildcard, identifiers, sum-type variants); every match is total — a sum lists its variants, anything else takes a catch-all | ✅ |
 | User-defined sum types (`/` separator), exhaustive matching, payload binding | ✅ |
+| A sum variant carries at most one payload; several values travel together as one record, anonymous or declared (`Rect(Num, Num)` is a compile error — write `Rect({ Num, Num })`) | ✅ |
 | Sum-type methods: optional trailing `{ }` block (named methods, operators, render `` ` ``; `it` = the value); no fields, no `:=` methods | ✅ |
 | `Result` as a normal predefined sum type (`Ok`/`NotOk`) | ✅ |
 | Sum-type payloads: `Num` / `Bool` / `Text` | ✅ |
 | Sum-type payload is a named **record** (`Method = Get / Post(Body)`; match binds it, reads its fields / calls its methods) | ✅ |
 | Sum-type payload is a declared sum — the enclosing one included, directly (`Tree = Leaf / Node(Tree)`, boxed) or through an array/map (`Forest = Leaf(Num) / Branch([]Forest)`, inline) | ✅ |
-| Heterogeneous sum-type payloads: two variants may carry a different concrete type at the same position (`A(Num) / B(Text)`) | ✅ |
+| Heterogeneous sum-type payloads: two variants may carry a different concrete type in their one payload (`A(Num) / B(Text)`) | ✅ |
 | Record referencing itself, or a sum declared above it, directly as a field (`Wagon = { next :: Wagon }`) | ✅ |
 | Concrete `Result` payloads: a bound `Ok`/`NotOk` payload is usable at its real type (overload dispatch, across `-> Result` function **and method** boundaries) | ✅ |
 | Uniform `Result` layout: a `Result` of ANY payload (`Num`/`Text`/`[]Text`/composite) passes through a generic `(r :: Result)` parameter or return — powers `isOk()`/`isNotOk()` on `getEnv`/`getOpt` | ✅ |
@@ -51,11 +53,13 @@ sidebar:
 | [Qualified access](../modules/README.md): an import binds its last segment (`io.print`, `http.Request { }`, `\| http.Get =>`); the full path is the ambiguity escape; privates travel with their module but resolve for no importer; imports claim their short names; module overload sets are closed | ✅ |
 | [HTTP client](../corelib/http.md): `<< core.http` — `Method` (including `Options`/`Patch`), `Headers`/`Params`/`RequestOptions`, and the `Request` / `Response` records (`Request.get(url)` and its sibling constructors, `request.send()`, `response.status()` / `.headers()` / `.body()`), written in Quilon over `core.net`; `https://` URLs and `RequestOptions.transport = TLS` run the request over TLS (rustls, `ring`, the OS trust store or `SSL_CERT_FILE`/`SSL_CERT_DIR`) | ✅ |
 | [TLS client](../corelib/net.md#tls): `net.ConnectOptions { transport :: Transport, certificates :: Certificates }`, the `net.@tcpRequest(address, requestBytes, options)` overload — `Certificates.Unchecked` for an unverified peer, curated `NotOk` reasons for an untrusted, expired, or wrong-host certificate; the handshake runs on the blocking-call pool | ✅ |
+| [TLS server listeners](../corelib/net.md#tls-listeners): `core.net.Identity = None / Files({ certificate, key }) / Base64({ certificate, key })`, `Listener { address, transport, identity }`, and the `net.@tcpServe(listeners, handler)`/`http.@serve(listeners, handler[, options])` overloads sharing one `net.Server` across a mix of `Plain`/`TLS` listeners — `Server.addresses()` reporting every listener's bound address, `Server.address()` fatal past one listener; a `TLS` listener's `ServerConfig` built once at startup, each accepted connection's handshake split the same way the client's is | ✅ |
 | [HTTP server](../corelib/http.md#the-http-server): `http.@serve(address, handler)` — an address `Text` or the `net.Address` `server.address()` reports — and its `ServerOptions` overload (`maxBodySize`, `idleTimeout`), over `net`'s raw TCP layer; `Request.parse`/`Response.reply` wire framing, a bodyless `HEAD` reply, a body-carrying method's request body read by `Content-Length` or `chunked` framing and capped by `maxBodySize`, and keep-alive across requests on one connection until either side closes or `idleTimeout` elapses | ✅ |
 | I/O: `io.print` / `io.eprint` / `io.write` — one rule, over any value the [render `` ` ``](../types/text.md#string-interpolation-and-the-render-operator-) member covers | ✅ |
 | I/O: `io.@readStdin` — deferred stdin line read, forced on use | ✅ |
 | I/O: `io.@streamFile` / `io.streamFile` — strict, chunk-callback file read, running on the calling fiber | ✅ |
-| Assertions: compiler-provided `assert(value, matcher)` (fatal) and `expect(value, matcher)` (recorded, test cases only), over `equals` / `contains` / `not` / `isOk` / `isNotOk`; `core.test`'s `failAt` for a check of your own | ✅ |
+| Assertions: compiler-provided `assert(value, matcher)` (fatal) and `expect(value, matcher)` (recorded, test cases only), over `equals` / `contains` / `not` / `isOk` / `isNotOk` / `is(Variant)` (every sum type, `Result` included); `core.test`'s `failAt` for a check of your own | ✅ |
+| [Narrowing](../types/sum-types.md#narrowing--bindings) an `=` binding's or a parameter's variant (construction, a provable `assert`/`expect`, or a match arm), to the end of its enclosing block; a match over it needs arms only for the variants it can still be; a `:=` binding is never narrowed | ✅ |
 | Test harness: [`quilon test`](../corelib/test/README.md) over top-level `describe` / `it` blocks, which may sit in the file they test; the blocks are erased from every other command | ✅ |
 | [Language server](../tooling/language-server.md): `quilon lsp` — diagnostics on open/change, go-to-definition (imports included), find references, rename, hover with the inferred type, completion (names in scope, module members, expression members), semantic tokens (block `< >` and comparison `<` `>` classified apart), a code lens per test suite and case | ✅ |
 | Test runner options: [`--reporter human\|json`](../corelib/test/README.md#selecting-cases-and-choosing-the-reporter) (the case tree, or one JSON event per line with a stable schema) and `--only "Suite/case"` (run one suite or case by its `/`-joined path; repeatable) | ✅ |

@@ -240,50 +240,16 @@ impl<'a> Parser<'a> {
         loop {
             if self.check(&TokenKind::Dot) {
                 self.advance();
-                // A leaf IO primitive reached through a value (`connection.@read()`): `@`
-                // fuses with the following identifier exactly as it does at a module
-                // chain (`io.@readStdin`) or a primitive's own declaration.
-                let field = if self.check(&TokenKind::At) {
-                    self.advance();
-                    format!("@{}", self.expect_ident()?)
-                } else {
-                    self.expect_ident()?
-                };
 
-                // A same-line `(` makes this a method call: obj.method(args). A
-                // line-first `(` leaves `.field` a plain field access and the `(...)`
-                // begins the next statement.
-                if self.check_same_line(&TokenKind::ParenOpen) {
-                    // Method call: desugar obj.method(a, b) to method(obj, a, b)
-                    self.advance(); // consume '('
-
-                    // Parse arguments
-                    let mut arguments = vec![expression]; // receiver is first argument
-                    arguments.extend(
-                        self.parse_comma_separated(&TokenKind::ParenClose, Self::parse_expression)?,
-                    );
-
-                    self.expect(&TokenKind::ParenClose)?;
-                    let span = self.span(arguments[0].span().start, self.previous_span().end);
-
-                    expression = Expression::Call {
-                        function: Box::new(Expression::Identifier {
-                            name: field,
-                            span: span.clone(),
-                        }),
-                        arguments,
-                        member_call: true,
-                        span,
-                    };
-                } else {
-                    // Regular field access
-                    let span = self.span(expression.span().start, self.previous_span().end);
-                    expression = Expression::FieldAccess {
-                        expression: Box::new(expression),
-                        field,
-                        span,
-                    };
+                // A positional field access (`.0`, `.1`, …). The lexer reads `0.1` as one
+                // number regardless of what precedes it; split it back into the field
+                // chain here.
+                if matches!(self.peek().kind, TokenKind::Number(_)) {
+                    expression = self.chain_positional_field_accesses(expression)?;
+                    continue;
                 }
+
+                expression = self.parse_after_dot(expression)?;
             } else if self.check_same_line(&TokenKind::BracketOpen) {
                 // Array indexing
                 self.advance();
@@ -315,6 +281,91 @@ impl<'a> Parser<'a> {
         }
 
         Ok(expression)
+    }
+
+    /// Cursor at the NUMBER token after an already-consumed `.`; splits its text on `.`
+    /// into the field-access chain it reads as (`0.1` -> `.0` then `.1`).
+    fn chain_positional_field_accesses(
+        &mut self,
+        base: Expression,
+    ) -> Result<Expression, ParseError> {
+        let token = self.peek().clone();
+        self.advance();
+
+        let mut expression = base;
+        let mut offset = 0u32;
+        for part in token.text.split('.') {
+            let part_len = part.len() as u32;
+            let part_start = token.span.start + offset;
+            offset += part_len + 1; // +1 for the '.' the split consumed
+            if part.is_empty() {
+                continue;
+            }
+            reject_leading_zero_position(part, self.span(part_start, part_start + part_len))?;
+            let span = self.span(expression.span().start, part_start + part_len);
+            expression = Expression::FieldAccess {
+                expression: Box::new(expression),
+                field: part.to_string(),
+                span,
+            };
+        }
+        // The number regex also allows a trailing `.` with no digit after it (`0.`), so a
+        // position immediately followed by a name (`p.0.size`) still lexes as one NUMBER
+        // token with no `.` token of its own left for the postfix loop to see. Finish
+        // reading it the same way that loop would have.
+        if token.text.ends_with('.') {
+            expression = self.parse_after_dot(expression)?;
+        }
+        Ok(expression)
+    }
+
+    /// What follows an already-consumed `.` that is not a positional numeric access: a
+    /// name (or `@name`), then either a method call (`.method(args)`) or a plain field
+    /// access. Shared by the ordinary postfix loop and
+    /// [`Self::chain_positional_field_accesses`]'s trailing-dot case.
+    fn parse_after_dot(&mut self, expression: Expression) -> Result<Expression, ParseError> {
+        // A leaf IO primitive reached through a value (`connection.@read()`): `@`
+        // fuses with the following identifier exactly as it does at a module
+        // chain (`io.@readStdin`) or a primitive's own declaration.
+        let field = if self.check(&TokenKind::At) {
+            self.advance();
+            format!("@{}", self.expect_ident()?)
+        } else {
+            self.expect_ident()?
+        };
+
+        // A same-line `(` makes this a method call: obj.method(args). A
+        // line-first `(` leaves `.field` a plain field access and the `(...)`
+        // begins the next statement.
+        if self.check_same_line(&TokenKind::ParenOpen) {
+            // Method call: desugar obj.method(a, b) to method(obj, a, b)
+            self.advance(); // consume '('
+
+            let mut arguments = vec![expression]; // receiver is first argument
+            arguments.extend(
+                self.parse_comma_separated(&TokenKind::ParenClose, Self::parse_expression)?,
+            );
+
+            self.expect(&TokenKind::ParenClose)?;
+            let span = self.span(arguments[0].span().start, self.previous_span().end);
+
+            Ok(Expression::Call {
+                function: Box::new(Expression::Identifier {
+                    name: field,
+                    span: span.clone(),
+                }),
+                arguments,
+                member_call: true,
+                span,
+            })
+        } else {
+            let span = self.span(expression.span().start, self.previous_span().end);
+            Ok(Expression::FieldAccess {
+                expression: Box::new(expression),
+                field,
+                span,
+            })
+        }
     }
 
     // Match helper functions
@@ -734,10 +785,118 @@ impl<'a> Parser<'a> {
         Ok(fields)
     }
 
+    /// The bare `{ … }` record literal's field list — like [`Self::parse_record_fields`]
+    /// (named-only, for a constructor), plus two entries a constructor has no use for:
+    /// a positional one, a plain expression with no name (`{ 6, 7 }`), and a numbered
+    /// override, `position = value` (`{<-p, 0 = 9}`), which only makes sense next to a
+    /// spread. Mixing is `Code::MixedRecordFields`; a numbered entry with no spread at
+    /// all is `Code::NumberedRecordFieldWithoutSpread`.
+    fn parse_record_literal_fields(&mut self) -> Result<Vec<(String, Expression)>, ParseError> {
+        let start = self.current_span();
+
+        enum Entry {
+            Spread(Expression),
+            Named(String, Expression),
+            Numbered(String, Expression),
+            Positional(Expression),
+        }
+
+        let entries = self.parse_comma_separated(&TokenKind::BraceClose, |parser| {
+            if let Some(spread) = parser.try_parse_spread()? {
+                Ok(Entry::Spread(spread))
+            } else if parser.check(&TokenKind::Ident)
+                && parser.peek_ahead(1).kind == TokenKind::Assign
+            {
+                let field_name = parser.expect_ident()?;
+                parser.expect(&TokenKind::Assign)?;
+                Ok(Entry::Named(field_name, parser.parse_expression()?))
+            } else if matches!(parser.peek().kind, TokenKind::Number(_))
+                && !parser.peek().text.contains('.')
+                && parser.peek_ahead(1).kind == TokenKind::Assign
+            {
+                let token = parser.peek().clone();
+                reject_leading_zero_position(&token.text, token.span.clone())?;
+                parser.advance();
+                parser.expect(&TokenKind::Assign)?;
+                Ok(Entry::Numbered(token.text, parser.parse_expression()?))
+            } else {
+                Ok(Entry::Positional(parser.parse_expression()?))
+            }
+        })?;
+        self.expect(&TokenKind::BraceClose)?;
+        let span = self.span(start.start, self.previous_span().end);
+
+        let bare_count = entries
+            .iter()
+            .filter(|entry| matches!(entry, Entry::Positional(_)))
+            .count();
+        let named_count = entries
+            .iter()
+            .filter(|entry| matches!(entry, Entry::Named(..)))
+            .count();
+        let numbered_count = entries
+            .iter()
+            .filter(|entry| matches!(entry, Entry::Numbered(..)))
+            .count();
+        let spread_count = entries
+            .iter()
+            .filter(|entry| matches!(entry, Entry::Spread(_)))
+            .count();
+
+        if bare_count > 0 && bare_count < entries.len() {
+            return Err(ParseError::new(
+                Code::MixedRecordFields,
+                span,
+                "a record literal is all named fields or all positional — not both".to_string(),
+            )
+            .help(
+                "write every field as `name = value`, or drop the names for a positional \
+                 record: `{ v1, v2 }`",
+            ));
+        }
+        if numbered_count > 0 && spread_count == 0 {
+            return Err(ParseError::new(
+                Code::NumberedRecordFieldWithoutSpread,
+                span,
+                "a numbered field only overrides a spread; write the positions directly"
+                    .to_string(),
+            )
+            .help("drop the positions: `{ v1, v2 }`"));
+        }
+        if named_count > 0 && numbered_count > 0 {
+            return Err(ParseError::new(
+                Code::MixedRecordFields,
+                span,
+                "a record literal is all named fields or all positional — not both".to_string(),
+            )
+            .help("override a spread with either `name = value` entries or `position = value` ones, not both"));
+        }
+
+        Ok(if bare_count > 0 {
+            entries
+                .into_iter()
+                .enumerate()
+                .map(|(index, entry)| match entry {
+                    Entry::Positional(value) => (crate::ast::positional_field_name(index), value),
+                    _ => unreachable!("checked above: no other entries alongside a bare one"),
+                })
+                .collect()
+        } else {
+            entries
+                .into_iter()
+                .map(|entry| match entry {
+                    Entry::Named(name, value) | Entry::Numbered(name, value) => (name, value),
+                    Entry::Spread(value) => (String::new(), value),
+                    Entry::Positional(_) => unreachable!("checked above: bare_count == 0 here"),
+                })
+                .collect()
+        })
+    }
+
     pub(super) fn parse_record(&mut self) -> Result<Expression, ParseError> {
         let start = self.current_span();
         self.expect(&TokenKind::BraceOpen)?;
-        let fields = self.parse_record_fields()?;
+        let fields = self.parse_record_literal_fields()?;
         let span = self.span(start.start, self.previous_span().end);
 
         Ok(Expression::Record { fields, span })
@@ -872,4 +1031,18 @@ impl<'a> Parser<'a> {
             span,
         }))
     }
+}
+
+/// A position has no leading zero (`p.01`, `01 = v`); `text` is the digits as written.
+fn reject_leading_zero_position(text: &str, span: Span) -> Result<(), ParseError> {
+    if text.len() > 1 && text.starts_with('0') {
+        let canonical = text.trim_start_matches('0');
+        let canonical = if canonical.is_empty() { "0" } else { canonical };
+        return Err(ParseError::new(
+            Code::LeadingZeroPosition,
+            span,
+            format!("position `{text}` has a leading zero; write `{canonical}`"),
+        ));
+    }
+    Ok(())
 }

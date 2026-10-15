@@ -59,6 +59,12 @@ impl TypeError {
             TypeError::UnknownConstructorField { .. } => Code::UnknownConstructorField,
             TypeError::ReservedName { .. } => Code::ReservedName,
             TypeError::FunctionTypedField { .. } => Code::FunctionTypedField,
+            TypeError::PositionalAccessOnNamedRecord { .. } => Code::PositionalAccessOnNamedRecord,
+            TypeError::RecordPositionOutOfRange { .. } => Code::RecordPositionOutOfRange,
+            TypeError::RecordUpdatePositionOutOfRange { .. } => {
+                Code::RecordUpdatePositionOutOfRange
+            }
+            TypeError::MultiplePositionalSpreads { .. } => Code::MultiplePositionalSpreads,
             TypeError::InvalidPayloadType { .. } => Code::InvalidPayloadType,
             TypeError::AtomicBindingNotMutable { .. } => Code::AtomicBindingNotMutable,
             TypeError::AtomicBindingUsedBare { .. } => Code::AtomicBindingUsedBare,
@@ -71,6 +77,9 @@ impl TypeError {
             TypeError::TrapWithoutProcessImport { .. } => Code::TrapWithoutProcessImport,
             TypeError::TrapArmNotASignalPattern { .. } => Code::TrapArmNotASignalPattern,
             TypeError::DuplicateTrapArm { .. } => Code::DuplicateTrapArm,
+            TypeError::ListenerIdentityMismatch { .. } => Code::ListenerIdentityMismatch,
+            TypeError::AssertionNeverHolds { .. } => Code::AssertionNeverHolds,
+            TypeError::UnreachableMatchArm { .. } => Code::UnreachableMatchArm,
         }
     }
 
@@ -130,13 +139,22 @@ impl TypeError {
             TypeError::RecursiveFunctionNeedsReturnType { function, .. } => diagnostic.help(
                 format!("annotate the return type: `{function} = (…) -> T => < … >`"),
             ),
-            TypeError::NonExhaustiveMatch { missing, .. } => match missing.is_empty() {
-                true => diagnostic.help("add a `_` arm for the values no arm lists"),
-                false => diagnostic.help(format!(
-                    "add an arm for {}, or a `_` arm",
-                    fmt_name_list(missing)
-                )),
-            },
+            TypeError::NonExhaustiveMatch {
+                missing,
+                mutable_binding,
+                ..
+            } => {
+                let mut help = match missing.is_empty() {
+                    true => "add a `_` arm for the values no arm lists".to_string(),
+                    false => format!("add an arm for {}, or a `_` arm", fmt_name_list(missing)),
+                };
+                if *mutable_binding {
+                    help.push_str(
+                        " — this binding is mutable (`:=`), so its variant is not tracked",
+                    );
+                }
+                diagnostic.help(help)
+            }
             TypeError::UnknownMember {
                 member,
                 in_scope,
@@ -199,9 +217,23 @@ impl TypeError {
             TypeError::FunctionTypedField { name, .. } => diagnostic.help(format!(
                 "write `{name}` as a method instead: `{name} = (…) -> R => < … >`"
             )),
+            TypeError::PositionalAccessOnNamedRecord { .. } => diagnostic.help(
+                "a position (`0`, `1`, …) reaches a POSITIONAL record's fields — one \
+                 written `{ T1, T2 }`, never a named one"
+                    .to_string(),
+            ),
+            TypeError::RecordPositionOutOfRange { .. } => {
+                diagnostic.help("use a position this record actually has")
+            }
+            TypeError::RecordUpdatePositionOutOfRange { .. } => diagnostic
+                .help("a spread update only overrides an existing position, never adds one"),
+            TypeError::MultiplePositionalSpreads { .. } => {
+                diagnostic.help("override positions after a single spread: `{<-p, 0 = 9}`")
+            }
             TypeError::InvalidPayloadType { .. } => diagnostic.help(
-                "a payload is Num, Text, Bool, $, a declared record, a declared sum, or an \
-                 array/map of one of those"
+                "a payload is Num, Text, Bool, $, a declared record, a declared sum, an \
+                 anonymous record (named or positional) of one of those, or an array/map of \
+                 one of those"
                     .to_string(),
             ),
             TypeError::AtomicBindingNotMutable { name, .. } => {
@@ -240,6 +272,25 @@ impl TypeError {
             TypeError::DuplicateTrapArm { first, .. } => diagnostic
                 .label(first, Some("already matched here".to_string()))
                 .help("a trap has at most one arm per signal"),
+            TypeError::AssertionNeverHolds { .. } => diagnostic.help(
+                "an assert/expect that can never hold is dead code — remove it, \
+                                  or fix whichever earlier proof over-narrowed the binding",
+            ),
+            TypeError::UnreachableMatchArm {
+                variant: Some(_), ..
+            } => diagnostic.help("remove the arm, or the proof that already ruled it out"),
+            TypeError::UnreachableMatchArm { .. } => diagnostic.help(
+                "remove the catch-all arm — every variant it would cover already has its own",
+            ),
+            TypeError::ListenerIdentityMismatch { has_identity, .. } => {
+                diagnostic.help(if *has_identity {
+                    "set identity = None, or change transport to TLS".to_string()
+                } else {
+                    "set identity = Files(certificatePath, keyPath) or Base64(certificate, key), \
+                     or change transport to Plain"
+                        .to_string()
+                })
+            }
             _ => diagnostic,
         }
     }
@@ -293,6 +344,10 @@ impl TypeError {
             | TypeError::UnknownConstructorField { span, .. }
             | TypeError::ReservedName { span, .. }
             | TypeError::FunctionTypedField { span, .. }
+            | TypeError::PositionalAccessOnNamedRecord { span, .. }
+            | TypeError::RecordPositionOutOfRange { span, .. }
+            | TypeError::RecordUpdatePositionOutOfRange { span, .. }
+            | TypeError::MultiplePositionalSpreads { span }
             | TypeError::InvalidPayloadType { span, .. }
             | TypeError::AtomicBindingNotMutable { span, .. }
             | TypeError::AtomicBindingUsedBare { span, .. }
@@ -304,7 +359,10 @@ impl TypeError {
             | TypeError::SecondTrap { span, .. }
             | TypeError::TrapWithoutProcessImport { span }
             | TypeError::TrapArmNotASignalPattern { span }
-            | TypeError::DuplicateTrapArm { span, .. } => span,
+            | TypeError::DuplicateTrapArm { span, .. }
+            | TypeError::ListenerIdentityMismatch { span, .. }
+            | TypeError::AssertionNeverHolds { span, .. }
+            | TypeError::UnreachableMatchArm { span, .. } => span,
         }
     }
 }
@@ -358,6 +416,7 @@ impl std::fmt::Display for TypeError {
                         "`{matcher}` reads a `Result`, and {label} has no `{}` variant",
                         crate::ast::matcher_variant(matcher).unwrap_or_default()
                     ),
+                    "is" => write!(f, "`is` reads a sum type, and {label} is not one"),
                     "aborts" => write!(
                         f,
                         "`aborts` reads a zero-parameter lambda, and {label} is not one"
@@ -772,16 +831,36 @@ impl std::fmt::Display for TypeError {
                      record is a method"
                 )
             }
-            TypeError::InvalidPayloadType {
-                variant,
-                position,
-                got,
-                ..
-            } => {
+            TypeError::PositionalAccessOnNamedRecord { field, .. } => {
                 write!(
                     f,
-                    "`{variant}`'s payload {} is {}, which a sum type cannot carry",
-                    position + 1,
+                    "`{field}` names a position, and this record's fields are named — \
+                     reach them by name instead"
+                )
+            }
+            TypeError::RecordPositionOutOfRange { position, size, .. } => {
+                write!(
+                    f,
+                    "`.{position}` is out of range: this record has {size} field(s), \
+                     positions 0..{}",
+                    size.saturating_sub(1)
+                )
+            }
+            TypeError::RecordUpdatePositionOutOfRange { position, size, .. } => {
+                write!(
+                    f,
+                    "`{position}` overrides nothing: the spread source has {size} \
+                     position(s), 0..{}",
+                    size.saturating_sub(1)
+                )
+            }
+            TypeError::MultiplePositionalSpreads { .. } => {
+                write!(f, "a positional record takes one spread")
+            }
+            TypeError::InvalidPayloadType { variant, got, .. } => {
+                write!(
+                    f,
+                    "`{variant}`'s payload is {}, which a sum type cannot carry",
                     type_label(got)
                 )
             }
@@ -847,6 +926,34 @@ impl std::fmt::Display for TypeError {
                 f,
                 "'{variant}' is already matched by an earlier arm of this trap"
             ),
+            TypeError::AssertionNeverHolds { binding, known, .. } => write!(
+                f,
+                "'{binding}' is always {} here, so this assertion can never hold",
+                fmt_name_list(known)
+            ),
+            TypeError::UnreachableMatchArm {
+                binding,
+                variant: Some(variant),
+                known,
+                ..
+            } => write!(
+                f,
+                "'{binding}' is always {} here, so this arm for '{variant}' is never reached",
+                fmt_name_list(known)
+            ),
+            TypeError::UnreachableMatchArm { binding, known, .. } => write!(
+                f,
+                "'{binding}' is always {} here, so this arm is never reached — every variant \
+                 it would otherwise cover is already covered",
+                fmt_name_list(known)
+            ),
+            TypeError::ListenerIdentityMismatch { has_identity, .. } => {
+                if *has_identity {
+                    write!(f, "a Plain listener's identity must be None")
+                } else {
+                    write!(f, "a TLS listener needs an identity other than None")
+                }
+            }
         }
     }
 }

@@ -203,7 +203,12 @@ impl<'ctx> CodeGenerator<'ctx> {
                     return self.generate_connection_close(arguments);
                 }
                 ("core.net.Server", "kill") => return self.generate_server_kill(arguments),
-                ("core.net.Server", "address") => return self.generate_server_address(arguments),
+                ("core.net.Server", "address") => {
+                    return self.generate_server_address(arguments, span);
+                }
+                ("core.net.Server", "addresses") => {
+                    return self.generate_server_addresses(arguments);
+                }
                 _ => {}
             }
         }
@@ -319,7 +324,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             return self.generate_set_method(function_name, arguments);
         }
 
-        // Sum-type constructor with a payload (e.g. `Ok(x)`, `Circle(r)`, `Rect(w, h)`):
+        // Sum-type constructor with a payload (e.g. `Ok(x)`, `Circle(r)`, `Rect(p)`):
         // resolved from the variant registry built from the predefined Result and all
         // user `TypeDefinition::Sum` declarations. A constructor is a top-level name, so a
         // member call never reaches one.
@@ -629,10 +634,142 @@ impl<'ctx> CodeGenerator<'ctx> {
         variant: &str,
     ) -> Result<inkwell::values::IntValue<'ctx>, String> {
         let value = self.generate_field_access(options, field)?;
+        self.variant_flag(value, variant, "flag")
+    }
+
+    /// Whether a sum `value` IS `variant`, as the `i64` flag an FFI call takes in place of
+    /// the sum itself ([`Self::variant_tag_matches`], widened).
+    fn variant_flag(
+        &mut self,
+        value: BasicValueEnum<'ctx>,
+        variant: &str,
+        label: &str,
+    ) -> Result<inkwell::values::IntValue<'ctx>, String> {
         let matches = self.variant_tag_matches(variant, value)?;
         self.builder
-            .build_int_z_extend(matches, self.context.i64_type(), "flag")
-            .map_err(|e| e.to_string())
+            .build_int_z_extend(matches, self.context.i64_type(), label)
+            .map_err(ctx("Failed to widen a variant flag"))
+    }
+
+    /// A sum `value`'s own tag, as the `i64` an FFI call takes in place of the sum itself
+    /// — [`Self::variant_flag`]'s counterpart for a call that wants the real discriminant
+    /// rather than a single variant's own yes/no.
+    fn sum_tag_as_i64(
+        &mut self,
+        value: BasicValueEnum<'ctx>,
+        label: &str,
+    ) -> Result<inkwell::values::IntValue<'ctx>, String> {
+        let BasicValueEnum::StructValue(sum) = value else {
+            return Err(format!("{label} needs a sum value"));
+        };
+        let tag = self
+            .builder
+            .build_extract_value(sum, 0, &format!("{label}_tag"))
+            .map_err(ctx("Failed to extract a sum tag"))?
+            .into_int_value();
+        self.builder
+            .build_int_z_extend(tag, self.context.i64_type(), label)
+            .map_err(ctx("Failed to widen a sum tag"))
+    }
+
+    /// GEP and load field `index` of a loaded record pointer `element` — the array-element
+    /// counterpart of [`Self::record_field_pointer`], which re-evaluates an `Expression`
+    /// the element here, a runtime loop variable, does not have.
+    fn load_struct_field(
+        &mut self,
+        struct_ty: inkwell::types::StructType<'ctx>,
+        element: PointerValue<'ctx>,
+        index: u32,
+        field_ty: BasicTypeEnum<'ctx>,
+        label: &str,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let field_ptr = self
+            .builder
+            .build_struct_gep(struct_ty, element, index, &format!("{label}_field"))
+            .map_err(ctx("Failed to GEP a record field"))?;
+        self.builder
+            .build_load(field_ty, field_ptr, label)
+            .map_err(ctx("Failed to load a record field"))
+    }
+
+    /// `identity`'s `Files`/`Base64` payload — one record, `{ certificate, key }` — as the two
+    /// `(ptr, len)` pairs `__tcp_serve_listeners_push` takes. Guarded by `has_payload`
+    /// (`identity_kind != None`'s tag): `None`'s own payload slot is `undef`
+    /// ([`Self::generate_sum_constructor`] never writes it), so loading through it
+    /// unconditionally would be a load off an undefined pointer — the `None` branch stores an
+    /// empty `Text` pair instead, which the Rust side already ignores for that tag.
+    fn identity_payload_fields(
+        &mut self,
+        identity: inkwell::values::StructValue<'ctx>,
+        has_payload: inkwell::values::IntValue<'ctx>,
+        text_ty: BasicTypeEnum<'ctx>,
+        label: &str,
+    ) -> Result<(BasicValueEnum<'ctx>, BasicValueEnum<'ctx>), String> {
+        let function = self
+            .current_function
+            .ok_or_else(|| format!("{label} outside of function"))?;
+        let certificate_slot =
+            self.create_entry_block_alloca(&format!("{label}_certificate"), text_ty)?;
+        let key_slot = self.create_entry_block_alloca(&format!("{label}_key"), text_ty)?;
+        let has_bb = self
+            .context
+            .append_basic_block(function, &format!("{label}_has"));
+        let none_bb = self
+            .context
+            .append_basic_block(function, &format!("{label}_none"));
+        let cont_bb = self
+            .context
+            .append_basic_block(function, &format!("{label}_cont"));
+        self.builder
+            .build_conditional_branch(has_payload, has_bb, none_bb)
+            .map_err(ctx("Failed to branch on an Identity payload"))?;
+
+        self.builder.position_at_end(has_bb);
+        let payload_ptr = self
+            .builder
+            .build_extract_value(identity, 1, "identity_payload_ptr")
+            .map_err(ctx("Failed to extract the Identity payload"))?
+            .into_pointer_value();
+        let record_fields = [
+            ("certificate".to_string(), Type::Text),
+            ("key".to_string(), Type::Text),
+        ];
+        let record_ty = self.record_struct_type(&record_fields)?;
+        let certificate =
+            self.load_struct_field(record_ty, payload_ptr, 0, text_ty, "identity_certificate")?;
+        let key = self.load_struct_field(record_ty, payload_ptr, 1, text_ty, "identity_key")?;
+        self.builder
+            .build_store(certificate_slot, certificate)
+            .map_err(ctx("Failed to store the Identity certificate"))?;
+        self.builder
+            .build_store(key_slot, key)
+            .map_err(ctx("Failed to store the Identity key"))?;
+        self.builder
+            .build_unconditional_branch(cont_bb)
+            .map_err(ctx("Failed to branch to cont"))?;
+
+        self.builder.position_at_end(none_bb);
+        let empty_text = text_ty.into_struct_type().const_zero();
+        self.builder
+            .build_store(certificate_slot, empty_text)
+            .map_err(ctx("Failed to store an empty certificate"))?;
+        self.builder
+            .build_store(key_slot, empty_text)
+            .map_err(ctx("Failed to store an empty key"))?;
+        self.builder
+            .build_unconditional_branch(cont_bb)
+            .map_err(ctx("Failed to branch to cont"))?;
+
+        self.builder.position_at_end(cont_bb);
+        let certificate = self
+            .builder
+            .build_load(text_ty, certificate_slot, "identity_certificate_value")
+            .map_err(ctx("Failed to load the Identity certificate"))?;
+        let key = self
+            .builder
+            .build_load(text_ty, key_slot, "identity_key_value")
+            .map_err(ctx("Failed to load the Identity key"))?;
+        Ok((certificate, key))
     }
 
     /// Lower a leaf `@` IO primitive call to its runtime intrinsic. `site` is the span of the
@@ -776,17 +913,35 @@ impl<'ctx> CodeGenerator<'ctx> {
                 const NAME: &str = "core.net.@tcpServe";
                 const CALL_FAILED: &str = "Failed to call core.net.@tcpServe";
                 Self::expect_arity(NAME, arguments, false, 2)?;
-                let (address_ptr, address_len) = self.address_text_fields(&arguments[0])?;
                 let BasicValueEnum::StructValue(closure) =
                     self.generate_expression(&arguments[1])?
                 else {
                     return Err(format!("{NAME} expects a closure handler"));
                 };
-
                 let bundle = self.bundle_closure(closure, "tcp_serve_bundle")?;
-
                 let thunk = self.emit_tcp_serve_handler_thunk()?;
                 let thunk_ptr = thunk.as_global_value().as_pointer_value();
+
+                // No `ServerOptions` at this layer: a `TLS` listener's handshake is
+                // bounded by the same 5-second default `ServerOptions.default()` gives
+                // `http.@serve`'s own `idleTimeout`.
+                let handshake_timeout = self.context.f64_type().const_float(5.0);
+
+                if matches!(
+                    self.oracle.expression_type(&arguments[0]),
+                    Some(Type::Array(_))
+                ) {
+                    return self.generate_tcp_serve_listeners(
+                        &arguments[0],
+                        thunk_ptr,
+                        bundle.into(),
+                        handshake_timeout,
+                        site,
+                        CALL_FAILED,
+                    );
+                }
+
+                let (address_ptr, address_len) = self.address_text_fields(&arguments[0])?;
                 let launch_site = self.site_value(site)?;
 
                 let serve = self.get_intrinsic("__tcp_serve_launch")?;
@@ -800,6 +955,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                             thunk_ptr.into(),
                             bundle.into(),
                             launch_site.into(),
+                            handshake_timeout.into(),
                         ],
                         "tcp_serve",
                     )
@@ -822,7 +978,6 @@ impl<'ctx> CodeGenerator<'ctx> {
                         arguments.len()
                     ));
                 }
-                let (address_ptr, address_len) = self.address_text_fields(&arguments[0])?;
                 let BasicValueEnum::StructValue(closure) =
                     self.generate_expression(&arguments[1])?
                 else {
@@ -860,6 +1015,22 @@ impl<'ctx> CodeGenerator<'ctx> {
 
                 let thunk = self.emit_http_serve_handler_thunk()?;
                 let thunk_ptr = thunk.as_global_value().as_pointer_value();
+
+                if matches!(
+                    self.oracle.expression_type(&arguments[0]),
+                    Some(Type::Array(_))
+                ) {
+                    return self.generate_tcp_serve_listeners(
+                        &arguments[0],
+                        thunk_ptr,
+                        bundle.into(),
+                        idle_timeout,
+                        site,
+                        CALL_FAILED,
+                    );
+                }
+
+                let (address_ptr, address_len) = self.address_text_fields(&arguments[0])?;
                 let launch_site = self.site_value(site)?;
 
                 let serve = self.get_intrinsic("__tcp_serve_launch")?;
@@ -873,6 +1044,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                             thunk_ptr.into(),
                             bundle.into(),
                             launch_site.into(),
+                            idle_timeout.into(),
                         ],
                         "http_serve",
                     )
@@ -939,6 +1111,138 @@ impl<'ctx> CodeGenerator<'ctx> {
         }
     }
 
+    /// `net.@tcpServe(listeners, handler)` / `http.@serve(listeners, handler[, options])`:
+    /// the listener-list lowering both call sites share, parameterized by which
+    /// `handler_fn`/`handler_env` built the fixed-shape call behind it and by
+    /// `handshake_timeout` (a `TLS` listener's own handshake bound — `ServerOptions
+    /// .idleTimeout`, or `@tcpServe`'s 5-second constant). Loops over `listeners` (via
+    /// [`Self::array_loop`]) pushing one `__tcp_serve_listeners_push` call per element,
+    /// reading each `Listener`'s fields with [`Self::load_struct_field`] rather than
+    /// [`Self::generate_field_access`]: the array ELEMENT is a runtime loop variable, not
+    /// an `Expression` that call could re-evaluate.
+    fn generate_tcp_serve_listeners(
+        &mut self,
+        listeners: &Expression,
+        handler_fn: PointerValue<'ctx>,
+        handler_env: BasicValueEnum<'ctx>,
+        handshake_timeout: inkwell::values::FloatValue<'ctx>,
+        site: &Span,
+        call_failed: &'static str,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let listener_fields = match self.oracle.expression_type(listeners) {
+            Some(Type::Array(elem)) => match elem.as_ref() {
+                Type::Named { fields, name, .. } if name == "core.net.Listener" => {
+                    Rc::clone(fields)
+                }
+                _ => return Err("expected a []core.net.Listener".to_string()),
+            },
+            _ => return Err("expected a []core.net.Listener".to_string()),
+        };
+        let listener_struct_ty = self.record_struct_type(&listener_fields)?;
+        let listener_elem_ty: BasicTypeEnum = self.context.ptr_type(AddressSpace::default()).into();
+        let text_ty: BasicTypeEnum = self.ptr_len_struct_type().into();
+        let transport_ty: BasicTypeEnum = self.sum_struct_type("core.net.Transport").into();
+        let identity_ty: BasicTypeEnum = self.sum_struct_type("core.net.Identity").into();
+
+        let (_, data_ptr, size) = self.extract_array(listeners)?;
+
+        let new_fn = self.get_intrinsic("__tcp_serve_listeners_new")?;
+        let list = Self::call_result_to_basic(
+            self.builder
+                .build_call(new_fn, &[], "listener_list")
+                .map_err(ctx(call_failed))?,
+        )?;
+
+        let push_fn = self.get_intrinsic("__tcp_serve_listeners_push")?;
+        self.array_loop(size, |this, index| {
+            let element = this
+                .load_element(data_ptr, listener_elem_ty, index)?
+                .into_pointer_value();
+
+            let address = this.load_struct_field(
+                listener_struct_ty,
+                element,
+                0,
+                text_ty,
+                "listener_address",
+            )?;
+            let (address_ptr, address_len) = this.text_fields(address)?;
+
+            let transport = this.load_struct_field(
+                listener_struct_ty,
+                element,
+                1,
+                transport_ty,
+                "listener_transport",
+            )?;
+            let is_tls = this.variant_flag(transport, "core.net.TLS", "is_tls")?;
+
+            let identity = this.load_struct_field(
+                listener_struct_ty,
+                element,
+                2,
+                identity_ty,
+                "listener_identity",
+            )?;
+            let identity_kind = this.sum_tag_as_i64(identity, "identity_kind")?;
+            let BasicValueEnum::StructValue(identity) = identity else {
+                return Err("core.net.Listener.identity must be a sum value".to_string());
+            };
+            let none_tag = this.context.i64_type().const_zero();
+            let has_identity = this
+                .builder
+                .build_int_compare(
+                    inkwell::IntPredicate::NE,
+                    identity_kind,
+                    none_tag,
+                    "has_identity",
+                )
+                .map_err(ctx("Failed to compare the Identity tag"))?;
+            let (first, second) =
+                this.identity_payload_fields(identity, has_identity, text_ty, "identity")?;
+            let (first_ptr, first_len) = this.text_fields(first)?;
+            let (second_ptr, second_len) = this.text_fields(second)?;
+
+            this.builder
+                .build_call(
+                    push_fn,
+                    &[
+                        list.into(),
+                        address_ptr.into(),
+                        address_len.into(),
+                        is_tls.into(),
+                        identity_kind.into(),
+                        first_ptr.into(),
+                        first_len.into(),
+                        second_ptr.into(),
+                        second_len.into(),
+                    ],
+                    "",
+                )
+                .map_err(ctx("Failed to call __tcp_serve_listeners_push"))?;
+            Ok(())
+        })?;
+
+        let launch_fn = self.get_intrinsic("__tcp_serve_listeners_launch")?;
+        let launch_site = self.site_value(site)?;
+        let call = self
+            .builder
+            .build_call(
+                launch_fn,
+                &[
+                    list.into(),
+                    handler_fn.into(),
+                    handler_env.into(),
+                    launch_site.into(),
+                    handshake_timeout.into(),
+                ],
+                "tcp_serve_listeners",
+            )
+            .map_err(ctx(call_failed))?;
+        let handle = Self::call_result_to_basic(call)?;
+        self.build_plain_record(&[handle])
+    }
+
     /// `Connection.close()`: close the connection now, if it is not already closed.
     fn generate_connection_close(
         &mut self,
@@ -984,16 +1288,20 @@ impl<'ctx> CodeGenerator<'ctx> {
         Ok(self.unit_value().into())
     }
 
-    /// `Server.address()`: the bound host and port from two runtime reads of the same
-    /// `local_addr`, assembled with [`Self::build_plain_record`].
+    /// `Server.address()`: fatal, naming `addresses()`, on a server with other than
+    /// exactly one listener ([`Self::generate_server_address_guard`]); otherwise the
+    /// bound host and port from two runtime reads of the same `local_addr`, assembled
+    /// with [`Self::build_plain_record`].
     fn generate_server_address(
         &mut self,
         arguments: &[Expression],
+        span: &Span,
     ) -> Result<BasicValueEnum<'ctx>, String> {
         const NAME: &str = "core.net.Server.address";
         const CALL_FAILED: &str = "Failed to call core.net.Server.address";
         Self::expect_arity(NAME, arguments, true, 0)?;
         let handle = self.handle_field(&arguments[0])?;
+        self.generate_server_address_guard(handle, span)?;
         let host_fn = self.get_intrinsic("__server_address_host")?;
         let host = Self::call_result_to_basic(
             self.builder
@@ -1007,6 +1315,80 @@ impl<'ctx> CodeGenerator<'ctx> {
                 .map_err(ctx(CALL_FAILED))?,
         )?;
         self.build_plain_record(&[host, port])
+    }
+
+    /// `Server.address()`'s fatal startup guard: a server with other than exactly one
+    /// listener has no single address for it to report.
+    fn generate_server_address_guard(
+        &mut self,
+        handle: inkwell::values::FloatValue<'ctx>,
+        span: &Span,
+    ) -> Result<(), String> {
+        const CALL_FAILED: &str = "Failed to call core.net.Server.address";
+        let guard = self.get_intrinsic("__server_address_guard")?;
+        let site = self.site_value(span)?;
+        self.builder
+            .build_call(guard, &[handle.into(), site.into()], "")
+            .map_err(ctx(CALL_FAILED))?;
+        Ok(())
+    }
+
+    /// `Server.addresses()`: every listener's bound address, in list order — a `[]Address`
+    /// built by looping (via [`Self::array_loop`]) over `__server_listener_count`'s own
+    /// answer, reading each one's host/port with `__server_address_host_at`/
+    /// `__server_address_port_at` and assembling it with [`Self::build_plain_record`],
+    /// exactly as [`Self::generate_server_address`]'s own single `Address`.
+    fn generate_server_addresses(
+        &mut self,
+        arguments: &[Expression],
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        const NAME: &str = "core.net.Server.addresses";
+        const CALL_FAILED: &str = "Failed to call core.net.Server.addresses";
+        Self::expect_arity(NAME, arguments, true, 0)?;
+        let handle = self.handle_field(&arguments[0])?;
+
+        let count_fn = self.get_intrinsic("__server_listener_count")?;
+        let BasicValueEnum::FloatValue(count) = Self::call_result_to_basic(
+            self.builder
+                .build_call(count_fn, &[handle.into()], "listener_count")
+                .map_err(ctx(CALL_FAILED))?,
+        )?
+        else {
+            return Err(format!("{NAME} expects a Num listener count"));
+        };
+        let count_i64 = self
+            .builder
+            .build_float_to_signed_int(count, self.context.i64_type(), "listener_count_i64")
+            .map_err(ctx(CALL_FAILED))?;
+
+        // `Address` is a named record: an array of it, like any array of a named record,
+        // holds one pointer per element.
+        let element_llvm: BasicTypeEnum = self.context.ptr_type(AddressSpace::default()).into();
+        let data_ptr = self.alloc_array_data(element_llvm, count_i64)?;
+
+        let host_fn = self.get_intrinsic("__server_address_host_at")?;
+        let port_fn = self.get_intrinsic("__server_address_port_at")?;
+        self.array_loop(count_i64, |this, index| {
+            let index_f64 = this
+                .builder
+                .build_signed_int_to_float(index, this.context.f64_type(), "index_f64")
+                .map_err(ctx("Failed to convert a listener index to Num"))?;
+            let host = Self::call_result_to_basic(
+                this.builder
+                    .build_call(host_fn, &[handle.into(), index_f64.into()], "address_host")
+                    .map_err(ctx(CALL_FAILED))?,
+            )?;
+            let port = Self::call_result_to_basic(
+                this.builder
+                    .build_call(port_fn, &[handle.into(), index_f64.into()], "address_port")
+                    .map_err(ctx(CALL_FAILED))?,
+            )?;
+            let address = this.build_plain_record(&[host, port])?;
+            this.store_element(data_ptr, element_llvm, index, address)?;
+            Ok(())
+        })?;
+
+        self.array_struct(data_ptr, count_i64)
     }
 
     /// The `handle :: Num` field of a `Connection`/`Server` receiver — the raw id every
@@ -1463,7 +1845,7 @@ impl<'ctx> CodeGenerator<'ctx> {
     /// an outer record variable's name would otherwise still read as that record.
     pub(super) fn receiver_type_name<'a>(&'a self, expression: &'a Expression) -> Option<&'a str> {
         // Any record/sum-typed receiver — a variable, a sum constructor call
-        // (`Rect(6, 7).area()`), a field read, a match result — dispatches by its type name.
+        // (`Rect({ 6, 7 }).area()`), a field read, a match result — dispatches by its type name.
         if let Some(ty) = self.oracle.expression_type(expression) {
             return match ty {
                 Type::Named { name, .. } | Type::Sum { name, .. } => Some(name),

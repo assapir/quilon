@@ -72,8 +72,10 @@ fn a_text_match_is_covered_by_its_binding_arm() {
 
 #[test]
 fn a_sum_match_missing_a_variant_names_it() {
+    // `:=`, so narrowing leaves `c` alone and this stays an ordinary (unnarrowed)
+    // exhaustiveness gap rather than a narrowing-ruled-out arm.
     let message = type_error_message(
-        "Color = Red / Green / Blue\n^ = () -> Num => <\n  c :: Color = Green\n  c ? | Red => 0 | Green => 1\n>",
+        "Color = Red / Green / Blue\n^ = () -> Num => <\n  c :: Color := Green\n  c ? | Red => 0 | Green => 1\n>",
     );
     assert!(
         message.contains("this match on Color is not exhaustive"),
@@ -82,6 +84,44 @@ fn a_sum_match_missing_a_variant_names_it() {
     assert!(
         message.contains("'Blue'"),
         "the diagnostic must name the uncovered variant, got: {message}"
+    );
+}
+
+#[test]
+fn a_match_on_a_mutable_binding_stays_exhaustive_over_the_full_sum() {
+    // `:=` is never narrowed: construction proves nothing about it, so the match below is
+    // missing BOTH variants (a mutable binding starts fully unnarrowed, same as always),
+    // and the diagnostic explains why in a help line.
+    let message = type_error_message("^ = () -> Num => <\n  m := Ok(5)\n  m ? | Ok(x) => x\n>");
+    assert!(
+        message.contains("mutable (`:=`)"),
+        "a non-exhaustive match on a `:=` binding must say it is never narrowed, got: {message}"
+    );
+}
+
+#[test]
+fn a_dead_constructor_arm_after_narrowing_names_the_binding_and_variant() {
+    let message = type_error_message(
+        "^ = () -> Num => <\n  v = Ok(21)\n  v ? | Ok(x) => x | NotOk(e) => 0\n>",
+    );
+    assert!(
+        message.contains("'v' is always 'Ok'"),
+        "the diagnostic must name the binding and what it is always, got: {message}"
+    );
+    assert!(
+        message.contains("'NotOk'"),
+        "the diagnostic must name the unreachable arm's variant, got: {message}"
+    );
+}
+
+#[test]
+fn a_dead_catch_all_arm_after_narrowing_is_a_compile_error() {
+    let message = type_error_message(
+        "Color = Red / Green / Blue\n^ = () -> Num => <\n  c = Red\n  c ? | Red => 0 | _ => 1\n>",
+    );
+    assert!(
+        message.contains("'c' is always 'Red'") && message.contains("never reached"),
+        "the diagnostic must explain the dead catch-all, got: {message}"
     );
 }
 
@@ -115,8 +155,9 @@ fn a_constructor_pattern_on_a_non_sum_is_a_compile_error() {
 /// also pins the check below against LLVM's renaming of a repeated block name.
 #[test]
 fn the_no_match_edge_aborts_instead_of_loading_an_unwritten_slot() {
+    // `:=`, so narrowing leaves `c` alone and both matches keep both arms live.
     let ir = emit_ir(
-        "Color = Red / Green\n^ = () -> Num => <\n  c :: Color = Green\n  first = c ? | Red => 0 | Green => 1\n  second = c ? | Red => 2 | Green => 3\n  first + second\n>",
+        "Color = Red / Green\n^ = () -> Num => <\n  c :: Color := Green\n  first = c ? | Red => 0 | Green => 1\n  second = c ? | Red => 2 | Green => 3\n  first + second\n>",
     );
     assert_eq!(
         ir.matches("call void @__match_fail(").count(),

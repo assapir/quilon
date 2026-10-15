@@ -111,8 +111,9 @@ Quilon, reached through the connection the accept loop hands the handler.
 
 | Function | Effect |
 |----------|--------|
-| `net.@tcpServe(address :: Text, handler :: (Connection) -> $) -> Server` | Bind `address` — `host:port`, exactly the form `net.@tcpRequest` accepts (a numeric IPv4/IPv6 address, an IPv6 literal in brackets, or a hostname resolved the same way, on the runtime's blocking-call pool) — listen, and return the `Server` handle at once — never deferred. The accept loop is a launch of the enclosing `< >` block, joined by that block's own [block-scope join](../concurrency/README.md#implemented-primitives), so `^` stays alive while the server runs; a program that never kills its server runs until the process does. Each accepted connection runs `handler` on its own fiber. A bind failure — the address does not parse or resolve, the port is taken, or nothing but a privileged process may bind it — is fatal, naming the address as written. |
+| `net.@tcpServe(address :: Text, handler :: (Connection) -> $) -> Server` | Bind `address` — `host:port`, exactly the form `net.@tcpRequest` accepts (a numeric IPv4/IPv6 address, an IPv6 literal in brackets, or a hostname resolved the same way, on the runtime's blocking-call pool) — listen, and return the `Server` handle at once — never deferred. The accept loop is a launch of the enclosing `< >` block, joined by that block's own [block-scope join](../concurrency/README.md#implemented-primitives), so `^` stays alive while the server runs; a program that never kills its server runs until the process does. Each accepted connection runs `handler` on its own fiber. A bind failure — the address does not parse or resolve, the port is taken, or nothing but a privileged process may bind it — is fatal, naming the address as written. This form always means one `Plain` listener. |
 | `net.@tcpServe(address :: Address, handler :: (Connection) -> $) -> Server` | As above, given the `Address` a `server.address()` reported. |
+| `net.@tcpServe(listeners :: []Listener, handler :: (Connection) -> $) -> Server` | Bind every `Listener` in `listeners` — `Plain` or `TLS` per its own `transport`/`identity` — and return ONE `Server` handle: `kill` stops every listener, `addresses()` reports all of their bound addresses. See [TLS listeners](#tls-listeners). |
 
 `net.Connection`, the value `handler` is called with, one per accepted peer:
 
@@ -129,7 +130,8 @@ Quilon, reached through the connection the accept loop hands the handler.
 |--------|--------|
 | `server.kill(seconds :: Num) -> $` | Stop accepting, wait up to `seconds` for in-flight handlers to finish, then close any connection still open and the listener itself. Parks the calling fiber until every one of that has happened. |
 | `server.kill() -> $` | `kill` with the default 5-second grace period. |
-| `server.address() -> Address` | The address this server bound. Binding port `0` takes any free port the OS assigns, and this is how a program learns which one. |
+| `server.address() -> Address` | The address this server bound. Binding port `0` takes any free port the OS assigns, and this is how a program learns which one. Fatal on a server with more than one listener (see [TLS listeners](#tls-listeners)) — call `addresses()` instead. |
+| `server.addresses() -> []Address` | Every listener's bound address, in the order `net.@tcpServe`/`http.@serve` was given them — a one-element list for a server with a single listener. |
 
 `net.Address`, `server.address()`'s own value:
 
@@ -163,3 +165,58 @@ Each accepted connection runs on its own fiber, so two peers exchanging bytes wi
 server at once make progress independently — see the
 [Concurrency model](../concurrency/README.md). `examples/tcp_echo.qn` is the runnable
 version of the program above.
+
+## TLS listeners
+
+`Listener`, one socket a server binds, and `Identity`, its TLS identity:
+
+| Type | Effect |
+|------|--------|
+| `Listener { address :: Text, transport :: Transport, identity :: Identity }` | `address` is `host:port`, exactly the form `net.@tcpServe` otherwise accepts. |
+| `Identity = None / Files({ certificate :: Text, key :: Text }) / Base64({ certificate :: Text, key :: Text })` | `None` for a `Plain` listener. `Files`'s `certificate`/`key` are PEM file paths read when the listener starts; the certificate file may hold a whole chain, leaf first. `Base64`'s fields are the base64 of each of those same two PEM files, one line each (`base64 -w0 fullchain.pem`), for an environment variable or a secrets manager — it decodes to PEM and goes through the same parser. Either way, the private key may be PKCS#8, SEC1, or PKCS#1. |
+
+`transport = TLS` with `identity = None`, or `transport = Plain` with an identity other
+than `None`, is a compile error ([QN363](../tooling/errors/semantics.md#qn363--mismatched-listener-transport-and-identity))
+on a `Listener` written as a literal; on one assembled another way (from a variable, a
+function's return value), it is fatal when the listener starts
+([QN512](../tooling/errors/runtime.md#qn512--mismatched-listener-transport-and-identity-at-startup)).
+An identity that cannot be loaded — a missing file, base64 that does not decode, bytes
+that are not a valid certificate chain or private key, or a key that does not match the
+certificate — is fatal the same way, naming the listener's address and a reason
+([QN513](../tooling/errors/runtime.md#qn513--tls-identity-failed-to-load)).
+
+`net.@tcpServe`'s listener-list form builds each `TLS` listener's `ServerConfig` ONCE,
+when the listener starts, from its `identity` — never rebuilt per connection. Each
+accepted connection then runs rustls's server-side handshake — the same split as the
+client's own TLS (crypto on the runtime's blocking-call pool, record I/O on the reactor,
+encryption/decryption inline afterward) — before `handler` ever sees it. The handshake is
+bounded by 5 seconds (`http.@serve`'s own listener-list form uses `ServerOptions
+.idleTimeout` instead — see [the HTTP server](http.md#tls-listeners)): a client that
+connects and sends nothing is closed once that passes, the same as any other failed
+handshake, with `handler` never called. Past the handshake, a `TLS` connection is handed
+to `handler` as the very same `Connection` every `Plain` one is: `@read`/`@write`/`close`
+work unchanged.
+
+```quilon
+<< core.net
+<< core.test
+
+respond = (connection :: net.Connection) -> $ => <
+  connection.@write(connection.@read())
+  $
+>
+
+^ = () -> $ => <
+  counter = net.@tcpServe(
+    [
+      net.Listener { address = "127.0.0.1:0", transport = net.Plain, identity = net.None },
+      net.Listener {
+        address = "127.0.0.1:0", transport = net.TLS,
+        identity = net.Files({ certificate = "cert.pem", key = "key.pem" })
+      }
+    ],
+    connection => respond(connection))
+  assert(counter.addresses().size, equals(2))
+  counter.kill(1)
+>
+```

@@ -386,7 +386,7 @@ Declare one parameter: `+ = (other :: Point) -> Point => < … >`.
 ```
 
 Pass the value and a matcher: `assert(1, equals(1))`. The matchers are `equals`,
-`contains`, `not`, `isOk`, `isNotOk`.
+`contains`, `not`, `isOk`, `isNotOk`, `is`.
 
 ### QN333 — `expect` outside a test case
 
@@ -411,7 +411,8 @@ Pass the matcher's arguments: `equals(1)`.
 ### QN335 — matcher on a type outside its reach
 
 A matcher meets a type outside its reach: `equals` on a type without a `==` member,
-`contains` on anything but `Text` or an array, `isOk`/`isNotOk` on anything but a `Result`.
+`contains` on anything but `Text` or an array, `isOk`/`isNotOk`/`is` on anything but a
+sum type.
 
 ```quilon ignore
 ^ = () -> $ => < assert(1, contains(1)) >
@@ -552,17 +553,17 @@ Write `scale` as a method: `scale = (n :: Num) -> Num => < n * 2 >`.
 
 ### QN346 — unsupported sum-type payload
 
-A sum-type variant payload of a type outside the accepted set: `Num`, `Text`, `Bool`, `$`,
-a declared record, a declared sum (the enclosing one included), or an array/map of one of
-those. The message names the variant, the payload's position, and the type it resolved to.
+A sum-type variant's payload is a type outside the accepted set: `Num`, `Text`, `Bool`,
+`$`, a declared record, a declared sum (the enclosing one included), an anonymous record
+(named or positional) of one of those, or an array/map of one of those. The message names
+the variant and the type it resolved to.
 
 ```quilon ignore
 Mystery = Wrap(Nope) / Empty
 ^ = () -> Num => < 0 >
 ```
 
-`Nope` names nothing declared above `Mystery`. A payload is Num, Text, Bool, $, a declared
-record, a declared sum, or an array/map of one of those.
+`Nope` names nothing declared above `Mystery`.
 
 ### QN347 — atomic binding declared without `:=`
 
@@ -840,3 +841,116 @@ Two arms of the same trap name the same `process.Signal` variant.
 ```
 
 A trap has at most one arm per signal — remove or merge the duplicate.
+
+### QN359 — positional access on a named record
+
+`.0`/`.1`/… reads a position, which only a positional record (`{ Num, Num }`) has. A
+named record — anonymous (`{ name :: Text }`) or a declared type (`User`) — reads its
+fields by name.
+
+```quilon ignore
+User = { name :: Text, age :: Num }
+^ = () -> Num => <
+  u = User { name = "Alice", age = 30 }
+  u.0
+>
+```
+
+Read the field by name (`u.name`), or declare the record positional if that's what was
+meant. A spread update's numbered override hits the same error when its source is named:
+`{<-u, 0 = 1}` for the `u` above.
+
+### QN360 — record position out of range
+
+A positional record access named a position past the record's last field.
+
+```quilon ignore
+^ = () -> Num => <
+  pair = { 6, 7 }
+  pair.2
+>
+```
+
+`pair` has positions `0` and `1` — use one of those, or add another field to the
+record's type.
+
+### QN361 — record update overriding a position past the spread source
+
+A spread update's numbered entry (`0 = 9`) overrides an existing position; it never adds
+one, the way a named override may.
+
+```quilon ignore
+^ = () -> Num => <
+  pair = { 6, 7 }
+  updated = {<-pair, 2 = 8}
+  updated.0
+>
+```
+
+`pair` has positions `0` and `1` — override one of those.
+
+### QN362 — more than one positional spread in a record literal
+
+A positional record takes one spread. A named source may still be spread more than
+once in one literal (that has always worked); this rule is only for a positional one.
+
+```quilon ignore
+^ = () -> Num => <
+  p = { 6, 7 }
+  q = { 8, 9 }
+  both = {<-p, <-q}
+  both.0
+>
+```
+
+Spread one source, then override positions after it: `{<-p, 0 = 9}`.
+
+### QN363 — mismatched listener transport and identity
+
+A literal `core.net.Listener { ... }` whose `transport` and `identity` are written as
+one of `core.net`'s own constructors disagree: `transport = TLS` with `identity =
+None`, or `transport = Plain` with an identity other than `None`.
+
+```quilon ignore
+<< core.net
+
+listener = net.Listener { address = ":443", transport = net.TLS, identity = net.None }
+
+^ = () -> Num => < 0 >
+```
+
+Set `identity = net.Files({ certificate, key })` (or `net.Base64({ certificate, key })`)
+for a `TLS` listener, or `identity = net.None` for a `Plain` one. The same
+disagreement on a `Listener` built another way — assembled from a variable, say, rather
+than written out in place — is not caught here; it is fatal when that listener starts
+(see [QN512](runtime.md#qn512--mismatched-listener-transport-and-identity-at-startup)).
+
+### QN364 — assertion a proven variant already rules out
+
+An `assert`/`expect` asks whether a binding is a variant that narrowing already proved
+it is not — the assertion could never hold. See
+[narrowing](../../types/sum-types.md#narrowing--bindings).
+
+```quilon ignore
+^ = () -> $ => <
+  v = Ok(5)
+  assert(v, isNotOk())
+>
+```
+
+Remove the assertion, or fix whichever earlier proof narrowed the binding this way.
+
+### QN365 — match arm a proven variant already rules out
+
+A match arm — a constructor pattern, or a `_`/bound catch-all — covers only a variant
+narrowing already proved the scrutinee is not. See
+[narrowing](../../types/sum-types.md#narrowing--bindings).
+
+```quilon ignore
+^ = () -> $ => <
+  v = Ok(5)
+  v ? | Ok(x) => x | NotOk(e) => 0
+>
+```
+
+Remove the arm — `v` is always `Ok` here — or fix whichever earlier proof narrowed it.

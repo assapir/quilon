@@ -13,6 +13,7 @@
 mod common;
 
 use common::{connect_with_timeout, ensure_runtime_lib, read_announced_port};
+use quilon::diagnostic::codes::Code;
 use std::io::{Read, Write};
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
@@ -193,16 +194,21 @@ fn jit_tcp_serve_binds_through_the_address_overload() {
     );
 }
 
-#[test]
-fn aot_tcp_serve_echoes_then_kill_stops_the_server() {
-    let Some(linker) = ["clang", "gcc"].into_iter().find(|tool| {
+/// The first of `clang`/`gcc` found on `PATH`, or `None` if neither is.
+fn available_linker() -> Option<&'static str> {
+    ["clang", "gcc"].into_iter().find(|tool| {
         Command::new(tool)
             .arg("--version")
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .status()
             .is_ok()
-    }) else {
+    })
+}
+
+#[test]
+fn aot_tcp_serve_echoes_then_kill_stops_the_server() {
+    let Some(linker) = available_linker() else {
         eprintln!("skipping AOT @tcpServe gate: need a linker (`clang` or `gcc`) on PATH");
         return;
     };
@@ -242,5 +248,103 @@ fn aot_tcp_serve_echoes_then_kill_stops_the_server() {
         wait_bounded(child, Duration::from_secs(15)),
         0,
         "native AOT: the server's own process exits 0 once kill has settled the accept loop"
+    );
+}
+
+/// One `net.@tcpServe` left running forever, then a fatal bind failure on a second.
+fn program_with_a_fatal_bind_failure_and_a_live_server() -> String {
+    r#"
+<< core.net
+
+^ = () -> Num => <
+  first = net.@tcpServe("127.0.0.1:0", connection => $)
+  second = net.@tcpServe(first.address(), connection => $)
+  0
+>
+"#
+    .to_string()
+}
+
+/// Asserts a clean exit: the bind failure's own code and report, no `panic`/`aborting`.
+fn assert_fatal_bind_failure_exited_cleanly(stderr: &str, code: Option<i32>) {
+    assert_eq!(
+        code,
+        Some(Code::BindFailed.family()),
+        "a fatal bind failure with a live server must exit with its documented code, got: \
+         {stderr}"
+    );
+    assert!(
+        stderr.contains(&format!("error[{}]", Code::BindFailed)),
+        "stderr must carry the bind failure's own report, got: {stderr}"
+    );
+    assert!(
+        !stderr.contains("panic") && !stderr.contains("aborting"),
+        "a fatal exit with a live accept-loop fiber must not panic/abort while tearing down \
+         the scheduler, got: {stderr}"
+    );
+}
+
+#[test]
+fn jit_a_fatal_bind_failure_with_a_live_server_exits_cleanly() {
+    let file = temp_ql(
+        "jit_fatal_live_server",
+        &program_with_a_fatal_bind_failure_and_a_live_server(),
+    );
+
+    let output = Command::new(env!("CARGO_BIN_EXE_quilon"))
+        .args(["run", file.path().to_str().unwrap()])
+        .stdin(Stdio::null())
+        .output()
+        .expect("spawn quilon run");
+
+    assert_fatal_bind_failure_exited_cleanly(
+        &String::from_utf8_lossy(&output.stderr),
+        output.status.code(),
+    );
+}
+
+#[test]
+fn aot_a_fatal_bind_failure_with_a_live_server_exits_cleanly() {
+    let Some(linker) = available_linker() else {
+        eprintln!(
+            "skipping AOT fatal-exit-with-a-live-server gate: need a linker (`clang` or \
+             `gcc`) on PATH"
+        );
+        return;
+    };
+
+    let quilon = env!("CARGO_BIN_EXE_quilon");
+    ensure_runtime_lib(Path::new(quilon).parent().expect("binary has a parent dir"));
+
+    let dir = tempfile::Builder::new()
+        .prefix("quilon_tcp_serve_fatal_live_server_aot_")
+        .tempdir()
+        .expect("create temp dir");
+    let source = dir.path().join("fatal.qn");
+    std::fs::write(
+        &source,
+        program_with_a_fatal_bind_failure_and_a_live_server(),
+    )
+    .expect("write temp .qn");
+    let binary = dir.path().join("fatal");
+    let build = Command::new(quilon)
+        .args(["build", source.to_str().unwrap(), "--linker", linker])
+        .args(["-o", binary.to_str().unwrap()])
+        .output()
+        .expect("run quilon build");
+    assert!(
+        build.status.success(),
+        "`quilon build` failed: {}",
+        String::from_utf8_lossy(&build.stderr)
+    );
+
+    let output = Command::new(&binary)
+        .stdin(Stdio::null())
+        .output()
+        .expect("run the built fatal-exit binary");
+
+    assert_fatal_bind_failure_exited_cleanly(
+        &String::from_utf8_lossy(&output.stderr),
+        output.status.code(),
     );
 }

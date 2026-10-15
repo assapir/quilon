@@ -546,7 +546,7 @@ Color = Red / Green / Blue
 
 ^ = () -> Num => <
   c :: Color = Green
-  outcome :: Result = Ok(42)
+  outcome :: Result := Ok(42)
   outcome ?
     | Ok(x)    => x
     | NotOk(e) => 0
@@ -653,7 +653,7 @@ fn debug_build_emits_a_union_layout_for_heterogeneous_sum_payloads() {
 Mixed = A(Num) / B(Text)
 
 ^ = () -> Num => <
-  m :: Mixed = A(7)
+  m :: Mixed := A(7)
   m ?
     | A(n) => n
     | B(t) => t.length
@@ -1299,7 +1299,7 @@ fn debug_build_declares_a_match_payload_binding() {
     // match on line 3.
     let src = "\
 ^ = () -> Num => <
-  outcome :: Result = Ok(\"hello\")
+  outcome :: Result := Ok(\"hello\")
   label :: Text = outcome ?
     | Ok(page) => page
     | NotOk(e) => \"fallback\"

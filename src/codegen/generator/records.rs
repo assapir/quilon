@@ -31,9 +31,29 @@ impl<'ctx> CodeGenerator<'ctx> {
             .collect()
     }
 
+    /// Reorder an anonymous record literal's `fields` to the canonical order the type
+    /// oracle assigned it — a named anonymous record's field order isn't part of its
+    /// identity (`{ b = "x", a = 1 }` and `{ a = 1, b = "x" }` are the same type), so two
+    /// differently-written literals of that shape must still land in the same struct
+    /// layout. Falls back to the written order with no oracle entry (IR-only tests).
+    fn record_literal_fields_in_canonical_order(
+        &self,
+        record_expression: &Expression,
+        fields: &[(String, Expression)],
+    ) -> Vec<(String, Expression)> {
+        let Some(Type::Record(canonical)) = self.oracle.expression_type(record_expression) else {
+            return fields.to_vec();
+        };
+        canonical
+            .iter()
+            .filter_map(|(name, _)| fields.iter().find(|(n, _)| n == name).cloned())
+            .collect()
+    }
+
     /// Lower a record literal, routing a functional-update literal (`{<-p, x = 9}`,
-    /// containing one or more `<-` spreads) to [`generate_record_update`] and an ordinary
-    /// literal to [`generate_record`].
+    /// containing one or more `<-` spreads) to [`generate_record_update`] (which already
+    /// builds from the oracle's canonical order) and an ordinary literal to
+    /// [`generate_record`], reordered to that same canonical order first.
     pub(super) fn generate_record_expression(
         &mut self,
         record_expression: &Expression,
@@ -45,7 +65,8 @@ impl<'ctx> CodeGenerator<'ctx> {
         {
             self.generate_record_update(record_expression, fields)
         } else {
-            self.generate_record(fields)
+            let ordered = self.record_literal_fields_in_canonical_order(record_expression, fields);
+            self.generate_record(&ordered)
         }
     }
 

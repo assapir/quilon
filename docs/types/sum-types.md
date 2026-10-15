@@ -10,20 +10,23 @@ A sum type (tagged union / enum) is a set of named **variants**, declared with `
 as the separator. Variants may be **nullary** or carry a payload:
 ```quilon
 Color = Red / Green / Blue                 ~ three nullary variants
-Shape = Circle(Num) / Rect(Num, Num)       ~ variants with payloads
+Shape = Circle(Num) / Rect({ Num, Num })   ~ variants with payloads
 ```
 - **A payload is** `Num`, `Text`, `Bool`, `$` (Unit), a declared record, a declared sum —
-  the enclosing one included — or an array/map of one of those. A variant may take
-  several payload fields (e.g. `Rect(Num, Num)`). A `$` payload carries no value — the
-  variant's data is its identity (see `Ok($)` below).
+  the enclosing one included — an anonymous record (named or positional), or an
+  array/map of one of those. A `$` payload carries no value — the variant's data is its
+  identity (see `Ok($)` below).
+- **A variant carries at most one payload.** Several values travel together as one
+  record: `Rect({ Num, Num })` constructs as `Rect({ 6, 7 })` and reads back by
+  position, `p.0 * p.1`. A variant's parenthesized list naming more than one payload
+  type, `Rect(Num, Num)`, is a compile error.
 - A **named record** payload lets a sum carry structured data — `Method = Get / Post(Body)`
   where `Body` is a record declared **above** the sum. A match arm binds it at its full
   type, so `Post(b) => b.payload` reads its fields and calls its methods. See
   `examples/nested_composites.qn` for composing sums with records.
-- **Each payload position stands on its own**: one variant's field there may be `Num`
-  while another's is `Text` in the same declaration — `Mixed = A(Num) / B(Text)` and
-  `C(Num, Text)`, sharing neither position with `A`/`B`, all compile. `$` costs nothing
-  extra at a shared position: `Done($) / Pending(Num)` compiles the same way.
+- **Two variants may carry different concrete types in their one payload**: `Mixed =
+  A(Num) / B(Text)` compiles, each variant reading its own slot through its own typed
+  view. `$` costs nothing extra there: `Done($) / Pending(Num)` compiles the same way.
 - **A sum may name itself as a payload**, directly (`Tree = Leaf / Node(Tree)`) or
   through an array/map (`Forest = Leaf(Num) / Branch([]Forest)`). A direct self-payload
   is a pointer to a GC cell holding the sum value; through an array or map it sits
@@ -43,8 +46,8 @@ Shape = Circle(Num) / Rect(Num, Num)       ~ variants with payloads
 ```quilon ignore
 area = (s :: Shape) -> Num => <
   s ?
-    | Circle(r)  => 3 * r * r
-    | Rect(w, h) => w * h          ~ binds both payload fields
+    | Circle(r) => 3 * r * r
+    | Rect(p)   => p.0 * p.1        ~ binds the record payload, read by position
 >
 ```
 A match over a sum type **is exhaustive**: it covers every variant, or ends with a `_`
@@ -59,12 +62,12 @@ typically matches on it. A member is a named method, an
 — a sum has no fields, so a field-like entry there is a compile error, and its methods are
 always `=` (see [Mutation](../mutation.md)).
 ```quilon
-Shape = Circle(Num) / Rect(Num, Num) {
-  area = () -> Num => < it ? | Circle(r) => 3 * r * r | Rect(w, h) => w * h >
+Shape = Circle(Num) / Rect({ Num, Num }) {
+  area = () -> Num => < it ? | Circle(r) => 3 * r * r | Rect(p) => p.0 * p.1 >
   == = (other :: Shape) -> Bool => < it.area() == other.area() >  ~ operator member
-  ` = () -> Text => < it ? | Circle(r) => "Circle(`r`)" | Rect(w, h) => "Rect(`w`x`h`)" >
+  ` = () -> Text => < it ? | Circle(r) => "Circle(`r`)" | Rect(p) => "Rect(`p.0`x`p.1`)" >
 }
-Rect(6, 7).area()                ~ 42
+Rect({ 6, 7 }).area()            ~ 42
 ```
 (See `examples/sum_methods.qn`.)
 
@@ -76,9 +79,7 @@ Result = Ok(...) / NotOk(...)    ~ predefined; `Ok` = success, `NotOk` = failure
 Use it exactly like any other sum type:
 ```quilon
 v = Ok(21)
-doubled = v ?
-  | Ok(x)    => x * 2
-  | NotOk(e) => 0
+doubled = v ? | Ok(x) => x * 2    ~ `v` is narrowed to `Ok` by its own construction
 ```
 Payloads work end-to-end for `Num`, `Bool`, and `Text` (e.g. `Ok("done")` /
 `NotOk("error")`). A **pattern-bound payload carries its concrete type**, so it is
@@ -121,6 +122,68 @@ A constructor pattern's argument must be **irrefutable** — a binding (`Ok(x)`)
 wildcard (`Ok(_)`). A literal or nested constructor there (`Ok(1)`, `Ok(Ok(x))`) is a
 compile error: such a pattern would silently match *any* payload of the variant. Bind the
 payload and compare it in the arm body instead (`Ok(n) => n == 1 ? … : …`).
+
+## Narrowing `=` bindings
+
+The checker tracks, for an `=` binding or a parameter of a sum type, the set of variants
+it can still be — and a match over a narrowed one needs arms only for those:
+```quilon
+v = Ok(5)
+doubled = v ? | Ok(x) => x * 2    ~ exhaustive: `v` is narrowed to `Ok`
+```
+A parameter narrows the same way (a function's, a method's, or a lambda's), from a proof
+made inside the body:
+```quilon
+Shape = Circle(Num) / Rect({ Num, Num }) / Dot
+pick = (s :: Shape) -> Num => <
+  assert(s, not(is(Dot)))
+  s ? | Circle(r) => r | Rect(p) => p.0
+>
+```
+The fact holds from the point it is established to the end of the enclosing block,
+including inside a lambda written after that point (a lambda written before it does not
+see it); narrowing established inside a branch or a match arm stays inside that body.
+
+**Three things narrow a binding or parameter:**
+- **construction** — `v = Ok(5)`, `s = Circle(5)` (an `=` binding only);
+- **`assert`/`expect`** with `isOk()`, `isNotOk()`, the variant matcher `is(Variant)`
+  (every sum type, `Result` included — see
+  [the matchers](../corelib/test/README.md#the-matchers)), or `not(...)` around any of
+  them;
+- **inside a match arm** — `s ? | Circle(r) => …` knows `s` is `Circle` for that arm's
+  body, when `s` is a bare `=` binding or parameter.
+
+A call's result is never a known variant, whatever the callee's body returns — the proof
+stays local to where it was made:
+```quilon ignore
+loadConfig = () -> Result => < Ok({ port = 8080 }) >
+config = loadConfig()
+config.port                   ~ `config` carries no narrowing yet — needs a proof below
+assert(config, isOk())
+```
+The binding keeps its sum type throughout: passing, returning, and storing it are
+unchanged. Only what a match over it needs to cover narrows.
+
+An arm — a constructor pattern, or a `_`/bound catch-all — that can only cover a variant
+already ruled out is a compile error
+([QN365](../tooling/errors/semantics.md#qn365--match-arm-a-proven-variant-already-rules-out)),
+and so is an `assert`/`expect` that could never hold
+([QN364](../tooling/errors/semantics.md#qn364--assertion-a-proven-variant-already-rules-out)):
+```quilon ignore
+v = Ok(21)
+v ? | Ok(x) => x | NotOk(e) => 0    ~ error: `v` is always `Ok` here
+assert(v, isNotOk())                 ~ error: `v` is always `Ok`
+```
+An assertion that always HOLDS stays legal — it is redundant, not an error.
+
+**A `:=` binding is never narrowed** — construction, `assert`/`expect`, and a match arm
+all leave it alone. Asserting on one stays legal, an ordinary runtime check; a match over
+one stays exhaustive over its full sum, as it does without narrowing at all:
+```quilon ignore
+m := Ok(5)
+assert(m, isOk())      ~ fine — an ordinary runtime assertion
+m ? | Ok(x) => x        ~ non-exhaustive — `m`'s variant is not tracked
+```
 
 ## `/` — sum-type separator vs. division
 `/` is the division operator **and** the sum-type variant separator. Quilon tells them

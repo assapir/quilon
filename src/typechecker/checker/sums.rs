@@ -125,6 +125,31 @@ impl TypeChecker {
         specialized
     }
 
+    /// The variant `value` directly constructs, if `value` is literally `Variant(...)` (a
+    /// payload-bearing constructor call) or a bare nullary variant name, and `ty` — the
+    /// already-inferred, already-compatible type of `value` — is that variant's sum. This
+    /// is construction, the first of narrowing's three sources (see
+    /// `docs/types/sum-types.md`): `v = Ok(5)` proves `v` is `Ok` from here on, the same
+    /// way `v = loadConfig()` proves nothing (a call result is never a known variant, step
+    /// 3's own locked rule — see the issue this shipped under).
+    pub(super) fn constructed_variant(value: &Expression, ty: &Type) -> Option<String> {
+        let Type::Sum { variants, .. } = ty else {
+            return None;
+        };
+        let name = match value {
+            Expression::Call { function, .. } => match function.as_ref() {
+                Expression::Identifier { name, .. } => name,
+                _ => return None,
+            },
+            Expression::Identifier { name, .. } => name,
+            _ => return None,
+        };
+        variants
+            .iter()
+            .any(|variant| &variant.name == name)
+            .then(|| name.clone())
+    }
+
     /// Merge two already-compatible inferred types, preferring the more concrete payload
     /// at each sum-variant slot. For two `Type::Sum` of the same name and shape, each
     /// variant's payload fields become the concrete (non-`Generic`) side whenever either
@@ -209,6 +234,14 @@ impl TypeChecker {
                 Box::new(self.resolve_payload_type(key)),
                 Box::new(self.resolve_payload_type(value)),
             ),
+            // A multi-value payload's own fields may themselves name the enclosing sum
+            // (`Node({ Tree, Num, Tree })`) — resolve each the same way.
+            Type::Record(fields) => Type::Record(
+                fields
+                    .iter()
+                    .map(|(name, field_type)| (name.clone(), self.resolve_payload_type(field_type)))
+                    .collect(),
+            ),
             _ => field_type.clone(),
         }
     }
@@ -251,6 +284,13 @@ impl TypeChecker {
                 Box::new(self.resolve_type(value)),
             ),
             Type::Set(elem) => Type::Set(Box::new(self.resolve_type(elem))),
+            // A record annotation's field types need resolving too.
+            Type::Record(fields) => Type::Record(
+                fields
+                    .iter()
+                    .map(|(name, field_type)| (name.clone(), self.resolve_type(field_type)))
+                    .collect(),
+            ),
             _ => ty.clone(),
         }
     }
