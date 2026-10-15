@@ -96,11 +96,19 @@ atomic value is rejected — mutation goes only through its setters.
 allowed, at the top level and inside a block. `@` marks the declaration only; every read and
 reassignment after it — including one that reads the binding's own current value, as in
 `hits := hits + 1` — is bare, the same declaration/reassignment rule a plain `:=` binding
-already follows. An atomic binding's reassignment executes as a whole: the right side may
-not wait on a deferred value, so the statement never parks part-way, and the compiler
-rejects one that would (force it into a plain `=` binding first, then reassign). Mutation
+already follows. An atomic binding's reassignment executes as a whole: the right side waits
+on nothing, through any call, so the statement never parks part-way, and the compiler
+rejects one that would (force the value into a plain `=` binding first, then reassign) —
+naming the first function on the call path that waits, however many functions
+away it is. Mutation
 *inside* a bound record still follows the record's own rules; cross-field invariants belong
 to an atomic type `T = @{ … }`. (See `examples/atomic_binding.qn`.)
+
+Across workers, a reassignment's whole right-side evaluation and store run as one step with
+respect to every other worker — the read-modify-write `hits := hits + 1` above never loses
+an update to a sibling connection's handler on a different worker — and a plain read never
+observes a torn write, whatever the binding's own representation (see
+`docs/concurrency/runtime.md` for the mechanism).
 
 The checker enforces the sharing rule against `net.@tcpServe`'s and `http.@serve`'s
 `handler` argument — the first Quilon code that runs on more than one fiber: a non-atomic

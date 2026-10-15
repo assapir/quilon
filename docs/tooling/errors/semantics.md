@@ -618,6 +618,40 @@ bump = () -> $ => <
 ^ = () -> $ => < bump() >
 ```
 
+The wait need not be in the right side's own expression — a call that reaches one,
+however many functions away, is rejected the same way, naming the function that waits:
+
+```quilon ignore
+<< core.io
+
+@a := 0
+f = () -> Num => <
+  line = io.@readStdin()
+  line.length
+>
+^ = () -> Num => <
+  a := a + f()
+  a
+>
+```
+
+Force the value into a plain `=` binding before the call reaches it, the same fix as above:
+
+```quilon
+<< core.io
+
+@a := 0
+f = () -> Num => <
+  line = io.@readStdin()
+  line.length
+>
+^ = () -> Num => <
+  extra = f()
+  a := a + extra
+  a
+>
+```
+
 ### QN350 — `:=` value shared across fibers
 
 A non-atomic `:=` value — a top-level binding, or a local of the block the call sits in —

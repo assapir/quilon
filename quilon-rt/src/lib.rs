@@ -41,6 +41,7 @@
 //! Quilon binary needs no `libgc` on the machine that runs it.
 
 pub mod abort_trap;
+pub mod atomic_binding;
 pub mod bidi;
 pub mod blocking;
 pub mod collections;
@@ -66,6 +67,7 @@ pub mod trap;
 pub(crate) mod worker;
 
 pub use abort_trap::{__abort_trap_report, __abort_trap_run};
+pub use atomic_binding::{__atomic_begin, __atomic_end};
 pub use collections::{
     __map_get, __map_has, __map_key_a, __map_key_b, __map_len, __map_new, __map_remove, __map_set,
     __map_val, __set_add, __set_diff, __set_has, __set_intersect, __set_item_a, __set_item_b,
@@ -299,6 +301,8 @@ intrinsic_registry! {
     __abort_trap_run: extern "C" fn(*const c_void, *mut c_void) -> u8,
     __abort_trap_report: extern "C" fn() -> QnSlice,
     __trap_install: extern "C" fn(f64, *const c_void),
+    __atomic_begin: extern "C" fn(),
+    __atomic_end: extern "C" fn(),
 }
 
 // Shared unit-test support. `GC_LOCK` is taken by GC-touching tests in more than one

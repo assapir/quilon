@@ -48,12 +48,19 @@ const EVERY_INTRINSIC: &str = r#"
 ~ or a function) is initialized once before `^`, and its global is registered as a GC root.
 linkedGreeting = "linked " + "again"
 
+~ __atomic_begin / __atomic_end: an atomic binding's reassignment and read each wrap
+~ themselves in the binding's own lock.
+@smokeHits := 0
+
 ~ __trap_install: declaring a trap at all is what makes codegen emit the install call, no
 ~ signal ever needing to actually arrive for the link to need this symbol.
 !> | Interrupt(s) => $
 
 ^ = (args :: []Text, env :: [|Text => Text|]) -> $ => <
   assert(linkedGreeting.size > 0, equals(true))
+
+  smokeHits := smokeHits + 1
+  assert(smokeHits, equals(1))
 
   ~ __http_frame_body, via `body()` reading a canned reply.
   assert(http.Response { raw = "HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhello" }.body(),

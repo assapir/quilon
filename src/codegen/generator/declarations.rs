@@ -266,6 +266,13 @@ impl<'ctx> CodeGenerator<'ctx> {
         &mut self,
         declaration: &VariableDeclaration,
     ) -> Result<(), String> {
+        // `@name := …` — set only on the declaring occurrence (`ast/nodes.rs`'s own doc on
+        // `VariableDeclaration::atomic`). Record the name once here, in a set that persists
+        // across the whole program (unlike `boxed_vars`/`variables`, reset per function), so
+        // every LATER read or reassignment of it — wherever it is lowered — knows to lock.
+        if declaration.atomic {
+            self.atomic_bindings.insert(declaration.name.clone());
+        }
         // For a record literal, track its field names. Prefer the oracle's
         // inferred type (authoritative field names/order, and it expands `<-` spreads);
         // a functional-update whose result is a NAMED type also tracks that name so
@@ -326,6 +333,22 @@ impl<'ctx> CodeGenerator<'ctx> {
             return self.generate_top_level_binding(declaration, &inferred_qty);
         }
 
+        // A REASSIGNMENT (not the declaring occurrence — `declaration.atomic` is set only
+        // there) of a binding already known to be atomic. Its whole right side evaluates
+        // under the single, process-wide atomic-binding lock — the read-modify-write
+        // `docs/concurrency/README.md` promises as one step across workers
+        // (`hits := hits + 1`) — released only after the store below, whichever of the two
+        // paths performs it. The checker already guarantees this right side never parks, so
+        // the lock is never held across one. The right side may itself read this same
+        // binding, or a different atomic binding reached however indirectly — the runtime's
+        // lock is re-entrant per thread (`atomic_binding.rs`), so nothing here needs to
+        // suspend anything to avoid a self-deadlock.
+        let is_atomic_reassignment = !declaration.atomic
+            && declaration.mutable
+            && self.atomic_bindings.contains(&declaration.name);
+        if is_atomic_reassignment {
+            self.emit_atomic_lock_call("__atomic_begin")?;
+        }
         let value = self.generate_expression(&declaration.value)?;
         let var_type = value.get_type();
 
@@ -340,6 +363,9 @@ impl<'ctx> CodeGenerator<'ctx> {
             self.builder
                 .build_store(slot, value)
                 .map_err(ctx("Failed to build store"))?;
+            if is_atomic_reassignment {
+                self.emit_atomic_lock_call("__atomic_end")?;
+            }
             return Ok(());
         }
 
@@ -352,6 +378,9 @@ impl<'ctx> CodeGenerator<'ctx> {
             self.builder
                 .build_store(global.as_pointer_value(), value)
                 .map_err(ctx("Failed to build store"))?;
+            if is_atomic_reassignment {
+                self.emit_atomic_lock_call("__atomic_end")?;
+            }
             return Ok(());
         }
 

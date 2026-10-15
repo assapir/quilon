@@ -113,6 +113,28 @@ sequenceDiagram
   `GC_set_stackbottom` — so a collection triggered by another fiber's allocation
   keeps a socket-parked fiber's live objects.
 
+## Atomic bindings across workers
+
+An atomic binding's (`@name := …`, `docs/concurrency/README.md#sharing-state-across-fibers`)
+reassignment and read each take a lock around the operation, implemented in
+`quilon-rt/src/atomic_binding.rs`: ONE process-wide spin lock covers every atomic binding in
+the program, not a lock per binding — a reassignment's right side may read a different
+atomic binding (`a := b + 1`), and two workers doing that in opposite directions at the same
+instant would deadlock a per-binding scheme no fixed lock ordering closes off, since the
+nesting is dynamic (the right side may call a function that reads a third binding reached
+however indirectly). The code generator emits an argument-less `__atomic_begin()`/
+`__atomic_end()` call pair around the lowered reassignment (the whole right-side evaluation
+plus the store — the read-modify-write `hits := hits + 1` needs as one step) and around the
+lowered read (briefly, the load alone), gated on whether the name involved is a known
+atomic binding at all — a program with none emits no calls here. The lock is re-entrant per
+thread (a counter, incremented on `begin`, decremented on `end`, that acquires/releases the
+lock only at depth 0/1), so a read nested inside a reassignment's own right
+side — of the same binding or a different one — never re-acquires it. It is a spin lock, not
+a `Mutex`: the checker already guarantees a reassignment's right side never parks, so the
+section it protects is always short and never blocks on I/O. One shared lock means every
+atomic reassignment and read in the process, across every binding, serializes on it, even
+when two unrelated bindings are never touched by the same statement.
+
 ## Blocking calls
 
 This runtime routes two kinds of work through the blocking-call pool, off the reactor

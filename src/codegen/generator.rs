@@ -329,6 +329,14 @@ pub struct CodeGenerator<'ctx> {
     init_block: Option<inkwell::basic_block::BasicBlock<'ctx>>,
     // Signal trap arms as `(signal index, function)`, installed once `^`'s entry emits.
     trap_arms: Vec<(usize, FunctionValue<'ctx>)>,
+    // Every atomic binding's name seen so far, persisting across the whole program (NOT
+    // reset per function like `boxed_vars`/`variables`): the declaring occurrence
+    // (`declaration.atomic`, true only there) inserts its name here, and every later read
+    // or reassignment of that name — wherever in the program it is lowered — consults this
+    // set to know whether to wrap itself in the single, process-wide atomic-binding lock.
+    // The runtime's own lock is re-entrant per thread (see `atomic_binding.rs`), so a read
+    // nested inside a reassignment's right side needs no special-casing here any more.
+    atomic_bindings: std::collections::HashSet<String>,
 }
 
 /// The loop-lowering context for self-tail-call optimization of one function. Present
@@ -459,6 +467,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             init_function: None,
             init_block: None,
             trap_arms: Vec::new(),
+            atomic_bindings: std::collections::HashSet::new(),
         };
         codegen.register_builtin_sum_types();
         codegen.register_builtin_record_types();
