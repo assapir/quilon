@@ -6,9 +6,7 @@
 ^ = () -> $ => <
   Weather = Sunny(Num) / Stormy(Num)
   forecast = Sunny(70)
-  temperature = forecast ?
-    | Sunny(degrees) => degrees
-    | Stormy(gustSpeed) => gustSpeed
+  temperature = forecast ? | Sunny(degrees) => degrees   ~ narrowed to `Sunny`
   assert(temperature, equals(70))
 
   Wallet = {

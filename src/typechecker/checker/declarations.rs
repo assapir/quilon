@@ -424,6 +424,7 @@ impl TypeChecker {
         }
 
         for method in methods {
+            let narrowing_before = self.env.snapshot_narrowing();
             self.env.push_scope();
             let enclosing_declaration = self.enter_declaration();
             // A setter's receiver is mutable at every call site (owned by the enclosing
@@ -608,6 +609,7 @@ impl TypeChecker {
             }
 
             self.env.pop_scope();
+            self.env.restore_narrowing(narrowing_before);
             self.leave_declaration(enclosing_declaration);
 
             if crate::ast::is_operator_symbol(&method.name) {
@@ -948,6 +950,9 @@ impl TypeChecker {
             }
         } else {
             // `=` — immutable binding; a same-scope duplicate is a DuplicateDefinition.
+            // Construction narrows it (see `Self::constructed_variant`), computed before
+            // the type moves into the binding.
+            let constructed = Self::constructed_variant(&declaration.value, &final_type);
             self.env.define_binding(
                 declaration.name.clone(),
                 final_type,
@@ -956,6 +961,10 @@ impl TypeChecker {
                 value_aliasing,
                 declaration.span.clone(),
             )?;
+            if let Some(variant) = constructed {
+                self.env
+                    .narrow(&declaration.name, [variant].into_iter().collect());
+            }
         }
         // Every path above just (re)bound `declaration.name`, so this always lands on it.
         self.env
@@ -1162,7 +1171,10 @@ impl TypeChecker {
             }
         }
 
-        // Push scope for body type checking
+        // Push scope for body type checking. Snapshotted first: this body may run or not
+        // depending on the caller, so any variant it proves about a binding it captures
+        // (narrowing — see `Environment::snapshot_narrowing`) must not outlive it.
+        let narrowing_before = self.env.snapshot_narrowing();
         self.env.push_scope();
         let enclosing_declaration = self.enter_declaration();
 
@@ -1229,6 +1241,7 @@ impl TypeChecker {
         };
 
         self.env.pop_scope();
+        self.env.restore_narrowing(narrowing_before);
         self.leave_declaration(enclosing_declaration);
 
         // Verify the return type matches if annotated
@@ -1366,6 +1379,13 @@ impl TypeChecker {
         // no parameter of it — last included — can receive a call site.
         self.reject_unfillable_site_parameters("a lambda", parameters, &parameter_types, false)?;
 
+        // A lambda body may or may not ever run, so a fact it proves about a binding it
+        // captures (narrowing) is confined to it — the same rule a branch's body follows
+        // (see `Environment::snapshot_narrowing`). This is also what makes "written
+        // before/after" the narrowing point fall out for free: a lambda is checked right
+        // here, in program order, so one checked before a point sees the environment as it
+        // stood then, and one checked after sees whatever that point already established.
+        let narrowing_before = self.env.snapshot_narrowing();
         self.env.push_scope();
         let enclosing_declaration = self.enter_declaration();
         for (slot, (parameter, parameter_type)) in
@@ -1400,6 +1420,7 @@ impl TypeChecker {
         self.record_lambda_result_aliasing(body, &body_type);
 
         self.env.pop_scope();
+        self.env.restore_narrowing(narrowing_before);
         self.leave_declaration(enclosing_declaration);
 
         // Honor an explicit `-> Type` annotation; otherwise the body's inferred type is

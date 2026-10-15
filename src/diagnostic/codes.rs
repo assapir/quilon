@@ -146,6 +146,8 @@ codes! {
     RecordUpdatePositionOutOfRange = 361 => "record update overriding a position past the spread source",
     MultiplePositionalSpreads = 362 => "more than one positional spread in a record literal",
     ListenerIdentityMismatch = 363 => "mismatched listener transport and identity",
+    AssertionNeverHolds = 364 => "assertion a proven variant already rules out",
+    UnreachableMatchArm = 365 => "match arm a proven variant already rules out",
 
     // Family 4 — codegen and build
     CodegenFailed = 400 => "code generation failed",

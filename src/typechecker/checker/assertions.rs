@@ -32,7 +32,99 @@ impl TypeChecker {
         };
         let actual_type = self.infer_expression(actual)?;
         self.check_matcher(name, &actual_type, matcher)?;
+        self.narrow_from_assertion(actual, &actual_type, matcher, span)?;
         Ok(Type::Unit)
+    }
+
+    /// `assert`/`expect` is one of narrowing's three sources when `matcher` (through any
+    /// number of `not(...)` layers) asks about a variant — `isOk`/`isNotOk`/`is(Variant)` —
+    /// and `actual` is a bare `=` binding: a holding assertion proves the binding is one of
+    /// the variants the matcher allows, intersected with whatever was already known. Any
+    /// other matcher (`equals`, `contains`, `aborts`) narrows nothing. See
+    /// `docs/types/sum-types.md`'s narrowing section.
+    fn narrow_from_assertion(
+        &mut self,
+        actual: &Expression,
+        actual_type: &Type,
+        matcher: &Expression,
+        span: &Span,
+    ) -> Result<(), TypeError> {
+        let Expression::Identifier { name: binding, .. } = actual else {
+            return Ok(());
+        };
+        if !self.env.is_narrowable(binding) {
+            return Ok(());
+        }
+        let Type::Sum { variants, .. } = actual_type else {
+            return Ok(());
+        };
+        let Some(allowed) = Self::matcher_narrowing(matcher, variants) else {
+            return Ok(());
+        };
+        let full: std::collections::BTreeSet<String> = variants
+            .iter()
+            .map(|variant| variant.name.clone())
+            .collect();
+        let known = self.env.narrowed_variants(binding).cloned().unwrap_or(full);
+        let narrowed: std::collections::BTreeSet<String> =
+            known.intersection(&allowed).cloned().collect();
+        if narrowed.is_empty() {
+            return Err(TypeError::AssertionNeverHolds {
+                binding: binding.clone(),
+                known: known.into_iter().collect(),
+                span: span.clone(),
+            });
+        }
+        self.env.narrow(binding, narrowed);
+        Ok(())
+    }
+
+    /// The variant set `matcher` allows — `isOk`/`isNotOk`/`is(Variant)` name one;
+    /// `not(...)` complements its inner matcher's set against `variants`; every other
+    /// matcher (it compares a VALUE, not a variant) allows every variant, i.e. narrows
+    /// nothing, so this answers `None` for it.
+    fn matcher_narrowing(
+        matcher: &Expression,
+        variants: &[crate::ast::SumVariant],
+    ) -> Option<std::collections::BTreeSet<String>> {
+        let Expression::Call {
+            function,
+            arguments,
+            ..
+        } = matcher
+        else {
+            return None;
+        };
+        let Expression::Identifier { name, .. } = function.as_ref() else {
+            return None;
+        };
+        match name.as_str() {
+            "isOk" | "isNotOk" => Some(
+                [crate::ast::matcher_variant(name)?.to_string()]
+                    .into_iter()
+                    .collect(),
+            ),
+            "is" => {
+                let Expression::Identifier {
+                    name: variant_name, ..
+                } = arguments.first()?
+                else {
+                    return None;
+                };
+                Some([variant_name.clone()].into_iter().collect())
+            }
+            "not" => {
+                let inner = Self::matcher_narrowing(arguments.first()?, variants)?;
+                Some(
+                    variants
+                        .iter()
+                        .map(|variant| variant.name.clone())
+                        .filter(|name| !inner.contains(name))
+                        .collect(),
+                )
+            }
+            _ => None,
+        }
     }
 
     /// Check one matcher against the type of the value it will be applied to, and record its
@@ -117,6 +209,41 @@ impl TypeChecker {
             "not" => {
                 let inner = self.check_matcher(assertion, actual_type, &arguments[0])?;
                 format!("not({inner})")
+            }
+            // `is(Variant)` reads a bare constructor NAME, not a value — `Circle` alone is
+            // not an expression a payload-bearing variant could ever infer as, so this
+            // reads the argument as a name directly instead of calling `infer_expression`
+            // on it the way `equals`/`contains` do.
+            "is" => {
+                let Expression::Identifier {
+                    name: variant_name, ..
+                } = &arguments[0]
+                else {
+                    return Err(TypeError::AssertionNeedsMatcher {
+                        name: assertion.to_string(),
+                        span: arguments[0].span().clone(),
+                    });
+                };
+                let Type::Sum {
+                    name: sum_name,
+                    variants,
+                } = actual_type
+                else {
+                    return Err(TypeError::MatcherTypeUnsupported {
+                        matcher: name.clone(),
+                        ty: Box::new(actual_type.clone()),
+                        span: span.clone(),
+                    });
+                };
+                if !variants.iter().any(|variant| &variant.name == variant_name) {
+                    return Err(TypeError::UnknownConstructor {
+                        constructor: variant_name.clone(),
+                        sum: sum_name.clone(),
+                        known: variants.iter().map(|v| v.name.clone()).collect(),
+                        span: arguments[0].span().clone(),
+                    });
+                }
+                format!("is({variant_name})")
             }
             // The value under test is a zero-parameter lambda of any return type — it is
             // RUN, not compared, so no `==`/variant requirement applies here.

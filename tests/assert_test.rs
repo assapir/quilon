@@ -391,6 +391,60 @@ fn is_ok_on_a_sum_without_that_variant_is_refused() {
     );
 }
 
+// --- is(Variant) ------------------------------------------------------------
+
+/// `is(Variant)` works on every sum type — a user sum and `Result` alike — and `isOk()` /
+/// `isNotOk()` mean exactly `is(Ok)` / `is(NotOk)`.
+#[test]
+fn is_reads_any_sum_type() {
+    let (code, stderr) = run_jit(
+        "is_user_sum",
+        "Shape = Circle / Square\n^ = () -> $ => < assert(Circle, is(Circle))\n  assert(Circle, not(is(Square))) >\n",
+    );
+    assert_eq!(code, 0, "`is` on a user sum must hold, got: {stderr:?}");
+
+    for (tag, body) in [
+        ("is_ok_pass", "assert([10, 20].at(0), is(Ok))"),
+        ("is_notok_pass", "assert([10, 20].at(9), is(NotOk))"),
+    ] {
+        let (code, stderr) = run_entry(tag, body);
+        assert_eq!(code, 0, "`{body}` must hold, got: {stderr:?}");
+    }
+
+    let (code, stderr) = run_entry("is_ok_fail", "assert([10, 20].at(9), is(Ok))");
+    assert_eq!(code, FAIL_CODE);
+    assert!(
+        stderr.contains("expected Ok, got NotOk"),
+        "unexpected report: {stderr:?}"
+    );
+}
+
+/// A variant from a different sum than the value's type is a compile error naming the
+/// value's own sum and its real variants.
+#[test]
+fn is_on_a_variant_of_a_different_sum_is_refused() {
+    let (code, stderr) = run_jit(
+        "is_wrong_sum",
+        "Shape = Circle / Square\n^ = () -> $ => < assert(Circle, is(Ok)) >\n",
+    );
+    assert_ne!(code, 0);
+    assert!(
+        stderr.contains("'Ok' is not a variant of 'Shape'"),
+        "unexpected diagnostic: {stderr:?}"
+    );
+}
+
+/// `is` reads a sum type and nothing else.
+#[test]
+fn is_on_a_non_sum_is_refused() {
+    let (code, stderr) = run_jit("is_non_sum", "^ = () -> $ => < assert(1, is(Ok)) >\n");
+    assert_ne!(code, 0);
+    assert!(
+        stderr.contains("`is` reads a sum type"),
+        "unexpected diagnostic: {stderr:?}"
+    );
+}
+
 // --- aborts() ---------------------------------------------------------------
 
 /// `aborts()` reads a zero-parameter lambda of ANY return type — it runs the value under

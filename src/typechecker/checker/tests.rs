@@ -339,10 +339,11 @@ fn test_unannotated_parameter_is_rejected() {
 
 #[test]
 fn test_sum_type_result_match() {
-    // A `Result` scrutinee matched over both its variants.
+    // A `Result` scrutinee matched over both its variants. `:=`, so narrowing leaves it
+    // alone and both arms are live.
     assert!(
         check_ok(
-            "^ = () -> Num => <\n  val :: Result = Ok(5)\n  val ? | Ok(x) => x | NotOk(_) => 0\n>"
+            "^ = () -> Num => <\n  val :: Result := Ok(5)\n  val ? | Ok(x) => x | NotOk(_) => 0\n>"
         )
         .is_ok()
     );
@@ -633,7 +634,7 @@ fn test_result_parameter_shadowed_by_a_local_reassignment_is_not_falsely_rejecte
             "outer = (result :: Result) -> Num => <\n  \
                helper = (x :: Num) -> Num => <\n    \
                  result = Ok(x)\n    \
-                 result ? | Ok(n) => n | NotOk(_) => 0\n  \
+                 result ? | Ok(n) => n\n  \
                >\n  \
                helper(5)\n\
              >\n\
@@ -672,7 +673,7 @@ fn test_result_parameter_never_matched_is_not_falsely_rejected_by_a_nested_shado
                unwrap = (result :: Result) -> Num => <\n    \
                  helper = (x :: Num) -> Num => <\n      \
                    result = Ok(x)\n      \
-                   result ? | Ok(n) => n | NotOk(_) => 0\n    \
+                   result ? | Ok(n) => n\n    \
                  >\n    \
                  helper(it.value)\n  \
                >\n\
@@ -868,10 +869,11 @@ fn test_unknown_constructor_is_rejected() {
 
 #[test]
 fn test_exhaustiveness_with_wildcard() {
-    // A wildcard covers the variants the listed arms don't.
+    // A wildcard covers the variants the listed arms don't. `:=`, so narrowing leaves `c`
+    // alone and both arms are live.
     assert!(
         check_ok(
-            "Color = Red / Green / Blue\n^ = () -> Num => <\n  c :: Color = Green\n  c ? | Red => 0 | _ => 1\n>"
+            "Color = Red / Green / Blue\n^ = () -> Num => <\n  c :: Color := Green\n  c ? | Red => 0 | _ => 1\n>"
         )
         .is_ok()
     );
@@ -972,10 +974,11 @@ fn test_user_sum_variant_with_several_pattern_bindings_is_rejected() {
 
 #[test]
 fn test_user_sum_positional_record_payload_is_accepted() {
+    // `:=`, so narrowing leaves `s` alone and both arms are live.
     assert!(
         check_ok(
             "Shape = Circle(Num) / Rect({ Num, Num })\n\
-         ^ = () -> Num => <\n  s = Rect({ 6, 7 })\n  s ? | Circle(r) => r | Rect(p) => p.0 * p.1\n>"
+         ^ = () -> Num => <\n  s :: Shape := Rect({ 6, 7 })\n  s ? | Circle(r) => r | Rect(p) => p.0 * p.1\n>"
         )
         .is_ok()
     );
@@ -983,9 +986,10 @@ fn test_user_sum_positional_record_payload_is_accepted() {
 
 #[test]
 fn test_user_sum_named_record_payload_is_accepted() {
+    // `:=`, so narrowing leaves `s` alone and both arms are live.
     assert!(check_ok(
         "Shape = Circle(Num) / Rect({ width :: Num, height :: Num })\n\
-         ^ = () -> Num => <\n  s = Rect({ width = 6, height = 7 })\n  s ? | Circle(r) => r | Rect(p) => p.width * p.height\n>"
+         ^ = () -> Num => <\n  s :: Shape := Rect({ width = 6, height = 7 })\n  s ? | Circle(r) => r | Rect(p) => p.width * p.height\n>"
     )
     .is_ok());
 }
@@ -1109,8 +1113,10 @@ fn test_a_reserved_name_is_refused_at_every_binding_kind() {
     assert!(reserved(
         "^ = () -> Num => < [1].map(expect => expect)[0] >"
     ));
+    // `:=`, so narrowing does not make the `NotOk` arm dead before the reserved pattern
+    // binding inside the `Ok` arm is even reached.
     assert!(reserved(
-        "^ = () -> Num => < r :: Result = Ok(1)  r ? | Ok(isOk) => isOk | NotOk(_) => 0 >"
+        "^ = () -> Num => < r :: Result := Ok(1)  r ? | Ok(isOk) => isOk | NotOk(_) => 0 >"
     ));
     assert!(reserved(
         "assert = (n :: Num) -> Num => < n >\nassert = (t :: Text) -> Num => < 0 >\n\
@@ -1344,8 +1350,10 @@ fn test_generic_payload_resolves_as_num_for_operators() {
     // `Ok(x) => x * 2` type-checks against `*`'s (Num, Num) member. This pins the
     // documented Generic-as-Num overload behavior (concrete sum-payload typing is a
     // separate deferred feature); a future change here would be a visible regression.
+    // `:=`, so narrowing leaves `r` alone and both arms (the `NotOk` one still generic)
+    // are live.
     assert!(
-        check_ok("^ = () -> Num => <\n  r = Ok(21)\n  r ? | Ok(x) => x * 2 | NotOk(e) => 0\n>")
+        check_ok("^ = () -> Num => <\n  r := Ok(21)\n  r ? | Ok(x) => x * 2 | NotOk(e) => 0\n>")
             .is_ok()
     );
 }
@@ -2046,4 +2054,259 @@ fn test_signal_trap_arm_reaching_an_atomic_global_is_accepted() {
                ^ = () -> Num => < 0 >";
     let result = check_linked(src);
     assert!(result.is_ok(), "expected ok, got: {result:?}");
+}
+
+// --- Narrowing `=` bindings --------------------------------------------------------
+
+#[test]
+fn test_narrowing_by_construction_makes_a_single_arm_exhaustive() {
+    assert!(check_ok("^ = () -> Num => <\n  v = Ok(5)\n  v ? | Ok(x) => x\n>").is_ok());
+}
+
+#[test]
+fn test_narrowing_by_assert_is_ok_makes_a_single_arm_exhaustive() {
+    assert!(
+        check_ok(
+            "loadConfig = () -> Result => < Ok(1) >\n\
+             ^ = () -> Num => <\n  \
+               v = loadConfig()\n  \
+               assert(v, isOk())\n  \
+               v ? | Ok(x) => x\n\
+             >"
+        )
+        .is_ok()
+    );
+}
+
+#[test]
+fn test_narrowing_by_is_variant_on_a_user_sum() {
+    assert!(
+        check_ok(
+            "Shape = Circle(Num) / Square(Num)\n\
+             make = () -> Shape => < Circle(5) >\n\
+             ^ = () -> Num => <\n  \
+               s = make()\n  \
+               assert(s, is(Circle))\n  \
+               s ? | Circle(r) => r\n\
+             >"
+        )
+        .is_ok()
+    );
+}
+
+#[test]
+fn test_narrowing_by_not_is_rules_out_one_variant_of_three() {
+    assert!(
+        check_ok(
+            "Shape = Circle(Num) / Square(Num) / Triangle(Num)\n\
+             make = () -> Shape => < Circle(5) >\n\
+             ^ = () -> Num => <\n  \
+               s = make()\n  \
+               assert(s, not(is(Triangle)))\n  \
+               s ? | Circle(r) => r | Square(r) => r\n\
+             >"
+        )
+        .is_ok()
+    );
+}
+
+#[test]
+fn test_a_call_result_is_never_narrowed() {
+    // Step 3's own locked rule: a call's result is never a known variant, whatever the
+    // callee's body returns — the exhaustiveness gap stays, matching today's rule.
+    let err = check_ok(
+        "loadConfig = () -> Result => < Ok(1) >\n\
+         ^ = () -> Num => <\n  \
+           v = loadConfig()\n  \
+           v ? | Ok(x) => x\n\
+         >",
+    )
+    .unwrap_err();
+    assert!(matches!(err, TypeError::NonExhaustiveMatch { .. }));
+}
+
+#[test]
+fn test_dead_constructor_arm_after_narrowing_is_rejected() {
+    let err = check_ok("^ = () -> Num => <\n  v = Ok(21)\n  v ? | Ok(x) => x | NotOk(e) => 0\n>")
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        TypeError::UnreachableMatchArm {
+            variant: Some(ref v),
+            ..
+        } if v == "NotOk"
+    ));
+}
+
+#[test]
+fn test_dead_catch_all_arm_after_narrowing_is_rejected() {
+    let err = check_ok(
+        "Color = Red / Green / Blue\n\
+         ^ = () -> Num => <\n  \
+           c = Red\n  \
+           c ? | Red => 0 | _ => 1\n\
+         >",
+    )
+    .unwrap_err();
+    assert!(matches!(
+        err,
+        TypeError::UnreachableMatchArm { variant: None, .. }
+    ));
+}
+
+#[test]
+fn test_assert_that_can_never_hold_is_rejected() {
+    let err = check_ok("^ = () -> $ => <\n  v = Ok(5)\n  assert(v, isNotOk())\n>").unwrap_err();
+    assert!(matches!(err, TypeError::AssertionNeverHolds { ref binding, .. } if binding == "v"));
+}
+
+#[test]
+fn test_assert_that_always_holds_stays_legal() {
+    // Redundant, not an error: asserting what is already proven.
+    assert!(check_ok("^ = () -> $ => <\n  v = Ok(5)\n  assert(v, isOk())\n>").is_ok());
+}
+
+#[test]
+fn test_a_mutable_binding_is_never_narrowed_by_construction() {
+    let err = check_ok("^ = () -> Num => <\n  m := Ok(5)\n  m ? | Ok(x) => x\n>").unwrap_err();
+    assert!(matches!(
+        err,
+        TypeError::NonExhaustiveMatch {
+            mutable_binding: true,
+            ..
+        }
+    ));
+}
+
+#[test]
+fn test_asserting_on_a_mutable_binding_stays_legal() {
+    // A runtime check, as always — narrowing just never follows it.
+    assert!(check_ok("^ = () -> $ => <\n  m := Ok(5)\n  assert(m, isOk())\n>").is_ok());
+}
+
+#[test]
+fn test_narrowing_inside_a_match_arm_on_a_bare_binding() {
+    // Inside `| Circle(r) => …`, re-matching the same `=` binding needs only that arm.
+    assert!(
+        check_ok(
+            "Shape = Circle(Num) / Square(Num)\n\
+             make = () -> Shape => < Circle(5) >\n\
+             ^ = () -> Num => <\n  \
+               s = make()\n  \
+               s ?\n    \
+                 | Circle(_) => (s ? | Circle(r) => r)\n    \
+                 | Square(n) => n\n\
+             >"
+        )
+        .is_ok()
+    );
+}
+
+#[test]
+fn test_a_lambda_written_after_narrowing_sees_it() {
+    assert!(
+        check_ok(
+            "loadConfig = () -> Result => < Ok(1) >\n\
+             ^ = () -> Num => <\n  \
+               v = loadConfig()\n  \
+               assert(v, isOk())\n  \
+               reader = () => < v ? | Ok(x) => x >\n  \
+               reader()\n\
+             >"
+        )
+        .is_ok()
+    );
+}
+
+#[test]
+fn test_a_lambda_written_before_narrowing_does_not_see_it() {
+    let err = check_ok(
+        "loadConfig = () -> Result => < Ok(1) >\n\
+         ^ = () -> Num => <\n  \
+           v = loadConfig()\n  \
+           reader = () => < v ? | Ok(x) => x >\n  \
+           assert(v, isOk())\n  \
+           reader()\n\
+         >",
+    )
+    .unwrap_err();
+    assert!(matches!(err, TypeError::NonExhaustiveMatch { .. }));
+}
+
+#[test]
+fn test_narrowing_inside_a_branch_does_not_escape_it() {
+    // A fact an `if`'s `then` proves about a captured binding stays inside that branch:
+    // if it leaked, the single-arm match after the `?:` would (wrongly) type-check.
+    let err = check_ok(
+        "loadConfig = () -> Result => < Ok(1) >\n\
+         pick = (flag :: Bool) -> Num => <\n  \
+           v = loadConfig()\n  \
+           flag ? assert(v, isOk()) : $\n  \
+           v ? | Ok(x) => x\n\
+         >\n\
+         ^ = () -> Num => < pick(true) >",
+    )
+    .unwrap_err();
+    assert!(matches!(err, TypeError::NonExhaustiveMatch { .. }));
+}
+
+#[test]
+fn test_a_parameter_is_narrowed_by_assert() {
+    assert!(
+        check_ok(
+            "Shape = Circle(Num) / Rect({ Num, Num }) / Dot\n\
+             pick = (s :: Shape) -> Num => <\n  \
+               assert(s, not(is(Dot)))\n  \
+               s ? | Circle(r) => r | Rect(p) => p.0\n\
+             >\n\
+             ^ = () -> Num => < pick(Circle(3)) >"
+        )
+        .is_ok()
+    );
+}
+
+#[test]
+fn test_a_parameter_is_narrowed_inside_a_match_arm() {
+    assert!(
+        check_ok(
+            "Shape = Circle(Num) / Square(Num)\n\
+             pick = (s :: Shape) -> Num => <\n  \
+               s ?\n    \
+                 | Circle(_) => (s ? | Circle(r) => r)\n    \
+                 | Square(n) => n\n\
+             >\n\
+             ^ = () -> Num => < pick(Circle(3)) >"
+        )
+        .is_ok()
+    );
+}
+
+#[test]
+fn test_a_dead_arm_on_a_narrowed_parameter_is_rejected() {
+    let err = check_ok(
+        "Shape = Circle(Num) / Square(Num)\n\
+         pick = (s :: Shape) -> Num => <\n  \
+           assert(s, is(Circle))\n  \
+           s ? | Circle(r) => r | Square(n) => n\n\
+         >\n\
+         ^ = () -> Num => < pick(Circle(3)) >",
+    )
+    .unwrap_err();
+    assert!(matches!(
+        err,
+        TypeError::UnreachableMatchArm { ref binding, .. } if binding == "s"
+    ));
+}
+
+#[test]
+fn test_a_lambda_parameter_is_narrowed_by_assert() {
+    assert!(
+        check_ok(
+            "^ = () -> Num => <\n  \
+               f = (r :: Result) => < assert(r, isOk())  r ? | Ok(x) => x >\n  \
+               f(Ok(1))\n\
+             >"
+        )
+        .is_ok()
+    );
 }

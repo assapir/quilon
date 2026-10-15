@@ -424,7 +424,7 @@ fn nested_sum_type_builds_and_runs_natively() {
     let src = "\
 ^ = () -> Num => <
   Shape = Circle(Num) / Square(Num)
-  s = Circle(6)
+  s :: Shape := Circle(6)
   s ? | Circle(r) => r * r | Square(side) => side * side
 >
 ";

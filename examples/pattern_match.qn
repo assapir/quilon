@@ -44,19 +44,16 @@ tallyRaccoons = (frontBin :: Result, backBin :: Result) -> Num => <
 >
 
 ^ = () -> $ => <
-  ~ Binding and wildcard payload patterns.
+  ~ Binding and wildcard payload patterns. `r` is narrowed to `Ok` by its own
+  ~ construction, so the match below needs only the one arm.
   r = Ok(2)
-  bound = r ?
-    | Ok(x)     => x + 1
-    | NotOk(_)  => 0
+  bound = r ? | Ok(x) => x + 1
   assert(bound, equals(3))
 
   ~ The compare-in-the-body idiom replacing the illegal `| Ok(1) =>` form.
   pick = (v :: Num) -> Num => <
     q = Ok(v)
-    q ?
-      | Ok(n)    => n == 1 ? 10 : 20
-      | NotOk(_) => 30
+    q ? | Ok(n) => n == 1 ? 10 : 20
   >
   assert(pick(1), equals(10))
   assert(pick(2), equals(20))

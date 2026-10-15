@@ -52,16 +52,25 @@ error[QN500]: assertion failed: expected 41, got 42
 | `equals(expected)` | `actual == expected`, through the [`==` member](../../functions/overloading.md): `Num`/`Text`/`Bool`, and any record or sum that declares one. |
 | `contains(part)` | A `Text` has `part` as a substring, or an array has an element equal to it (through the element type's `==`). |
 | `not(matcher)` | The wrapped matcher fails to hold. Composes around any matcher. |
-| `isOk()` / `isNotOk()` | A [`Result`](../../types/sum-types.md#result-is-a-normal-sum-type) is `Ok` / `NotOk`. |
+| `isOk()` / `isNotOk()` | A [`Result`](../../types/sum-types.md#result-is-a-normal-sum-type) is `Ok` / `NotOk` — the same as `is(Ok)` / `is(NotOk)`. |
+| `is(Variant)` | A value of ANY sum type is `Variant` — `Result` included. A `Variant` from a different sum than the value's type is a compile error. |
 | `aborts()` | Reads a zero-parameter lambda of any return type — running it ends fail-loud: an `assert` failure, a runtime fault (an invalid index, a bad `Text.replace`), or `failAt`. |
 
 ```quilon
+Topping = Olives / Mushrooms / Anchovies
+
 assert(6 * 7, equals(42))
 assert("assertions and matchers", contains("matcher"))
 assert([2, 4, 6], not(contains(5)))
-assert([10, 20].at(0), isOk())       ~ Ok in bounds
-assert([10, 20].at(9), isNotOk())    ~ NotOk out of bounds
+assert([10, 20].at(0), isOk())            ~ Ok in bounds
+assert([10, 20].at(9), isNotOk())         ~ NotOk out of bounds
+assert(Olives, is(Olives))                ~ a user sum's own variant
+assert(Olives, not(is(Anchovies)))
 ```
+
+Asserting `isOk()`/`isNotOk()`/`is(Variant)` (or `not` around any of them) on an `=`
+binding or a parameter also [narrows](../../types/sum-types.md#narrowing--bindings) it: a
+later match over the same name needs arms only for the variants it can still be.
 
 Both values in a report are
 [rendered](../../types/text.md#string-interpolation-and-the-render-operator-) — `Num`/`Text`/`Bool`
