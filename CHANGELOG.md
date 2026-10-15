@@ -98,7 +98,7 @@ All notable changes to Quilon are documented here.
   own names), for every sum type, `Result` included. A call's result is never a known
   variant, and a `:=` binding is never narrowed — its exhaustiveness is unchanged. See
   `docs/types/sum-types.md#narrowing--bindings`. `QN364`/`QN365`. Step 3 of #490. The
-  receiver `it` narrows too inside an `=` method, never inside a `:=` one.
+  receiver `it` narrows too inside an `=` method.
 
 - **The signal trap (`!>`) — a top-level item, one per program, in the file that defines
   `^`, matching signals via a new `core.process` module.** `!>` followed by one or more

@@ -134,8 +134,7 @@ impl Environment {
             atomic: false,
             // Set right after by `set_result_parameter`, with the caller's own index.
             result_parameter: None,
-            // Opted in by `narrowable_parameter_symbol`; a `:=` method's receiver is built
-            // by `define_setter_receiver` instead and is never narrowed.
+            // Parameters and the receiver opt in through `narrowable_parameter_symbol`.
             narrowable: false,
             narrowed_variants: None,
         }
@@ -271,14 +270,6 @@ impl Environment {
     pub fn is_mutable(&self, name: &str) -> bool {
         self.lookup(name).map(|s| s.mutable).unwrap_or(false)
     }
-
-    /// Whether `name` can change under the reader — a `:=` binding, or the receiver of a
-    /// `:=` method — so its variant is never tracked.
-    pub(super) fn is_changeable(&self, name: &str) -> bool {
-        self.lookup(name)
-            .is_some_and(|symbol| symbol.mutable || symbol.setter_receiver)
-    }
-
     /// Whether `name` was declared with `@name := …`.
     pub fn is_atomic(&self, name: &str) -> bool {
         self.lookup(name).map(|s| s.atomic).unwrap_or(false)
