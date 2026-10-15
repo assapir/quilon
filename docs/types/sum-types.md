@@ -125,24 +125,33 @@ payload and compare it in the arm body instead (`Ok(n) => n == 1 ? … : …`).
 
 ## Narrowing `=` bindings
 
-The checker tracks, for an `=` binding of a sum type, the set of variants it can still
-be — and a match over a narrowed binding needs arms only for those:
+The checker tracks, for an `=` binding or a parameter of a sum type, the set of variants
+it can still be — and a match over a narrowed one needs arms only for those:
 ```quilon
 v = Ok(5)
 doubled = v ? | Ok(x) => x * 2    ~ exhaustive: `v` is narrowed to `Ok`
+```
+A parameter narrows the same way (a function's, a method's, or a lambda's), from a proof
+made inside the body:
+```quilon
+Shape = Circle(Num) / Rect({ Num, Num }) / Dot
+pick = (s :: Shape) -> Num => <
+  assert(s, not(is(Dot)))
+  s ? | Circle(r) => r | Rect(p) => p.0
+>
 ```
 The fact holds from the point it is established to the end of the enclosing block,
 including inside a lambda written after that point (a lambda written before it does not
 see it); narrowing established inside a branch or a match arm stays inside that body.
 
-**Three things narrow a binding:**
-- **construction** — `v = Ok(5)`, `s = Circle(5)`;
+**Three things narrow a binding or parameter:**
+- **construction** — `v = Ok(5)`, `s = Circle(5)` (an `=` binding only);
 - **`assert`/`expect`** with `isOk()`, `isNotOk()`, the variant matcher `is(Variant)`
   (every sum type, `Result` included — see
   [the matchers](../corelib/test/README.md#the-matchers)), or `not(...)` around any of
   them;
 - **inside a match arm** — `s ? | Circle(r) => …` knows `s` is `Circle` for that arm's
-  body.
+  body, when `s` is a bare `=` binding or parameter.
 
 A call's result is never a known variant, whatever the callee's body returns — the proof
 stays local to where it was made:

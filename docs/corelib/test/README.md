@@ -69,8 +69,8 @@ assert(Olives, not(is(Anchovies)))
 ```
 
 Asserting `isOk()`/`isNotOk()`/`is(Variant)` (or `not` around any of them) on an `=`
-binding also [narrows](../../types/sum-types.md#narrowing--bindings) it: a later match
-over the same binding needs arms only for the variants it can still be.
+binding or a parameter also [narrows](../../types/sum-types.md#narrowing--bindings) it: a
+later match over the same name needs arms only for the variants it can still be.
 
 Both values in a report are
 [rendered](../../types/text.md#string-interpolation-and-the-render-operator-) — `Num`/`Text`/`Bool`

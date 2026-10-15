@@ -1513,6 +1513,33 @@ fn run_narrowing_inside_a_match_arm_allows_a_nested_single_arm_match() {
 }
 
 #[test]
+fn run_a_parameter_narrowed_by_assert_needs_only_the_remaining_arms() {
+    assert_exit(
+        "Shape = Circle(Num) / Rect({ Num, Num }) / Dot\n\
+         pick = (s :: Shape) -> Num => <\n  \
+           assert(s, not(is(Dot)))\n  \
+           s ? | Circle(r) => r | Rect(p) => p.0\n\
+         >\n\
+         ^ = () -> Num => < pick(Rect({ 7, 1 })) >",
+        7,
+    );
+}
+
+#[test]
+fn run_a_parameter_narrowed_inside_a_match_arm() {
+    assert_exit(
+        "Shape = Circle(Num) / Square(Num)\n\
+         pick = (s :: Shape) -> Num => <\n  \
+           s ?\n    \
+             | Circle(_) => (s ? | Circle(r) => r * r)\n    \
+             | Square(n) => n\n\
+         >\n\
+         ^ = () -> Num => < pick(Circle(6)) >",
+        36,
+    );
+}
+
+#[test]
 fn run_numeric_sum_payload_through_operator_overload() {
     // A numeric sum payload flows through an operator overload set: `Ok(x) => x * 2`
     // — `x` is a (generic) Result payload that resolves as Num for `*`, so it picks the

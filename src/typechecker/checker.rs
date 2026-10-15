@@ -633,9 +633,10 @@ pub struct Symbol {
     /// carried through a bare `name = alias` copy, cleared by anything else.
     result_parameter: Option<(Span, usize)>,
     /// Whether this is a binding whose proven variant the checker tracks: a plain `=`
-    /// binding or a pattern-bound name, never a parameter, a receiver, a nullary variant
-    /// constant, or a `:=` binding (see `docs/types/sum-types.md`'s narrowing section).
-    /// Set once, at the binding's own `define_binding` call, and read every time
+    /// binding, a pattern-bound name, or a function/method/lambda parameter — never a
+    /// receiver, a nullary variant constant, or a `:=` binding (see
+    /// `docs/types/sum-types.md`'s narrowing section).
+    /// Set once, where the symbol is defined, and read every time
     /// `narrowed_variants` would otherwise answer for a name that was never eligible.
     narrowable: bool,
     /// The variant set this binding is currently proven to be one of, or `None` when

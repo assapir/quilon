@@ -2249,3 +2249,64 @@ fn test_narrowing_inside_a_branch_does_not_escape_it() {
     .unwrap_err();
     assert!(matches!(err, TypeError::NonExhaustiveMatch { .. }));
 }
+
+#[test]
+fn test_a_parameter_is_narrowed_by_assert() {
+    assert!(
+        check_ok(
+            "Shape = Circle(Num) / Rect({ Num, Num }) / Dot\n\
+             pick = (s :: Shape) -> Num => <\n  \
+               assert(s, not(is(Dot)))\n  \
+               s ? | Circle(r) => r | Rect(p) => p.0\n\
+             >\n\
+             ^ = () -> Num => < pick(Circle(3)) >"
+        )
+        .is_ok()
+    );
+}
+
+#[test]
+fn test_a_parameter_is_narrowed_inside_a_match_arm() {
+    assert!(
+        check_ok(
+            "Shape = Circle(Num) / Square(Num)\n\
+             pick = (s :: Shape) -> Num => <\n  \
+               s ?\n    \
+                 | Circle(_) => (s ? | Circle(r) => r)\n    \
+                 | Square(n) => n\n\
+             >\n\
+             ^ = () -> Num => < pick(Circle(3)) >"
+        )
+        .is_ok()
+    );
+}
+
+#[test]
+fn test_a_dead_arm_on_a_narrowed_parameter_is_rejected() {
+    let err = check_ok(
+        "Shape = Circle(Num) / Square(Num)\n\
+         pick = (s :: Shape) -> Num => <\n  \
+           assert(s, is(Circle))\n  \
+           s ? | Circle(r) => r | Square(n) => n\n\
+         >\n\
+         ^ = () -> Num => < pick(Circle(3)) >",
+    )
+    .unwrap_err();
+    assert!(matches!(
+        err,
+        TypeError::UnreachableMatchArm { ref binding, .. } if binding == "s"
+    ));
+}
+
+#[test]
+fn test_a_lambda_parameter_is_narrowed_by_assert() {
+    assert!(
+        check_ok(
+            "^ = () -> Num => <\n  \
+               f = (r :: Result) => < assert(r, isOk())  r ? | Ok(x) => x >\n  \
+               f(Ok(1))\n\
+             >"
+        )
+        .is_ok()
+    );
+}

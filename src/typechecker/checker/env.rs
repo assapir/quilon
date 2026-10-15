@@ -91,7 +91,7 @@ impl Environment {
         slot: usize,
         span: Span,
     ) -> Result<(), TypeError> {
-        let symbol = Self::parameter_symbol(&name, type_, declaration, slot);
+        let symbol = Self::narrowable_parameter_symbol(&name, type_, declaration, slot);
         self.define_symbol(name, symbol, span)
     }
 
@@ -105,6 +105,18 @@ impl Environment {
     ) -> Result<(), TypeError> {
         let symbol = Self::parameter_symbol(crate::ast::RECEIVER, type_, declaration, 0);
         self.insert_symbol(crate::ast::RECEIVER.to_string(), symbol, span)
+    }
+
+    fn narrowable_parameter_symbol(
+        name: &str,
+        type_: Type,
+        declaration: u64,
+        slot: usize,
+    ) -> Symbol {
+        Symbol {
+            narrowable: true,
+            ..Self::parameter_symbol(name, type_, declaration, slot)
+        }
     }
 
     fn parameter_symbol(name: &str, type_: Type, declaration: u64, slot: usize) -> Symbol {
@@ -122,8 +134,8 @@ impl Environment {
             atomic: false,
             // Set right after by `set_result_parameter`, with the caller's own index.
             result_parameter: None,
-            // A parameter's variant is the caller's news, not locally provable — never a
-            // narrowing source or target.
+            // The receiver `it` is never narrowed; a user parameter opts in through
+            // `narrowable_parameter_symbol`.
             narrowable: false,
             narrowed_variants: None,
         }
@@ -203,9 +215,8 @@ impl Environment {
                 constant: false,
                 atomic: false,
                 result_parameter: None,
-                // The only path that produces a narrowable binding: a `=` (never `:=`)
-                // name, bound here whether by a `VariableDeclaration` or a match/trap
-                // pattern — both call this constructor and nothing else does.
+                // A `=` (never `:=`) name, bound here whether by a `VariableDeclaration`
+                // or a match/trap pattern. Parameters take the other narrowable path.
                 narrowable: !mutable,
                 narrowed_variants: None,
             },

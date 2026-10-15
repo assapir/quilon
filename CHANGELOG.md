@@ -83,9 +83,9 @@ All notable changes to Quilon are documented here.
   arguments reuses the existing arity mismatch, `QN303`. See `docs/types/sum-types.md`.
   Step 2 of #490.
 
-- **Breaking: narrowing — a proven `=` binding needs no re-checking.** Once the checker
-  proves a binding's variant (construction, a provable `assert`/`expect`, or being inside
-  a match arm), a later match over it needs arms only for the variants it can still be —
+- **Breaking: narrowing — a proven `=` binding or parameter needs no re-checking.** Once
+  the checker proves its variant (construction, a provable `assert`/`expect`, or being
+  inside a match arm), a later match over it needs arms only for the variants it can still be —
   and an arm, or an `assert`/`expect`, that can only cover an already-ruled-out variant is
   now a compile error:
   ```quilon ignore
