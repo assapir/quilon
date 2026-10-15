@@ -176,7 +176,16 @@ assert(v, isNotOk())                 ~ error: `v` is always `Ok`
 ```
 An assertion that always HOLDS stays legal — it is redundant, not an error.
 
-**A `:=` binding is never narrowed** — construction, `assert`/`expect`, and a match arm
+Inside an `=` method, the receiver `it` narrows like a parameter:
+```quilon
+Shape = Circle(Num) / Square(Num) {
+  radius = () -> Num => <
+    assert(it, is(Circle))
+    it ? | Circle(r) => r
+  >
+}
+```
+**A `:=` binding is never narrowed**, and neither is `it` inside a `:=` method — construction, `assert`/`expect`, and a match arm
 all leave it alone. Asserting on one stays legal, an ordinary runtime check; a match over
 one stays exhaustive over its full sum, as it does without narrowing at all:
 ```quilon ignore

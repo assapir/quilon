@@ -2299,6 +2299,77 @@ fn test_a_dead_arm_on_a_narrowed_parameter_is_rejected() {
 }
 
 #[test]
+fn test_the_receiver_is_narrowed_by_assert_in_a_sum_method() {
+    assert!(
+        check_ok(
+            "Shape = Circle(Num) / Square(Num) {\n  \
+               radius = () -> Num => <\n    \
+                 assert(it, is(Circle))\n    \
+                 it ? | Circle(r) => r\n  \
+               >\n\
+             }\n\
+             ^ = () -> Num => < Circle(2).radius() >"
+        )
+        .is_ok()
+    );
+}
+
+#[test]
+fn test_the_receiver_is_narrowed_inside_a_match_arm_of_a_sum_method() {
+    assert!(
+        check_ok(
+            "Shape = Circle(Num) / Square(Num) {\n  \
+               size = () -> Num => <\n    \
+                 it ?\n      \
+                   | Circle(_) => (it ? | Circle(r) => r)\n      \
+                   | Square(n) => n\n  \
+               >\n\
+             }\n\
+             ^ = () -> Num => < Circle(2).size() >"
+        )
+        .is_ok()
+    );
+}
+
+#[test]
+fn test_a_dead_arm_on_a_narrowed_receiver_is_rejected() {
+    let err = check_ok(
+        "Shape = Circle(Num) / Square(Num) {\n  \
+           radius = () -> Num => <\n    \
+             assert(it, is(Circle))\n    \
+             it ? | Circle(r) => r | Square(n) => n\n  \
+           >\n\
+         }\n\
+         ^ = () -> Num => < Circle(2).radius() >",
+    )
+    .unwrap_err();
+    assert!(matches!(
+        err,
+        TypeError::UnreachableMatchArm { ref binding, .. } if binding == "it"
+    ));
+}
+
+#[test]
+fn test_a_record_method_narrows_its_sum_parameter() {
+    // A record's `it` is not a sum, so there is nothing to narrow on it; the method's
+    // parameters narrow as anywhere else.
+    assert!(
+        check_ok(
+            "Shape = Circle(Num) / Square(Num)\n\
+             Box = {\n  \
+               tag :: Num,\n  \
+               pick = (s :: Shape) -> Num => <\n    \
+                 assert(s, is(Circle))\n    \
+                 s ? | Circle(r) => r\n  \
+               >\n\
+             }\n\
+             ^ = () -> Num => < Box { tag = 1 }.pick(Circle(4)) >"
+        )
+        .is_ok()
+    );
+}
+
+#[test]
 fn test_a_lambda_parameter_is_narrowed_by_assert() {
     assert!(
         check_ok(

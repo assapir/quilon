@@ -91,7 +91,7 @@ impl TypeChecker {
             _ => None,
         };
         let narrowed = scrutinee_binding.and_then(|name| self.env.narrowed_variants(name).cloned());
-        let mutable_binding = scrutinee_binding.is_some_and(|name| self.env.is_mutable(name));
+        let mutable_binding = scrutinee_binding.is_some_and(|name| self.env.is_changeable(name));
 
         if let (Some(binding), Some(narrowed)) = (scrutinee_binding, &narrowed) {
             self.check_dead_arms(binding, narrowed, arms)?;
