@@ -1849,14 +1849,14 @@ test.describe("Response's server-side constructors", () => <
 parsedRequest = (head :: Text) -> Request => <
   candidate = Request.parse(head, "")
   assert(candidate, isOk())
-  candidate ? | Ok(request) => request
+  candidate.payload
 >
 
 ~ `parsedRequest`, with `body` given to `Request.parse` too.
 parsedRequestWithBody = (head :: Text, body :: Text) -> Request => <
   candidate = Request.parse(head, body)
   assert(candidate, isOk())
-  candidate ? | Ok(request) => request
+  candidate.payload
 >
 
 test.describe("Request.parse", () => <

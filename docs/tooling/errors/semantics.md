@@ -920,3 +920,36 @@ narrowing already proved the scrutinee is not. See
 ```
 
 Remove the arm — `v` is always `Ok` here — or fix whichever earlier proof narrowed it.
+
+### QN366 — payload of a variant that is not known
+
+`.payload` is read on a sum value whose variant no proof has established — a call
+result, a `:=` binding, or a binding still allowed more than one variant. See
+[`.payload`](../../types/sum-types.md#payload).
+
+```quilon ignore
+Shape = Circle(Num) / Dot
+make = () -> Shape => < Circle(1) >
+^ = () -> Num => <
+  s = make()
+  s.payload
+>
+```
+
+Prove the variant first with `assert(s, is(Circle))`, or read the payload inside a match
+arm.
+
+### QN367 — payload of a variant that carries none
+
+`.payload` is read on a value known to be a variant declared without a payload. See
+[`.payload`](../../types/sum-types.md#payload).
+
+```quilon ignore
+Shape = Circle(Num) / Dot
+^ = () -> Num => <
+  s = Dot
+  s.payload
+>
+```
+
+Only a variant declared with a payload, such as `Circle(Num)`, has a `.payload`.
