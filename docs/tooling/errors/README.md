@@ -188,6 +188,8 @@ its name relative to the first block (`` ```quilon title="lib/util.qn" ``).
 | [QN363](semantics.md#qn363--mismatched-listener-transport-and-identity) | mismatched listener transport and identity |
 | [QN364](semantics.md#qn364--assertion-a-proven-variant-already-rules-out) | assertion a proven variant already rules out |
 | [QN365](semantics.md#qn365--match-arm-a-proven-variant-already-rules-out) | match arm a proven variant already rules out |
+| [QN366](semantics.md#qn366--payload-of-a-variant-that-is-not-known) | payload of a variant that is not known |
+| [QN367](semantics.md#qn367--payload-of-a-variant-that-carries-none) | payload of a variant that carries none |
 | [QN400](build.md#qn400--code-generation-failed) | code generation failed |
 | [QN401](build.md#qn401--native-build-failed) | native build failed |
 | [QN500](runtime.md#qn500--assertion-failed) | assertion failed |

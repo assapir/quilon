@@ -337,6 +337,49 @@ impl<'ctx> CodeGenerator<'ctx> {
         }
     }
 
+    /// `receiver.payload` where the checker narrowed the receiver's oracle type to the one
+    /// variant it is known to be: read that variant's payload with no tag check.
+    pub(super) fn generate_payload_access(
+        &mut self,
+        receiver: &Expression,
+    ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+        let Some(Type::Sum { variants, .. }) = self.oracle.expression_type(receiver) else {
+            return Ok(None);
+        };
+        let [variant] = variants.as_slice() else {
+            return Ok(None);
+        };
+        let variant = variant.name.clone();
+        let BasicValueEnum::StructValue(struct_value) = self.generate_expression(receiver)? else {
+            return Ok(None);
+        };
+        let concrete = self.scrutinee_payload_types(receiver, &variant);
+        let declared = self.variant_payloads.get(&variant).cloned();
+        let payload_type = [&concrete, &declared]
+            .into_iter()
+            .filter_map(|source| source.as_ref()?.first())
+            .find(|t| !matches!(t, Type::Generic { .. }))
+            .cloned();
+        let owning_type = self
+            .sum_variants
+            .get(variant.as_str())
+            .map(|(_, type_name)| type_name.clone())
+            .unwrap_or_default();
+        let raw = match self.union_payload_values(struct_value, &owning_type, &variant, 1)? {
+            Some(values) => values[0],
+            None => self
+                .builder
+                .build_extract_value(struct_value, 1, "payload")
+                .map_err(ctx("Failed to extract payload"))?,
+        };
+        let payload = if owning_type == "Result" {
+            self.unpack_result_payload(raw, payload_type.as_ref())?
+        } else {
+            self.unbox_if_boxed(raw, payload_type.as_ref())?
+        };
+        Ok(Some(payload))
+    }
+
     pub(super) fn bind_pattern(
         &mut self,
         pattern: &Pattern,

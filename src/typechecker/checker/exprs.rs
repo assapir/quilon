@@ -292,6 +292,10 @@ impl TypeChecker {
             } => {
                 let expression_type = self.infer_expression(expression)?;
 
+                if field == "payload" && matches!(expression_type, Type::Sum { .. }) {
+                    return self.payload_access(expression, &expression_type, span);
+                }
+
                 match expression_type {
                     Type::Record(fields) => {
                         if crate::ast::is_positional_field(field) {

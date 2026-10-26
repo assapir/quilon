@@ -264,6 +264,11 @@ impl<'ctx> CodeGenerator<'ctx> {
         expression: &Expression,
         field_name: &str,
     ) -> Result<BasicValueEnum<'ctx>, String> {
+        if field_name == "payload"
+            && let Some(payload) = self.generate_payload_access(expression)?
+        {
+            return Ok(payload);
+        }
         // A record may legitimately have a field literally named `size`/`length`.
         // Resolve known record fields by NAME first (matching the type checker,
         // which dispatches on static type) so they don't collide with the Text/array

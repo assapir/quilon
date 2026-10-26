@@ -125,6 +125,51 @@ impl TypeChecker {
         specialized
     }
 
+    /// The type of `receiver.payload` for a sum-typed `receiver` whose variant is known: a
+    /// narrowed binding or parameter, or a literal construction. The receiver's entry in the
+    /// type oracle is narrowed to that one variant, which is how codegen learns which
+    /// payload to read.
+    pub(super) fn payload_access(
+        &mut self,
+        receiver: &Expression,
+        receiver_type: &Type,
+        span: &Span,
+    ) -> Result<Type, TypeError> {
+        let Type::Sum { name, variants } = receiver_type else {
+            unreachable!("payload_access is only called for a sum type");
+        };
+        let known = match receiver {
+            Expression::Identifier { name: binding, .. } => self
+                .env
+                .narrowed_variants(binding)
+                .filter(|set| set.len() == 1)
+                .and_then(|set| set.iter().next().cloned()),
+            _ => None,
+        }
+        .or_else(|| Self::constructed_variant(receiver, receiver_type));
+        let variant = known
+            .and_then(|known| variants.iter().find(|variant| variant.name == known))
+            .ok_or_else(|| TypeError::PayloadOfUnknownVariant {
+                sum: name.clone(),
+                span: span.clone(),
+            })?;
+        let Some(payload) = variant.fields.first() else {
+            return Err(TypeError::PayloadOfPayloadlessVariant {
+                variant: variant.name.clone(),
+                span: span.clone(),
+            });
+        };
+        let payload = self.resolve_payload_type(payload);
+        self.type_table.insert(
+            receiver.span().clone(),
+            Type::Sum {
+                name: name.clone(),
+                variants: vec![variant.clone()],
+            },
+        );
+        Ok(payload)
+    }
+
     /// The variant `value` directly constructs, if `value` is literally `Variant(...)` (a
     /// payload-bearing constructor call) or a bare nullary variant name, and `ty` — the
     /// already-inferred, already-compatible type of `value` — is that variant's sum. This
