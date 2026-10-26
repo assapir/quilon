@@ -104,12 +104,19 @@ impl<'ctx> CodeGenerator<'ctx> {
                 {
                     return self.generate_sum_constructor(tag, &type_name, name, &[]);
                 }
-                // Local binding (function-scoped alloca) first.
-                if let Some((ptr, ty)) = self.variables.get(name) {
-                    return self
+                // Local binding (function-scoped alloca) first. A plain read of an atomic
+                // binding (`docs/concurrency/README.md#sharing-state-across-fibers`) takes
+                // its lock briefly, so it never observes a torn write from another worker —
+                // a no-op call-wise unless `name` is actually atomic and this read is not
+                // already inside that same binding's own reassignment lock.
+                if let Some((ptr, ty)) = self.variables.get(name).copied() {
+                    self.emit_atomic_begin(name)?;
+                    let loaded = self
                         .builder
-                        .build_load(*ty, *ptr, name)
-                        .map_err(ctx("Failed to build load"));
+                        .build_load(ty, ptr, name)
+                        .map_err(ctx("Failed to build load"))?;
+                    self.emit_atomic_end(name)?;
+                    return Ok(loaded);
                 }
                 // Otherwise a top-level/module global (e.g. core.io's `stdout`/`stderr`, or
                 // any top-level `name = <value>` / `name := <value>`). The load type comes
@@ -117,10 +124,13 @@ impl<'ctx> CodeGenerator<'ctx> {
                 // is a zero value, not its real shape.
                 if let Some(global) = self.module.get_global(name) {
                     let ty = self.oracle_value_type(expression)?;
-                    return self
+                    self.emit_atomic_begin(name)?;
+                    let loaded = self
                         .builder
                         .build_load(ty, global.as_pointer_value(), name)
-                        .map_err(ctx("Failed to build load global"));
+                        .map_err(ctx("Failed to build load global"))?;
+                    self.emit_atomic_end(name)?;
+                    return Ok(loaded);
                 }
                 // A top-level function NAME used as a value (`pass(double)`, a body
                 // returning `double`): functions are not first-class values yet — only
