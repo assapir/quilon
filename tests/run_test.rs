@@ -1526,6 +1526,35 @@ fn run_a_parameter_narrowed_by_assert_needs_only_the_remaining_arms() {
 }
 
 #[test]
+fn run_the_receiver_narrowed_by_assert_in_a_sum_method() {
+    assert_exit(
+        "Shape = Circle(Num) / Square(Num) {\n  \
+           radius = () -> Num => <\n    \
+             assert(it, is(Circle))\n    \
+             it ? | Circle(r) => r\n  \
+           >\n\
+         }\n\
+         ^ = () -> Num => < Circle(5).radius() >",
+        5,
+    );
+}
+
+#[test]
+fn run_the_receiver_narrowed_inside_a_match_arm_of_a_sum_method() {
+    assert_exit(
+        "Shape = Circle(Num) / Square(Num) {\n  \
+           size = () -> Num => <\n    \
+             it ?\n      \
+               | Circle(_) => (it ? | Circle(r) => r * r)\n      \
+               | Square(n) => n\n  \
+           >\n\
+         }\n\
+         ^ = () -> Num => < Circle(6).size() >",
+        36,
+    );
+}
+
+#[test]
 fn run_a_parameter_narrowed_inside_a_match_arm() {
     assert_exit(
         "Shape = Circle(Num) / Square(Num)\n\

@@ -103,7 +103,7 @@ impl Environment {
         declaration: u64,
         span: Span,
     ) -> Result<(), TypeError> {
-        let symbol = Self::parameter_symbol(crate::ast::RECEIVER, type_, declaration, 0);
+        let symbol = Self::narrowable_parameter_symbol(crate::ast::RECEIVER, type_, declaration, 0);
         self.insert_symbol(crate::ast::RECEIVER.to_string(), symbol, span)
     }
 
@@ -134,8 +134,7 @@ impl Environment {
             atomic: false,
             // Set right after by `set_result_parameter`, with the caller's own index.
             result_parameter: None,
-            // The receiver `it` is never narrowed; a user parameter opts in through
-            // `narrowable_parameter_symbol`.
+            // Parameters and the receiver opt in through `narrowable_parameter_symbol`.
             narrowable: false,
             narrowed_variants: None,
         }
@@ -271,7 +270,6 @@ impl Environment {
     pub fn is_mutable(&self, name: &str) -> bool {
         self.lookup(name).map(|s| s.mutable).unwrap_or(false)
     }
-
     /// Whether `name` was declared with `@name := …`.
     pub fn is_atomic(&self, name: &str) -> bool {
         self.lookup(name).map(|s| s.atomic).unwrap_or(false)
