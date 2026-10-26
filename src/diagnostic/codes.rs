@@ -148,6 +148,8 @@ codes! {
     ListenerIdentityMismatch = 363 => "mismatched listener transport and identity",
     AssertionNeverHolds = 364 => "assertion a proven variant already rules out",
     UnreachableMatchArm = 365 => "match arm a proven variant already rules out",
+    PayloadOfUnknownVariant = 366 => "payload of a variant that is not known",
+    PayloadOfPayloadlessVariant = 367 => "payload of a variant that carries none",
 
     // Family 4 — codegen and build
     CodegenFailed = 400 => "code generation failed",

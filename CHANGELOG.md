@@ -6,6 +6,13 @@ All notable changes to Quilon are documented here.
 
 ### Added
 
+- **`.payload`: read a known variant's payload without a match.** Every sum type, `Result`
+  included, has the accessor `.payload` (no parentheses), typed as the payload of the
+  variant the value is known to be: `assert(config, isOk())` then `config.payload.port`.
+  A multi-value payload reads back as its record, `Rect({ 6, 7 }).payload.0`. A value
+  whose variant is not known is `QN366`; a variant with no payload is `QN367`. A sum's
+  own method `payload()` still works as a call. Step 4 of #490.
+
 - **Anonymous record types in annotations, and positional records.** A record type may
   now be written directly in an annotation, named (`{ name :: Text, age :: Num }`) or
   positional (`{ Num, Num }`, values `{ 6, 7 }`, read with `.0`/`.1`). Mixing named and

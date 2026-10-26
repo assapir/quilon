@@ -158,8 +158,9 @@ stays local to where it was made:
 ```quilon ignore
 loadConfig = () -> Result => < Ok({ port = 8080 }) >
 config = loadConfig()
-config.port                   ~ `config` carries no narrowing yet — needs a proof below
+config.payload.port           ~ error: `config` carries no narrowing yet — needs a proof below
 assert(config, isOk())
+config.payload.port           ~ fine
 ```
 The binding keeps its sum type throughout: passing, returning, and storing it are
 unchanged. Only what a match over it needs to cover narrows.
@@ -192,6 +193,39 @@ one stays exhaustive over its full sum, as it does without narrowing at all:
 m := Ok(5)
 assert(m, isOk())      ~ fine — an ordinary runtime assertion
 m ? | Ok(x) => x        ~ non-exhaustive — `m`'s variant is not tracked
+```
+
+## `.payload`
+
+Every sum type, `Result` included, has the accessor `.payload` (no parentheses). Its type
+is the payload of the variant the value is known to be; reading it performs no check at
+run time. The variant is known where [narrowing](#narrowing--bindings) proves it — a
+construction, an `assert`/`expect`, a match arm — or where the value is a literal
+construction:
+```quilon
+Shape = Circle(Num) / Rect({ Num, Num }) / Dot
+
+area = (s :: Shape) -> Num => <
+  assert(s, is(Rect))
+  s.payload.0 * s.payload.1       ~ a multi-value payload is the variant's record
+>
+circleRadius = Circle(5).payload  ~ 5
+```
+`.payload` on a value whose variant is not known is
+[QN366](../tooling/errors/semantics.md#qn366--payload-of-a-variant-that-is-not-known);
+on a variant that carries no payload, such as `Dot`, it is
+[QN367](../tooling/errors/semantics.md#qn367--payload-of-a-variant-that-carries-none).
+
+A sum's own method named `payload` coexists with the accessor, by the same rule as a
+record's field and method of one name: a bare access reaches the accessor, a call reaches
+the method:
+```quilon
+Envelope = Sealed(Text) / Open(Text) {
+  payload = () -> Text => < "hidden" >
+}
+e = Sealed("hi")
+e.payload      ~ "hi"
+e.payload()    ~ "hidden"
 ```
 
 ## `/` — sum-type separator vs. division

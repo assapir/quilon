@@ -81,7 +81,31 @@ confirmDelivered = (p :: Parcel) -> Num => <
     | Delayed(days) => 0 - days
 >
 
+~ --- `.payload` ---------------------------------------------------------------
+~ Once the variant is known, `.payload` reads its payload with no match.
+~ A multi-value payload is the variant's record.
+Pastry = Croissant(Num) / Eclair({ Num, Num }) / Crumbs
+
+bakedCount = (p :: Pastry) -> Num => <
+  assert(p, is(Croissant))
+  p.payload
+>
+
+~ A method named `payload` coexists with the accessor: a bare `.payload` reaches
+~ the accessor, a call `.payload()` reaches the method.
+Envelope = Sealed(Text) / Open(Text) {
+  payload = () -> Text => < "hidden" >
+}
+
+peek = () -> Num => <
+  e = Sealed("hi")
+  e.payload.size * 100 + e.payload().size
+>
+
 ^ = () -> $ => <
+  assert(bakedCount(Croissant(12)), equals(12))
+  assert(Eclair({ 6, 7 }).payload.1, equals(7))
+  assert(peek(), equals(206))
   assert(area(Rect({ 6, 7 })), equals(42))   ~ 6 * 7
   assert(rank(Green), equals(1))
   assert(payable(Standard(80)), equals(80))

@@ -277,6 +277,16 @@ pub enum TypeError {
         known: Vec<String>,
         span: Span,
     },
+    /// `.payload` on a value whose variant no proof has pinned down.
+    PayloadOfUnknownVariant {
+        sum: String,
+        span: Span,
+    },
+    /// `.payload` on a value known to be a variant that carries no payload.
+    PayloadOfPayloadlessVariant {
+        variant: String,
+        span: Span,
+    },
     /// A constructor pattern naming something the scrutinee's sum type has no variant for
     /// (`Ok(x)` against a `Color`). Codegen dispatches on a tag looked up by name, so this
     /// is caught here rather than left to fail at run time.

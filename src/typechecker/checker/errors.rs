@@ -80,6 +80,8 @@ impl TypeError {
             TypeError::ListenerIdentityMismatch { .. } => Code::ListenerIdentityMismatch,
             TypeError::AssertionNeverHolds { .. } => Code::AssertionNeverHolds,
             TypeError::UnreachableMatchArm { .. } => Code::UnreachableMatchArm,
+            TypeError::PayloadOfUnknownVariant { .. } => Code::PayloadOfUnknownVariant,
+            TypeError::PayloadOfPayloadlessVariant { .. } => Code::PayloadOfPayloadlessVariant,
         }
     }
 
@@ -282,6 +284,13 @@ impl TypeError {
             TypeError::UnreachableMatchArm { .. } => diagnostic.help(
                 "remove the catch-all arm — every variant it would cover already has its own",
             ),
+            TypeError::PayloadOfUnknownVariant { .. } => diagnostic.help(
+                "prove the variant first: `assert(value, is(Variant))` (or `isOk()`), or read \
+                 it inside a match arm",
+            ),
+            TypeError::PayloadOfPayloadlessVariant { .. } => {
+                diagnostic.help("only a variant declared with a payload has a `.payload`")
+            }
             TypeError::ListenerIdentityMismatch { has_identity, .. } => {
                 diagnostic.help(if *has_identity {
                     "set identity = None, or change transport to TLS".to_string()
@@ -362,7 +371,9 @@ impl TypeError {
             | TypeError::DuplicateTrapArm { span, .. }
             | TypeError::ListenerIdentityMismatch { span, .. }
             | TypeError::AssertionNeverHolds { span, .. }
-            | TypeError::UnreachableMatchArm { span, .. } => span,
+            | TypeError::UnreachableMatchArm { span, .. }
+            | TypeError::PayloadOfUnknownVariant { span, .. }
+            | TypeError::PayloadOfPayloadlessVariant { span, .. } => span,
         }
     }
 }
@@ -931,6 +942,13 @@ impl std::fmt::Display for TypeError {
                 "'{binding}' is always {} here, so this assertion can never hold",
                 fmt_name_list(known)
             ),
+            TypeError::PayloadOfUnknownVariant { sum, .. } => write!(
+                f,
+                "this '{sum}' value's variant is not known here, so it has no '.payload'"
+            ),
+            TypeError::PayloadOfPayloadlessVariant { variant, .. } => {
+                write!(f, "'{variant}' carries no payload, so it has no '.payload'")
+            }
             TypeError::UnreachableMatchArm {
                 binding,
                 variant: Some(variant),

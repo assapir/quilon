@@ -2161,6 +2161,59 @@ fn test_assert_that_can_never_hold_is_rejected() {
 }
 
 #[test]
+fn test_payload_of_a_known_variant_has_the_payload_type() {
+    assert!(
+        check_ok(
+            "Shape = Circle(Num) / Rect({ Num, Num })\n\
+             ^ = () -> Num => <\n  \
+               r = Rect({ 6, 7 })\n  \
+               r.payload.0 + Circle(1).payload\n\
+             >"
+        )
+        .is_ok()
+    );
+}
+
+#[test]
+fn test_payload_of_an_unproven_variant_is_rejected() {
+    let err = check_ok(
+        "Shape = Circle(Num) / Dot\n\
+         make = () -> Shape => < Circle(1) >\n\
+         ^ = () -> Num => <\n  s = make()\n  s.payload\n>",
+    )
+    .unwrap_err();
+    assert!(matches!(err, TypeError::PayloadOfUnknownVariant { ref sum, .. } if sum == "Shape"));
+}
+
+#[test]
+fn test_payload_of_an_unproven_variant_of_a_mutable_binding_is_rejected() {
+    let err = check_ok("^ = () -> Num => <\n  m := Ok(5)\n  m.payload\n>").unwrap_err();
+    assert!(matches!(err, TypeError::PayloadOfUnknownVariant { .. }));
+}
+
+#[test]
+fn test_payload_of_a_payloadless_variant_is_rejected() {
+    let err = check_ok(
+        "Shape = Circle(Num) / Dot\n\
+         ^ = () -> Num => <\n  s = Dot\n  s.payload\n>",
+    )
+    .unwrap_err();
+    assert!(
+        matches!(err, TypeError::PayloadOfPayloadlessVariant { ref variant, .. } if variant == "Dot")
+    );
+}
+
+#[test]
+fn test_payload_after_a_not_assertion_needs_one_variant_left() {
+    let err = check_ok(
+        "Shape = Circle(Num) / Square(Num) / Dot\n\
+         pick = (s :: Shape) -> Num => <\n  assert(s, not(is(Dot)))\n  s.payload\n>",
+    )
+    .unwrap_err();
+    assert!(matches!(err, TypeError::PayloadOfUnknownVariant { .. }));
+}
+
+#[test]
 fn test_assert_that_always_holds_stays_legal() {
     // Redundant, not an error: asserting what is already proven.
     assert!(check_ok("^ = () -> $ => <\n  v = Ok(5)\n  assert(v, isOk())\n>").is_ok());

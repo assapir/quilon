@@ -75,6 +75,7 @@ sidebar:
 | `^` receives `args :: []Text` (argv) and `env :: [\|Text => Text\|]` (the environment as a Map) | ✅ |
 | Lambdas (`x => …`) as array-method arguments (inlined per element) | ✅ |
 | [Function types](../functions/README.md#function-types--higher-order-functions) (`(Num) -> Bool`, `() -> $`) + higher-order functions: a function-typed parameter called inside, taking a closure by literal or by name | ✅ |
+| [`.payload`](../types/sum-types.md#payload): an accessor on every sum type (`Result` included) reading the payload of a variant known from narrowing or construction | ✅ |
 | [Contextual lambda typing](../functions/README.md#a-lambda-takes-its-parameter-types-from-the-target): a lambda takes its parameter types from the signature that receives it — a function-typed parameter (a user function's, a method's, or the member an overload set narrows to), a binding that declares its function type, or a function-typed **return** annotation | ✅ |
 | [Returning a closure](../functions/closures.md#returning-a-closure): a function-typed return (`(Num) -> (Num) -> Num`), callable through a binding, immediately (`adder(5)(2)`), or passed on — captures live on the GC heap and outlive the maker's frame | ✅ |
 | Generics / type variables (overloading is the only polymorphism) | ❌ |

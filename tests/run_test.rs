@@ -1569,6 +1569,88 @@ fn run_a_parameter_narrowed_inside_a_match_arm() {
 }
 
 #[test]
+fn run_payload_of_a_constructed_variant() {
+    assert_exit(
+        "Shape = Circle(Num) / Rect({ Num, Num }) / Dot\n\
+         ^ = () -> Num => <\n  \
+           s = Circle(5)\n  \
+           r = Rect({ 6, 7 })\n  \
+           s.payload + r.payload.0 * r.payload.1 + Rect({ 1, 2 }).payload.1\n\
+         >",
+        49,
+    );
+}
+
+#[test]
+fn run_payload_after_an_assert_on_a_call_result() {
+    assert_exit(
+        "Shape = Circle(Num) / Dot\n\
+         make = () -> Shape => < Circle(4) >\n\
+         ^ = () -> Num => <\n  \
+           s = make()\n  \
+           assert(s, is(Circle))\n  \
+           s.payload\n\
+         >",
+        4,
+    );
+}
+
+#[test]
+fn run_payload_of_a_result() {
+    assert_exit(
+        "load = () -> Result => < Ok({ port = 8080 }) >\n\
+         ^ = () -> Num => <\n  \
+           config = load()\n  \
+           assert(config, isOk())\n  \
+           config.payload.port - 8000\n\
+         >",
+        80,
+    );
+}
+
+#[test]
+fn run_payload_of_a_text_variant() {
+    assert_exit(
+        "Letter = Sealed(Text) / Open(Text)\n\
+         ^ = () -> Num => <\n  \
+           l = Sealed(\"hi there\")\n  \
+           l.payload.length\n\
+         >",
+        8,
+    );
+}
+
+#[test]
+fn run_payload_inside_a_match_arm_and_a_parameter() {
+    assert_exit(
+        "Shape = Circle(Num) / Dot\n\
+         radius = (s :: Shape) -> Num => <\n  \
+           assert(s, is(Circle))\n  \
+           s.payload\n\
+         >\n\
+         ^ = () -> Num => <\n  \
+           c = Circle(3)\n  \
+           c ? | Circle(_) => c.payload + radius(Circle(4))\n\
+         >",
+        7,
+    );
+}
+
+#[test]
+fn run_a_payload_method_coexists_with_the_accessor() {
+    assert_exit(
+        "Envelope = Sealed(Text) / Open(Text) {\n  \
+           payload = () -> Text => < \"hidden\" >\n\
+         }\n\
+         ^ = () -> Num => <\n  \
+           e = Sealed(\"hi\")\n  \
+           e.payload.length * 10 + e.payload().length\n\
+         >",
+        26,
+    );
+}
+
+#[test]
 fn run_numeric_sum_payload_through_operator_overload() {
     // A numeric sum payload flows through an operator overload set: `Ok(x) => x * 2`
     // — `x` is a (generic) Result payload that resolves as Num for `*`, so it picks the
